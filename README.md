@@ -8,6 +8,16 @@ So why not just use Container Runner? It requires a Kubernetes cluster to operat
 
 Is there a way to guarantee clean environments and provide scaling for Machine Runner? Yes, you can create a scalable Machine Runner setup using Docker Compose. With Machine Runner in a Docker container, we can leverage Docker Compose to achieve a clean environment that can scale to meet your needs.
 
+**Disclaimer:**
+
+CircleCI Labs, including this repo, is a collection of solutions developed by members of CircleCI's field engineering teams through our engagement with various customer needs.
+
+-   ✅ Created by engineers @ CircleCI
+-   ✅ Used by real CircleCI customers
+-   ❌ **not** officially supported by CircleCI support
+
+
+
 ## Docker Compose Setup
 In this repo, you will find a working example of a scalable Machine Runner with Docker Compose. Let's break down the Docker Compose file to understand how we can achieve this.
 

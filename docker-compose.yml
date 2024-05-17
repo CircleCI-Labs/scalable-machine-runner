@@ -1,0 +1,47 @@
+services:
+  base:
+    image: runner:base
+    build:
+      dockerfile: ./base-image/Dockerfile
+    pull_policy: build
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+    environment:
+      - CIRCLECI_RUNNER_NAME=base
+      - CIRCLECI_RUNNER_MODE=single-task
+    env_file:
+      - path: "./base-image/base.env"
+        required: true
+  convenience:
+    image: runner:convenience
+    build:
+      dockerfile: ./convenience-image/Dockerfile
+    pull_policy: build
+    restart: unless-stopped
+    deploy:
+      replicas: 5
+    environment:
+      - CIRCLECI_RUNNER_NAME=convenience
+      - CIRCLECI_RUNNER_MODE=single-task
+    env_file:
+      - path: "./convenience-image/convenience.env"
+        required: true
+  machine:
+    image: runner:machine
+    build:
+      dockerfile: ./machine-image/Dockerfile
+    pull_policy: build
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+    environment:
+      - CIRCLECI_RUNNER_NAME=machine
+      - CIRCLECI_RUNNER_MODE=continuous
+      - CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true
+      - CIRCLECI_RUNNER_LOGGING_FILE=/tmp/runner/runner.logs
+    env_file:
+      - path: "./machine-image/machine.env"
+        required: true
+    volumes:
+      - ./machine-image:/tmp/runner

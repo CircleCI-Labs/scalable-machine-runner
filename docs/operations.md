@@ -151,7 +151,7 @@ For a single service, you can also run `docker service update --image <new image
 
 ## Rotate a runner token
 
-Swarm secrets are immutable. To rotate a token, create a second secret and swap it into the service. The rolling update replaces one replica at a time, and busy runners finish their job first.
+Swarm secrets are immutable. To rotate a token, create a second secret and swap it into the service. The rolling update replaces one replica at a time, and busy runners finish their job first. The update is serial per replica: the shipped stack files set `update_config.parallelism: 1`, and a busy replica is replaced only after its job ends, which takes up to the grace period of 5 hours and 5 minutes. A service with N replicas can therefore take up to N times that long to finish the swap. To shorten it, raise `update_config.parallelism` in the stack file, or pass `--update-parallelism <number>` to `docker service update` for one update (`0` replaces every replica at once).
 
 1. Create a new token in CircleCI. Keep the old token until the swap is complete.
 
@@ -200,7 +200,30 @@ Swarm secrets are immutable. To rotate a token, create a second secret and swap 
    $ docker secret rm linux-default-token
    ```
 
-If a token leaked, create the new token first, swap it as above, and delete the old token at once.
+### If a token leaked
+
+Do not swap first. Until the old token is deleted in CircleCI, it stays valid for anyone who holds it, and the swap above can take up to N times 5 hours and 5 minutes for N replicas, because it replaces one replica at a time and each busy replica finishes its job first. Delete the token as soon as its replacement exists:
+
+1. Create the new token, and the secret with the new token. Use the steps 1 and 2 above. Nothing uses the new secret yet.
+2. Delete the old token at once.
+
+   ```console
+   $ circleci runner token list <namespace>/linux-default
+   $ circleci runner token delete <token ID>
+   ```
+
+   CircleCI stops accepting the old token for new claims, so nobody can start a runner on the class with it. Jobs that already run continue until they end. Idle runners that still hold the old secret fail with 401 and restart every 10 seconds until the swap replaces them, so the class claims no new jobs until step 3 completes.
+3. Swap the secrets, and replace every replica at once so that the class recovers soon:
+
+   ```console
+   $ docker service update --update-parallelism 0 \
+       --secret-rm linux-default-token \
+       --secret-add source=linux-default-token-v2,target=circleci_runner_config.yaml,uid=2000,gid=2000,mode=0400 \
+       runners_linux-default
+   ```
+
+   Each replica still finishes the job that it runs before Swarm replaces it. On Windows, drop `uid`, `gid`, and `mode`, and expect the update to end a running job after about 5 seconds: rerun those jobs. Refer to [Windows drain](#windows-drain).
+4. Do steps 4 and 5 above (wait for the update, record the new name in your stack file), and remove the old secret with `docker secret rm linux-default-token`. Then look for what the leaked token did: the runner inventory in CircleCI for names you do not know, and the jobs that ran on the class.
 
 ## Drain a node for patching
 

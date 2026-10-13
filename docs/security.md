@@ -118,7 +118,7 @@ To take the manifest out of the chain, set `MACHINE_RUNNER_SWARM_RUNNER_SHA256` 
 | Download | Distributor | The SHA-256 of the tarball must equal the manifest value, or a value of your list. Otherwise it installs nothing |
 | Install | Distributor | The binary must report the version that it installs. The distributor records the SHA-256 of the binary in `versions/<version>/SHA256`, and the files are owned by root and not writable by others |
 | Every check interval (24 hours by default) | Distributor | It compares the active binary with its record, and installs the version again when the binary changed |
-| Every container start | Entrypoint | It resolves `current` once and runs `sha256sum -c` against the record. A missing record or a different binary ends in exit code 80 and the log line `does not match its SHA-256 record`. Hashing the 74 MB binary takes about 0.05 seconds |
+| Every container start | Entrypoint | It resolves `current` once and runs `sha256sum -c` against the record. A missing record or a different binary ends in exit code 80 and the log line `does not match its SHA-256 record`. Refer to [Error: does not match its SHA-256 record](troubleshooting.md#error-does-not-match-its-sha-256-record). Hashing the 74 MB binary takes about 0.05 seconds |
 | While a job runs | Mount | The volume is read-only in the runner containers, and its files are owned by root with the mode `0755`, so a job cannot change it. The entrypoint is a Swarm config, which is immutable and read-only |
 
 ### What remains

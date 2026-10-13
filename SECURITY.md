@@ -29,4 +29,4 @@ This repository is part of CircleCI Labs. CircleCI support does not cover it. Fi
 
 ## Fork pull requests and CI
 
-Do not use self-hosted runners for public projects that build forked pull requests. A malicious pull request can run code on your runner. The settings of this repository keep fork builds away from secrets and from self-hosted runners.
+Do not use self-hosted runners for public projects that build forked pull requests. A malicious pull request can run code on your runner. The settings of this repository keep fork builds away from secrets and from self-hosted runners: the project uses the GitHub OAuth integration, and its settings **Build forked pull requests** and **Pass secrets to builds from forked pull requests** are off.

@@ -94,6 +94,7 @@ Until you do this, the `release` job runs every step except the last one. It pri
 
    In the organization's advanced settings, leave pipelines with an unversioned config off.
 
+1. In the project settings (**Advanced**), keep **Build forked pull requests** and **Pass secrets to builds from forked pull requests** off. The project uses the GitHub OAuth integration, and these settings are the ones that decide whether the code of a fork runs here.
 1. Protect `main` on GitHub: require a pull request and a review, and do not let anyone push to it. Whoever can change `.circleci/` or `ci/release.sh` on `main` controls what runs with the token.
 
 The next release run on `main` publishes. To check the setup before then, read the log of the `release` job for `publishing skipped`.
@@ -107,14 +108,11 @@ The release notes come from the commits that land on `main`, so the merge method
 
 Mark a breaking change in a commit message, or in the title of a squashed pull request, with `!` or a `BREAKING CHANGE:` footer.
 
-## Tag pipelines and the GitHub App
+## Tag pipelines
 
-The release creates the tag through the GitHub API, with no `git push`. GitHub then sends a push event for the new tag. What CircleCI does with that event depends on the trigger of the pipeline definition (**Project Settings**, **Project Setup**). The project uses the GitHub App integration (project slug `circleci/<org-id>/<project-id>`):
+The release creates the tag through the GitHub API, with no `git push`. GitHub then sends a push event for the new tag. The project uses the GitHub OAuth integration (project slug `gh/CircleCI-Labs/scalable-machine-runner`), not the GitHub App. An OAuth project has no trigger settings: CircleCI starts a pipeline for every push that GitHub reports, to a branch or to a tag, so the new tag starts a pipeline. In that pipeline `pipeline.git.tag` is the tag, and `pipeline.git.branch` and `CIRCLE_BRANCH` are empty.
 
-- If the trigger covers tag pushes, which the options **All pushes**, **Tag pushes**, and **PR opened or pushed to, default branch and tag pushes** do, CircleCI starts a pipeline for the tag. In that pipeline `pipeline.git.tag` is the tag, and `pipeline.git.branch` and `CIRCLE_BRANCH` are empty.
-- If the trigger does not cover tag pushes, no pipeline starts.
-
-The first release shows which case applies: look at the **Pipelines** page of the project for a pipeline of the new tag. Neither case can release, and neither runs a job. CircleCI does not run a job for a tag unless the job has a tag filter, and no job in `.circleci/config.yml` or `.circleci/continue.yml` has one, so the pipeline of a tag has no workflow. The setup phase also releases only when the branch is `main`.
+That pipeline cannot release and runs no job. CircleCI does not run a job for a tag unless the job has a tag filter, and no job in `.circleci/config.yml` or `.circleci/continue.yml` has one. The setup phase also releases only when the branch is `main`. Look at the **Pipelines** page of the project after the first release: the pipeline of the new tag should show no job. To build for tags in the future, give a job a tag filter on purpose, and keep the release context out of that job.
 
 ## Rerun and recovery
 

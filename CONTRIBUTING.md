@@ -6,7 +6,7 @@ Thank you for helping to improve the machine runner swarm. This repository is pa
 
 Search the [existing issues](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) first, and check that you use the latest release. Then open a new issue with the bug template. Include:
 
-- The release or commit of this repository, and the runner version from `/opt/machine-runner-swarm/current/VERSION` or `C:\machine-runner-swarm\current\VERSION`.
+- The release or commit of this repository, and the runner version. On Linux, run `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node. On Windows, read `C:\machine-runner-swarm\current\VERSION`.
 - The operating system of the node and the Docker Engine version.
 - The output of `docker service ps --no-trunc runners_<service>` and `docker service logs --tail 100 runners_<service>`.
 
@@ -67,20 +67,21 @@ Each Linux test prints `RESULT` lines and exits 0 when it passes. `run-all.sh` r
 
 | Test | What it checks |
 |---|---|
-| `stack-config.sh` | `docker stack config` for every combination of stack files, and the settings of each service. Needs no daemon |
-| `install.sh` | `setup.sh --install` in a root container: the verified download, two versions side by side, and the rollback. Needs network access |
+| `stack-config.sh` | `docker stack config` for every combination of stack files, the settings of each service, and the names of the Swarm configs. Needs no daemon |
 | `helper.sh` | `setup.sh --swarm-init`, `--secret`, and `--deploy` against a fresh Docker-in-Docker daemon |
 | `ephemerality.sh` | A new container for every job and no residue. The negative control runs `docker run --restart always` |
 | `exit80.sh` | The restart delay, no hot loop, and the exit codes 80 and 1 of the real runner |
 | `token.sh` | What a job can read in the default class and in the hardened class |
 | `task.sh` | The real runner runs tasks as the job user, against a fake API. Also the failure with `CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true`, and a persistent runner |
 | `placement.sh` | Placement on a manager and a worker, and `docker-build.yaml` |
-| `upgrade.sh` | A flip of `current` reaches the next container only, and running jobs finish on their version. A `global-job` installs the runner on both nodes. Needs network access |
+| `distributor.sh` | The `runner-distributor` service: runners that wait for it and then exit 80, a node with no install, a joining node, an upgrade under three busy jobs, a rollback without a download, `current` that follows the manifest, the major-version guard, pruning to 3 versions, a tampered binary, a wrong SHA-256, and CircleCI's real manifest. Needs network access |
 | `persistent.sh` | Continuous mode and `persistent.yaml` |
 | `drain.sh` | SIGTERM during a job: the job finishes |
 | `limits.sh` | `init`, `ulimits`, pids, memory, CPU, reservations, and the capability sets take effect |
 | `network.sh` | Network isolation between classes, and between the replicas of a class |
 | `bats/run.sh` | The unit tests of the entrypoint on `cimg/base`, Alpine, and UBI minimal |
+
+The suite needs no installed runner. The distributor of the shipped stack installs it, as it does for a user, from a small HTTP mirror in the harness: a `manifest.json` and the tarballs of the versions that a test publishes (`publish_runner` in `lib.sh`). `ephemerality.sh`, `persistent.sh`, `limits.sh`, `network.sh`, and `drain.sh` publish `fake-runner.sh`, a stand-in for `circleci-runner` that runs a fake job through the step-down and exits, as a single-task runner does. `task.sh`, `token.sh`, `exit80.sh`, `placement.sh`, `distributor.sh`, and the idle case of `drain.sh` publish the real runner binary, which the harness downloads once and checks against the SHA-256 of CircleCI's manifest.
 
 Three variables change the setup. `SWARM_TEST_DIND_IMAGE` sets the Docker-in-Docker image. `SWARM_TEST_CACHE` sets the directory that caches the real runner binary, `~/.cache/swarm-tests` by default. `SWARM_TEST_KEEP=1` keeps the Docker-in-Docker containers for debugging.
 
@@ -96,6 +97,10 @@ The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and on
 | `Test-Upgrade.ps1` | A junction as the bind source: the next container sees the new version, and the running one keeps the old |
 | `Test-Persistent.ps1` | Continuous mode, and a named volume that outlives the container |
 
+### Swarm config names
+
+The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change `linux/entrypoint/circleci-runner-entrypoint`, `linux/runner-distributor.sh`, or `windows/runner-distributor.ps1`, run `ci/config-names.sh --write` and commit the new names with the change. `lint-stack`, `linux/tests/stack-config.sh`, and the release job run `ci/config-names.sh` and fail on a stale name. Nobody decides when to bump a number.
+
 ### Documentation checks
 
 Documentation follows the [CircleCI docs style](https://circleci.com/docs/contributors/docs-style/style-and-voice/): sentence-case headings, active voice, no contractions, and short sentences. Every `docs/*.md` page has front matter with `page-title`, `page-audience`, and `page-description`.
@@ -109,7 +114,7 @@ docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.18.1 '**/*.md
 
 ### Pinned versions
 
-This repository does not use Renovate. Update pinned versions by hand, and change the version and its checksum together. The runner version appears in `linux/setup.sh`, `linux/images/example/Dockerfile`, `windows/Setup.ps1`, `windows/images/servercore/Dockerfile`, and the manual commands in `docs/install-linux.md` and `docs/install-windows.md`. The Git and 7-Zip checksums appear in `windows/Setup.ps1`, the Dockerfile, and `docs/install-windows.md`. Pin images by tag and digest.
+This repository does not use Renovate. Update pinned versions by hand, and change the version and its checksum together. The Linux runner version is not pinned in this repository: the distributor follows the current release of CircleCI, or the version that a user sets, and the `alpine:3` image of the distributor is pinned by digest in `linux/stack/runners.yaml`. The Windows runner version appears in `windows/Setup.ps1`, `windows/images/servercore/Dockerfile`, and the manual commands in `docs/install-windows.md`. The Git and 7-Zip checksums appear in `windows/Setup.ps1`, the Dockerfile, and `docs/install-windows.md`. Pin images by tag and digest.
 
 ## Releases
 

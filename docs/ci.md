@@ -19,17 +19,18 @@ This section is the short answer for users and reviewers. The pipeline sections 
 
 | Area | What is checked | How |
 |---|---|---|
-| Stack files | Every file parses, merges and interpolates, and each service keeps the contract: secrets, mounts, placement, limits, capabilities | `lint-stack`, `linux/tests/stack-config.sh` and `windows/tests/Stack.Tests.ps1`, with no Swarm |
-| Install on Linux | `setup.sh` checks, starts Swarm and installs the runner twice, and the second run changes nothing. The layout and the owner are right, and the runner runs in a stock `cimg/base` | `linux-setup` on a fresh VM, and `linux-arm64` for the install and the start of the stack on Arm |
+| Stack files | Every file parses, merges and interpolates, and each service keeps the contract: secrets, mounts, placement, limits, capabilities. Every Swarm config is named after the content of its file | `lint-stack`, `ci/config-names.sh`, `linux/tests/stack-config.sh` and `windows/tests/Stack.Tests.ps1`, with no Swarm |
+| Install on Linux | `setup.sh` checks the node and starts Swarm twice, and the second run changes nothing. The shipped stack is deployed, and its `runner-distributor` installs the current release of CircleCI from the real manifest with nothing installed by hand. The volume is root-owned and has the record of the binary, and the runner runs in a stock `cimg/base` | `linux-setup` on a fresh VM, and `linux-arm64` for the same on Arm |
 | Clean environment | A new container for every job and no residue from the job before. A negative control shows that a plain restart reuses the container | `ephemerality.sh`, `Test-Ephemerality.ps1`, and real CircleCI jobs in the e2e on Linux and on Windows 2022 and 2025 |
 | Step-down and the token | The default class keeps sudo and sudo can read the token. The hardened class has no sudo, and a setuid binary cannot lift the job, because of `setpriv --no-new-privs`. The token is in no environment or command line | `token.sh`, `task.sh` (the real runner binary against a fake API) and the e2e probes with real jobs |
 | Placement | A service stays pending until a node has its label. The docker-build node runs no other class | `placement.sh` and `Test-Placement.ps1`, in a one-node and a two-node Swarm on Linux |
-| Runner upgrade | Flipping `current` under load: running jobs finish on the old version, and the next container gets the new one. A `global-job` installs on both nodes | `upgrade.sh` and `Test-Upgrade.ps1` |
+| Runner distributor on Linux | The runners wait for the distributor and then exit 80, and start in the same container once it is released. A fresh node and a node that joins later get the runner by themselves. An upgrade under three busy jobs: the jobs finish on their version, and the runner service is not touched. A rollback needs no download. `current` follows the manifest with no redeploy, the major-version guard keeps the nodes on major 3, and pruning keeps 3 versions. A tampered binary makes new containers exit 80 and is repaired by itself, and a wrong SHA-256 installs nothing. CircleCI's real manifest works too | `distributor.sh`, with a local HTTP mirror in the test harness |
+| Runner upgrade on Windows | Flipping `current` under load: running jobs finish on the old version, and the next container gets the new one | `Test-Upgrade.ps1` |
 | Stop and runner drain | On Linux, SIGTERM lets a running job finish and the container exits 0. On Windows, a stock container is killed after about 5 seconds (the control), and an idle real runner drains | `drain.sh` (fake job) and `Test-StopHandling.ps1` |
 | Persistent class | One container serves many jobs, and the named volume survives a recycle | `persistent.sh` and `Test-Persistent.ps1`, with a fake runner on Linux |
 | Limits and network | `pids`, `ulimits`, capabilities, and reservations that leave replicas pending. Classes cannot reach each other, and replicas of one class can | `limits.sh` and `network.sh` |
 | Bad configuration | The runner and the entrypoint exit 80 and do not loop hot | `exit80.sh` and `Test-Exit80.ps1` |
-| Entrypoint | The unit tests on `cimg`, Alpine and UBI | `bats` in the Linux suite |
+| Entrypoint | The unit tests on `cimg`, Alpine and UBI, including the wait for the runner, the check against its SHA-256 record, and the version that a container resolves once | `bats` in the Linux suite |
 | Workspaces and caches | A real workspace and cache round trip on Windows, including the Git `tar` | `ci/E2E-Storage.ps1` in the Windows e2e |
 | Documentation | Markdown rules, relative links and anchors, and every Mermaid diagram | `lint-markdown`, `lint-docs-links`, `lint-docs-mermaid` |
 
@@ -47,7 +48,8 @@ This section is the short answer for users and reviewers. The pipeline sections 
 | A drain that lasts hours | The `stop_grace_period` of 5h5m is a setting, and no test waits for it |
 | The persistent class with a real task agent | Linux and Windows run a fake or an idle runner |
 | The docker-build add-on stack file with a real job | The Windows named pipe is never used by a test |
-| Real jobs on arm64 | `linux-arm64` is a smoke test: the install and the start of the stack |
+| Real jobs on arm64 | `linux-arm64` is a smoke test: the install by the distributor and the start of the stack |
+| A mirror over `https` with a private certificate authority, and a download through a proxy | The distributor test serves its mirror over plain HTTP, and `linux-setup` downloads from the real bucket over `https` |
 | RHEL and SELinux | The steps follow Docker's documentation |
 | Rerun job with SSH (`ssh-rerun.yaml`) | CI checks that the files parse and merge and keep the contract, including the host-mode port 54782, `max_replicas_per_node: 1` and the advertise address. The Swarm side was proven by hand on a Linux Swarm with a real runner: the **Enable SSH** step runs, and the task agent answers on port 54782 of the node. No test logs in over SSH, and the Windows file is untested |
 | Windows Server 2019, Hyper-V isolation, group managed service accounts, proxies, and `add_ssh_keys` | Not exercised, and the docs say so |
@@ -77,17 +79,17 @@ flowchart TD
 | every pipeline | `lint-shell` | `koalaman/shellcheck-alpine:v0.11.0` | `shellcheck -S warning` on every `*.sh` file and every sh/bash shebang script |
 | every pipeline | `lint-dockerfiles` | `hadolint/hadolint:v2.15.1-debian` | Linux and Windows Dockerfiles. Warnings fail; only `docker.io`, `registry.access.redhat.com` and `mcr.microsoft.com` are allowed in `FROM` |
 | every pipeline | `lint-yaml` | `cimg/python:3.14.8` + yamllint 1.38.0 | `yamllint --strict .` |
-| every pipeline | `lint-stack` | `docker:29.9.0-cli` | `docker stack config -c` on every file in `linux/stack` and `windows/stack` alone, on all files of each OS together (the optional files are add-on stack files), and on `windows/tests/stack.e2e.yaml`: the stack files must parse, merge and interpolate. No daemon or Swarm needed |
+| every pipeline | `lint-stack` | `docker:29.9.0-cli` | `docker stack config -c` on every file in `linux/stack` and `windows/stack` alone, on all files of each OS together (the optional files are add-on stack files), and on `windows/tests/stack.e2e.yaml`: the stack files must parse, merge and interpolate. `ci/config-names.sh` checks that every Swarm config is named after the content of its file: a Swarm config cannot change, so a changed file needs a new name, and `ci/config-names.sh --write` renames it. No daemon or Swarm needed |
 | every pipeline | `lint-powershell` | `mcr.microsoft.com/powershell:7.5-ubuntu-24.04`, medium (the 5.1-compatibility analysis needs about 2.7 GB) | PSScriptAnalyzer 1.25.0 over `windows/` and `ci/` (errors and warnings fail), then `windows/tests/Invoke-UnitTests.ps1` on PowerShell 7: an ASCII check and the Pester 5.7.1 suites, including `Stack.Tests.ps1`, which keeps the stack files' invariants (no entrypoint script, the runner as the entrypoint, the secret target, Git's mount path, PATH, and that every named volume and secret is declared: `docker stack config` does not catch an undeclared volume, `docker stack deploy` fails with `undefined volume`). Pester runs without a terminal (it hangs under CircleCI's pseudo-terminal) |
 | every pipeline | `lint-circleci` | `cimg/base:2026.10` + CircleCI CLI 1.4.0 | `circleci config validate` on both config files, `circleci config process` with every parameter on (`validate` alone does not compile the filtered jobs), the table test of the setup gate (`ci/tests/setup-gate.sh`), a compile of `config.yml` for a table of branches that proves only `main` and `smr-swarm/*` get the e2e context (`ci/tests/setup-config.sh`), and a check that the `release` job requires every other job (below) |
 | every pipeline | `lint-markdown` | `davidanson/markdownlint-cli2:v0.18.1` | `.markdownlint-cli2.yaml` on every Markdown file; `docs/ci.md` with the same rules (the repository config ignores it) |
 | every pipeline | `lint-docs-links` | `lycheeverse/lychee:0.24.2` | Relative links and `#heading` anchors in every Markdown file, offline (external URLs are not fetched: the job is fast and never flaky) |
 | every pipeline | `lint-docs-mermaid` | `minlag/mermaid-cli:12.0.1`, medium | Renders every `mermaid` block in every Markdown file; a syntax error fails the job |
 | every pipeline | `e2e-simulation` | `ubuntu-2604:current` | `ci/tests/e2e-sim.sh`: the Linux e2e host and probe scripts against a fake runner in `docker:dind` (below) |
-| every pipeline | `linux-swarm` | `ubuntu-2604:current`, xlarge (two test nodes share the VM) | `linux/tests/run-all.sh`: stack validation, the installer, ephemerality with a negative control, exit 80, token readability, real runner tasks through the step-down (`task.sh`), placement, runner upgrades (a flip of `current` between two versions under load, and a `global-job` install on both nodes), persistent mode, draining, network isolation, limits and the entrypoint unit tests. Everything runs in a single-node and a two-node Swarm inside privileged `docker:dind` containers: the CI VM's own engine never becomes a Swarm node for these |
-| every pipeline | `linux-image-example` | `ubuntu-2604:current` | Builds `linux/images/example` (default and `baked` targets), runs the runner from the baked image, checks the entrypoint's exit 80, then Trivy (below) |
-| every pipeline | `linux-setup` | `ubuntu-2604:current` | `ci/linux-smoke.sh`: `linux/setup.sh` end to end on a fresh VM with no real token (below) |
-| every pipeline | `linux-arm64` | `ubuntu-2604:current`, `arm.medium` | The same script on an Arm VM: the arm64 runner installed by `setup.sh` runs unmodified in a stock `cimg/base` through the mount, and the shipped stack starts |
+| every pipeline | `linux-swarm` | `ubuntu-2604:current`, xlarge (two test nodes share the VM) | `linux/tests/run-all.sh`: stack validation (with the config names), the setup helper, ephemerality with a negative control, exit 80, token readability, real runner tasks through the step-down (`task.sh`), placement, persistent mode, draining, network isolation, limits, the runner distributor (a node with no install, a joining node, an upgrade under load, a rollback, `current` following the manifest, the major-version guard, pruning, a tampered binary, a wrong SHA-256, and CircleCI's real manifest) and the entrypoint unit tests. The distributor downloads from a local HTTP mirror of the harness. Everything runs in a single-node and a two-node Swarm inside privileged `docker:dind` containers: the CI VM's own engine never becomes a Swarm node for these |
+| every pipeline | `linux-image-example` | `ubuntu-2604:current` | Builds `linux/images/example`, checks that the tools it adds run, then Trivy (below) |
+| every pipeline | `linux-setup` | `ubuntu-2604:current` | `ci/linux-smoke.sh`: `linux/setup.sh` and the shipped stack end to end on a fresh VM with no real token, with the distributor installing the runner (below) |
+| every pipeline | `linux-arm64` | `ubuntu-2604:current`, `arm.medium` | The same script on an Arm VM: the arm64 runner installed by the distributor runs unmodified in a stock `cimg/base` through the volume, and the shipped stack starts |
 | every pipeline | `windows-swarm-ltsc2022` | `windows-server-2022-gui:current`, windows.medium | The stock-image path on Windows (below) |
 | `full-suite` | `windows-swarm-ltsc2025` | `windows-server-2025-gui:current` | The same on Server 2025 |
 | `e2e-linux` | `e2e-linux-host`, `e2e-linux-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`; probes: `cci-labs/scalable-machine-runner-e2e-linux` | Real runner e2e (below) |
@@ -154,18 +156,18 @@ The decision therefore has to happen before the e2e jobs are compiled into the w
 
 `linux-swarm` runs the Linux suite and needs no secret. `linux-setup` and `linux-arm64` run [`ci/linux-smoke.sh`](../ci/linux-smoke.sh) on a fresh VM:
 
-1. `linux/setup.sh --check`, then `--swarm-init --install` twice (the second run must be a no-op).
-2. The layout is root-owned and not writable by others; the runner reports its version unmodified inside a stock `cimg/base` through `-v /opt/machine-runner-swarm/current:/opt/machine-runner-swarm:ro` (`current` is a link to the installed version), the container's architecture equals the host's, the runner binary is built for it (`file`), and `circleci-runner-entrypoint` with a config file but no runner name exits 80.
-3. The shipped stack is deployed by `setup.sh --deploy` with a made-up token (the runner gets 401 from CircleCI, which does not matter here). Inside the running `linux-default` and `linux-hardened` containers:
+1. `linux/setup.sh --check`, then `--swarm-init` twice (the second run must be a no-op).
+2. The shipped stack is deployed by `setup.sh --deploy` with a made-up token (the runner gets 401 from CircleCI, which does not matter here). Nothing is installed by hand: the `runner-distributor` service downloads the current release of CircleCI from CircleCI's real manifest, and the job waits for its link `current`. The volume `runner-bin` is root-owned and not writable by others, its record `SHA256` equals the hash of the binary, and `/opt/machine-runner-swarm` does not exist on the host. The runner reports its version unmodified inside a stock `cimg/base` through `-v runners_runner-bin:/opt/machine-runner-swarm:ro`, the container's architecture equals the host's, the runner binary is built for it (`file`), and `circleci-runner-entrypoint` with a config file but no runner name exits 80.
+3. Inside the running `linux-default` and `linux-hardened` containers:
    - the runner runs as `circleci-runner`;
    - the job user cannot read `/run/secrets/circleci_runner_config.yaml`, nor any other user's process environment;
    - `linux-default` keeps sudo, and sudo can read the token (the documented outcome);
    - `linux-hardened` has no sudo at all.
 
-`linux-image-example` builds both targets of the bring-your-own-image example and scans them. **Trivy policy:**
+`linux-image-example` builds the bring-your-own-image example and scans it. **Trivy policy:**
 
-- SBOMs (CycloneDX) and HIGH/CRITICAL reports of both images are artifacts: `reports/sbom-example*.cdx.json`, `reports/trivy-example*.{json,txt}`.
-- The gate fails on a fixable CRITICAL finding that the image **adds on top of `cimg/base`** (the same scan of the base image is subtracted). The base is upstream: it bundles Docker, Compose and yq with their own findings, and those stay visible in the reports. What this repository owns is what it puts on top, the runner and the example's packages.
+- The SBOM (CycloneDX) and the HIGH/CRITICAL reports of the image are artifacts: `reports/sbom-example.cdx.json`, `reports/trivy-example.{json,txt}`.
+- The gate fails on a fixable CRITICAL finding that the image **adds on top of `cimg/base`** (the same scan of the base image is subtracted). The base is upstream: it bundles Docker, Compose and yq with their own findings, and those stay visible in the reports. What this repository owns is what it puts on top, the example's packages. The runner is not in the image.
 - Exceptions go in `.trivyignore`, one CVE per line, with a reason, an owner and an `exp:` date. Trivy stops honouring an entry after that date. An exception is only for findings that this repository cannot fix.
 
 ## Windows jobs
@@ -224,9 +226,9 @@ e2e-linux (job group, serial-group <project slug>/e2e-linux)
 
 **Host.**
 
-1. `prepare` is `sudo linux/setup.sh --swarm-init --install`, the documented path.
+1. `prepare` is `sudo linux/setup.sh --swarm-init` and nothing else, the documented path: the shipped `runner-distributor` runs in the stack and installs the runner.
 2. `run` creates the two secrets `linux-default-token` and `linux-hardened-token` from `E2E_RUNNER_TOKEN_LINUX` through `setup.sh --secret`. Each secret is a runner config file (`api.auth_token`), the target is `circleci_runner_config.yaml`, owned by uid 2000 with mode 0400. The token travels on stdin, never in a file or on a command line. The stack's other secret gets a placeholder.
-3. It deploys the **shipped** `linux/stack/runners.yaml` (the optional classes live in `docker-build.yaml` and `persistent.yaml` and are not deployed) with a generated override that gives the active service one replica of a digest-pinned stock `cimg/base`, a 5 minute idle timeout, and a bind mount for the evidence directory; every other service gets zero replicas. The runner binary and entrypoint come from the stack's own read-only mount of `/opt/machine-runner-swarm/current`.
+3. It deploys the **shipped** `linux/stack/runners.yaml` (the optional classes live in `docker-build.yaml` and `persistent.yaml` and are not deployed) with a generated override that gives the active service one replica of a digest-pinned stock `cimg/base`, a 5 minute idle timeout, and a bind mount for the evidence directory; every other runner service gets zero replicas. The `runner-distributor` stays as shipped and installs the current release of CircleCI from the real manifest, and the runner service waits up to 10 minutes for it. The runner and the entrypoint come through the stack's own read-only volume `runner-bin` and the Swarm config of the entrypoint.
 4. Phase 1 is `linux-default` (the job user keeps sudo) for B1 and B2. When B2 reports, the host removes the stack at once, so that its replacement container cannot claim the next probe. Phase 2 is `linux-hardened` (`MACHINE_RUNNER_SWARM_JOB_SUDO=false`) for B3. Both services use the same class token, so only one is deployed at a time.
 
 **Probes** (`ci/e2e-probe.sh`):
@@ -310,10 +312,11 @@ The project is public, so job logs and artifacts are public.
 ## Running the checks locally
 
 ```sh
-shellcheck -S warning ci/*.sh ci/tests/*.sh linux/setup.sh linux/entrypoint/circleci-runner-entrypoint
+shellcheck -S warning ci/*.sh ci/tests/*.sh linux/setup.sh linux/runner-distributor.sh linux/entrypoint/circleci-runner-entrypoint
 hadolint --config .hadolint.yaml linux/images/example/Dockerfile windows/images/servercore/Dockerfile
 yamllint --strict .
 docker stack config -c linux/stack/runners.yaml > /dev/null
+ci/config-names.sh                   # every Swarm config is named after its file (--write renames the stale ones)
 docker stack config -c windows/stack/runners.yaml > /dev/null
 docker stack config -c windows/stack/custom-image.yaml > /dev/null
 circleci config validate .circleci/config.yml && circleci config validate .circleci/continue.yml
@@ -339,7 +342,7 @@ The `release` job is part of the `ci` workflow. On `main`, when both e2e tokens 
 
 | Job | Executor | What it does |
 |---|---|---|
-| `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release`, `serial-group` | `ci/release.sh`: version, notes, bundles, `SHA256SUMS`, keyless signature, GitHub release. Without `GITHUB_TOKEN` it stops before publishing |
+| `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release`, `serial-group` | `ci/release.sh`: the check of the Swarm config names, version, notes, bundles, `SHA256SUMS`, keyless signature, GitHub release. Without `GITHUB_TOKEN` it stops before publishing |
 
 **Add a new job to `requires` of the release job.** `lint-circleci` fails when a job of the workflow is missing from it: it compiles the workflow and checks that every job that no other job requires is a requirement of the release (in the compiled workflow the release waits for one lock job, which requires them).
 Refer to [Releasing](releasing.md) for the rules, the setup of the token, and how to recover from a failed release.
@@ -365,6 +368,7 @@ Every tool image is pinned by tag and digest in `.circleci/continue.yml`. There 
 | Trivy | 0.75.0 | `trivy` command |
 | git-cliff, cosign, gh (the release job) | 2.14.2, 3.1.3, 2.102.0, each SHA-256 checked | `ci/release.sh install-tools` |
 | Stock Linux image of the e2e | `cimg/base:2026.10` by digest | `ci/e2e-host.sh`, `ci/linux-smoke.sh` |
+| Image of the `runner-distributor` service | `alpine:3` by digest | `linux/stack/runners.yaml` |
 | Docker-in-Docker for the simulation | `docker:29.9.0-dind` by digest | `ci/tests/e2e-sim.sh` |
 | e2e sweeper | `circleci/runner-agent:machine-3.1.12-9831-dca4a16`, `circleci-runner.exe` 3.1.12 | `ci/e2e-host.sh`, `ci/E2E-Host.ps1` |
 
@@ -410,4 +414,5 @@ Windows dominates the cost: every Windows job pulls the 2 GB Server Core image o
 | A Windows host step hangs instead of failing | A child process started with `-NoNewWindow` (`docker events`, `docker service logs`) keeps the step's console open. `E2E-Host.ps1` kills the child process trees on every failure path; keep that if it changes |
 | A Windows step dies with `NativeCommandError` on a harmless warning | In Windows PowerShell 5.1 a native command's stderr redirected with `2>&1` under `$ErrorActionPreference = 'Stop'` is a terminating error. Run docker through `Invoke-Docker` in `E2E-Host.ps1` |
 | Trivy fails with "no space left on device" | `/tmp` on the machine image is too small for a large image tarball plus Trivy's Java DB. The `trivy` command keeps both under `$HOME/trivy` |
+| `lint-stack`, `linux-swarm` or the release job fails with `config machine-runner-swarm-... is stale` | A file that a Swarm config carries (the entrypoint or a distributor script) changed, and the name in the stack files did not. Run `ci/config-names.sh --write` and commit the new names. Refer to [Swarm config names](../CONTRIBUTING.md#swarm-config-names) |
 | `lint-shell` fails with SC2154 on an uppercase variable | `.shellcheckrc` enables `check-unassigned-uppercase`. Assign the variable (`${NAME:-}`) or add a `# shellcheck disable=SC2154` with the reason |

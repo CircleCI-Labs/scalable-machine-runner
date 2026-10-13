@@ -18,7 +18,7 @@ This page is for maintainers. A CircleCI job makes every release of this reposit
 1. The pipeline has one workflow, `ci`. With those parameters it runs all lint jobs, the Linux jobs, the Windows Server 2022 and 2025 jobs, and the e2e jobs on Linux and Windows. Expression filters on the parameters (`filters: pipeline.parameters.release` on the release job, and similar ones on the Windows 2025 and e2e jobs) switch the jobs in and out, so no job runs twice.
 1. The `release` job requires every other job of the workflow. If one job fails, nothing is released. Fix the problem, then use **Rerun workflow from failed**. The release job runs once everything has passed.
 1. The `release` job runs in the serial group `<project slug>/release`, so two quick merges cannot race for the same version. A newer pipeline whose release job waits in the group makes the release job of an older pipeline skip. The newer one releases both changes.
-1. `ci/release.sh` finds the next version, makes the notes, builds the bundles, signs `SHA256SUMS`, verifies the signature, and creates the GitHub release. The release creates the tag at the commit of the pipeline.
+1. `ci/release.sh` checks that every Swarm config of the stack files is named after the content of its file (`ci/config-names.sh`), and stops when a name is stale. Then it finds the next version, makes the notes, builds the bundles, signs `SHA256SUMS`, verifies the signature, and creates the GitHub release. The release creates the tag at the commit of the pipeline.
 
 Pipelines of other branches never release, and neither do tag pipelines.
 

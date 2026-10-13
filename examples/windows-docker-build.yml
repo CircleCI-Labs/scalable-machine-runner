@@ -1,0 +1,31 @@
+# Example: building a WINDOWS container image on the "windows-docker-build" class
+# (windows/stack/docker-build.yaml, an overlay file for docker stack deploy, pattern A). The job reaches
+# the host Docker engine through its named pipe, \\.\pipe\docker_engine, so it is ADMINISTRATOR-EQUIVALENT
+# on that node: it can start any container, mount any host path and, on a Swarm manager, read every secret. Use it only for trusted projects, on
+# nodes labelled smr.docker-build=true that no other class shares. Only Windows images can be built (the
+# engine is in Windows-container mode); Linux images cannot. docker.exe comes from the host
+# (the stack file mounts C:\Program Files\Docker at C:\docker and adds it to PATH).
+#
+# Replace <namespace> and the registry. A build here is built by the host engine, so its layers and
+# cache stay on the node; there is no Docker layer caching service for runners.
+version: 2.1
+
+jobs:
+  build-image:
+    machine: true
+    resource_class: <namespace>/windows-docker-build
+    shell: powershell.exe -ExecutionPolicy Bypass
+    steps:
+      - checkout
+      - run:
+          name: Build a Windows image on the host engine
+          command: |
+            docker version
+            docker build --pull -t registry.example.com/app:$env:CIRCLE_SHA1 .
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # docker login and docker push need registry credentials in a restricted context.
+
+workflows:
+  image:
+    jobs:
+      - build-image

@@ -184,8 +184,8 @@ The stack cannot decide which projects may use a class. Apply these controls in 
    Enable evaluation and push the policy. Refer to [Config policies for self-hosted runner](https://circleci.com/docs/guides/config-policies/config-policies-for-self-hosted-runner/).
 
    ```console
-   $ circleci policy settings --enabled=true --owner-id <organization ID>
-   $ circleci policy push ./config-policies --owner-id <organization ID>
+   $ circleci policy settings set --org <org> --enabled
+   $ circleci policy push ./config-policies --org <org>
    ```
 
 3. **Context restrictions.** Project restrictions, security groups, and expression restrictions combine with logical AND. Restrict every context that jobs on a runner class use. For deploy contexts, add an expression such as `pipeline.git.branch == "main" and not job.ssh.enabled`.

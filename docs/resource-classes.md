@@ -15,7 +15,7 @@ To add a class:
 1. Create the resource class and a token in CircleCI. The class name must equal the service name.
 
    ```console
-   $ circleci runner resource-class create <namespace>/linux-python --generate-token
+   $ circleci runner resource-class create <namespace>/linux-python --org <org> --generate-token
    ```
 
 2. Copy an existing service in your stack file and change the values in the table below.

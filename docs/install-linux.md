@@ -16,7 +16,7 @@ The manual steps come first and need nothing from this repository except two fil
 ## Prerequisites
 
 - A CircleCI cloud organization and a user who is an organization admin.
-- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/), signed in.
+- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. The commands on this page use its syntax (`circleci --version` prints the version). Pass `--org <org>`, the organization slug such as `gh/my-org` or its UUID: without it the CLI takes the organization of the git remote of the current directory, which in a clone of this repository is not yours.
 - One or more Linux nodes with a supported operating system:
 
   | Operating system | Architecture | Status in this repository |
@@ -101,15 +101,15 @@ Do not use a bundle if a command fails. Refer to the notes below to understand t
 Create a namespace if your organization has none. Each organization can have one namespace, and orbs use the same one.
 
 ```console
-$ circleci namespace create <namespace> --org-id <organization-id>
+$ circleci namespace create <namespace> --org <org>
 ```
 
 Create one resource class for each service in the stack file. The class name must equal the service name. The shipped file `linux/stack/runners.yaml` has the services `linux-default`, `linux-java`, and `linux-hardened`.
 
 ```console
-$ circleci runner resource-class create <namespace>/linux-default --generate-token
-$ circleci runner resource-class create <namespace>/linux-java --generate-token
-$ circleci runner resource-class create <namespace>/linux-hardened --generate-token
+$ circleci runner resource-class create <namespace>/linux-default --org <org> --generate-token
+$ circleci runner resource-class create <namespace>/linux-java --org <org> --generate-token
+$ circleci runner resource-class create <namespace>/linux-hardened --org <org> --generate-token
 ```
 
 Each command prints a token once. Store each token in your secret manager. If you lose a token, create a new one with `circleci runner token create <namespace>/<class> --nickname <nickname>`.

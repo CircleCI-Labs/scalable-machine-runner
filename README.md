@@ -85,7 +85,7 @@ Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https:
    git clone https://github.com/CircleCI-Labs/scalable-machine-runner.git
    cd scalable-machine-runner
    for class in linux-default linux-java linux-hardened; do
-     circleci runner resource-class create <namespace>/$class --generate-token
+     circleci runner resource-class create <namespace>/$class --org <org> --generate-token
    done
    ```
 

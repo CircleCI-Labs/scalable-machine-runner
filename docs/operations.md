@@ -195,7 +195,7 @@ Swarm secrets are immutable. To rotate a token, create a second secret and swap 
 6. Revoke the old token in CircleCI, and remove the old secret.
 
    ```console
-   $ circleci runner token list <namespace>/linux-default
+   $ circleci runner token list --resource-class <namespace>/linux-default
    $ circleci runner token delete <token ID>
    $ docker secret rm linux-default-token
    ```
@@ -208,7 +208,7 @@ Do not swap first. Until the old token is deleted in CircleCI, it stays valid fo
 2. Delete the old token at once.
 
    ```console
-   $ circleci runner token list <namespace>/linux-default
+   $ circleci runner token list --resource-class <namespace>/linux-default
    $ circleci runner token delete <token ID>
    ```
 
@@ -347,7 +347,7 @@ On a node that runs a docker-build class, jobs also leave images, volumes, and b
 6. In CircleCI, delete the tokens and then the resource classes. A class cannot be deleted while it has tokens.
 
    ```console
-   $ circleci runner token list <namespace>/linux-default
+   $ circleci runner token list --resource-class <namespace>/linux-default
    $ circleci runner token delete <token ID>
    $ circleci runner resource-class delete <namespace>/linux-default
    ```

@@ -19,7 +19,7 @@ The manual steps come first. The optional [setup helper](#optional-use-the-setup
 ## Prerequisites
 
 - A CircleCI cloud organization and a user who is an organization admin.
-- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/), signed in. It can run on your workstation.
+- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. It can run on your workstation. The commands on this page use its syntax (`circleci --version` prints the version). Pass `--org <org>`, the organization slug such as `gh/my-org` or its UUID: without it the CLI takes the organization of the git remote of the current directory, which in a clone of this repository is not yours.
 - One or more Windows Server hosts. Machine runner 3 supports these versions:
 
   | Windows Server | Machine runner 3 | Status in this repository |
@@ -99,13 +99,13 @@ Do not use a bundle if a command fails.
 Create a namespace if your organization has none.
 
 ```console
-$ circleci namespace create <namespace> --org-id <organization-id>
+$ circleci namespace create <namespace> --org <org>
 ```
 
 Create one resource class for each service in the stack files. The class name must equal the service name. The shipped file `windows\stack\runners.yaml` has the service `windows-default` and deploys on its own. The optional overlay files in the same directory add `windows-custom` (`custom-image.yaml`), `windows-persistent` (`persistent.yaml`), and `windows-docker-build` (`docker-build.yaml`). Create the classes you plan to use.
 
 ```console
-$ circleci runner resource-class create <namespace>/windows-default --generate-token
+$ circleci runner resource-class create <namespace>/windows-default --org <org> --generate-token
 ```
 
 The command prints the token once. Store it in your secret manager.

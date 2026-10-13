@@ -32,7 +32,7 @@ The earlier version of this repository used Docker Compose. Compose is simple, b
 | Clean environment | No. Files outside the working directory survive a restart | Yes, for every job |
 | Token storage | Environment file, visible in `docker inspect` | Swarm secret, mounted as a file |
 | Hosts | One host | Many nodes, Linux and Windows, with placement |
-| Updates and drain | Manual | Rolling update, with a drain of busy replicas |
+| Updates and drain | Manual | Rolling update, and each busy runner drains (finishes its job) first |
 | Setup | Nothing to learn beyond Compose | Swarm concepts, even on a single node |
 
 The test `linux/tests/ephemerality.sh` includes a negative control that shows the flaw. Three jobs on `docker run --restart always` ran in one container, and two of them found files from an earlier job. A script can recreate containers in a Compose setup, but that is custom code that this repository avoids. If you use the old `docker-compose.yml`, refer to [Migrate from Docker Compose](migration.md).
@@ -87,7 +87,7 @@ In the default Linux class, a job that uses sudo can. In the hardened class, it 
 
 ## Why does a Windows job end when I update or stop a service?
 
-Stopping a busy stock Server Core container from outside kills its job after about 5 seconds, whatever `stop_grace_period` says. The exit code is 3221225786. The normal flow is not affected: a job that finishes ends the runner and the container cleanly. Only a deploy or update, a scale-down, a drain, `docker stack rm`, and a restart of Docker stop a busy container. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Windows drain](operations.md#windows-drain).
+Stopping a busy stock Server Core container from outside kills its job after about 5 seconds, whatever `stop_grace_period` says. The exit code is 3221225786. The normal flow is not affected: a job that finishes ends the runner and the container cleanly. Only a deploy or update, a scale-down, a drain, `docker stack rm`, and a restart of Docker stop a busy container. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ## Does the setup helper install the latest runner?
 

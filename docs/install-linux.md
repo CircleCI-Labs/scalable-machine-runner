@@ -254,14 +254,14 @@ Check that the file parses. This needs no running Swarm.
 $ docker stack config -c linux/stack/runners.yaml > /dev/null
 ```
 
-The optional classes are separate overlay files. Add them with another `-c` flag, and always pass the same set of files on every deploy. Each overlay needs its own resource class and its own secret `<service>-token`.
+The optional classes are separate add-on stack files. Add each with another `-c` flag, and pass the same list of files on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each add-on stack file needs its own resource class and its own secret `<service>-token`.
 
 | File | Service | Purpose |
 |---|---|---|
 | `linux/stack/docker-build.yaml` | `linux-docker-build` | Builds images with the host Docker engine. Needs a labeled worker node. Refer to [Docker Builds](docker-builds.md) |
 | `linux/stack/persistent.yaml` | `linux-persistent` | A long-lived runner with a named volume. Needs the node name edited in the file. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
 
-An overlay file repeats the common service settings of `runners.yaml`, because YAML anchors do not cross files. When you change a common setting, such as `stop_grace_period` or the logging options, change it in every file that you use.
+An add-on stack file repeats the common service settings of `runners.yaml`, because YAML anchors do not cross files. When you change a common setting, such as `stop_grace_period` or the logging options, change it in every file that you use.
 
 ## 7. Deploy the stack
 

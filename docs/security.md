@@ -144,7 +144,7 @@ Do not set the variable to `true` on Linux. Refer to [Error: failed to remove wo
 | Secret | Administrators and `SYSTEM` only. Refer to [Token model on each OS](#token-model-on-each-os) |
 | Working directory | `CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"` |
 | Logs | Text format. The `json-file` log driver with rotation |
-| Shutdown | `stop_grace_period: 5h5m`. A stop from outside kills a busy container after about 5 seconds, so change a service while its class is idle. Refer to [Windows drain](operations.md#windows-drain) |
+| Shutdown | `stop_grace_period: 5h5m`. A stop from outside kills a busy container after about 5 seconds, so change a service while its class is idle. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container) |
 | Limits | CPU and memory limits. The Windows engine rejects `pids` and `ulimits` |
 | Network | No published ports, so SSH rerun is off |
 

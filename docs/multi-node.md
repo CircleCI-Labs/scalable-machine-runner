@@ -56,7 +56,7 @@ Managers keep the cluster state in a Raft log, including every Swarm secret. Swa
 
 Quorum matters more for this stack than for a typical Swarm. Every job ends with a runner exit, and only a manager with quorum can create the replacement task. Without quorum, running jobs finish, but the runners are not replaced, so the capacity drops to zero.
 
-Keep jobs off managers when you can. A container breakout on a manager exposes the tokens of every class. Drain each manager so that it runs no tasks:
+Keep jobs off managers when you can. A container breakout on a manager exposes the tokens of every class. Drain each manager (a node drain) so that it runs no tasks:
 
 ```console
 $ docker node update --availability drain <manager name>

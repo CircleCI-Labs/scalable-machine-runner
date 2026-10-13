@@ -39,7 +39,7 @@ In the web app, select **Runners** to see the replicas of each class in the inve
 
 ## Upgrade the runner and images
 
-Swarm replaces containers one at a time. The stack files set `update_config` to `order: stop-first` and `parallelism: 1`. Swarm sends SIGTERM to a busy replica, the runner drains, which means it finishes the running job, and only then does Swarm start the new container. An idle replica stops within about 5 seconds and exits with code 0. A busy replica exits with code 0 when its job ends, so an update can take as long as your longest job, up to the `stop_grace_period` of 5 hours and 5 minutes. The command waits until the update finishes, unless you add `--detach`. This holds on Linux. On Windows, a stop kills a busy container after about 5 seconds. Refer to [Windows drain](#windows-drain). A new runner version needs no stop on Linux: refer to the next section.
+Swarm replaces containers one at a time. The stack files set `update_config` to `order: stop-first` and `parallelism: 1`. Swarm sends SIGTERM to a busy replica, the runner drains (a runner drain: it takes no new job and finishes the running one), and only then does Swarm start the new container. An idle replica stops within about 5 seconds and exits with code 0. A busy replica exits with code 0 when its job ends, so an update can take as long as your longest job, up to the `stop_grace_period` of 5 hours and 5 minutes. The command waits until the update finishes, unless you add `--detach`. This holds on Linux. On Windows, a stop kills a busy container after about 5 seconds. Refer to [Stop a busy Windows container](#stop-a-busy-windows-container). A new runner version needs no stop on Linux: refer to the next section.
 
 ### Upgrade the runner on Linux
 
@@ -118,7 +118,7 @@ The layout is the one of Linux. Each version has its own directory, `C:\machine-
    C:\machine-runner-swarm\current\bin\circleci-runner.exe --version
    ```
 
-3. A replica that already waits for a job keeps the old version until it claims a job or exits after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack file. A forced update replaces it at once, but it also stops the containers of the service, which kills a running job after about 5 seconds. Force the update only while the class is idle. Refer to [Windows drain](#windows-drain).
+3. A replica that already waits for a job keeps the old version until it claims a job or exits after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack file. A forced update replaces it at once, but it also stops the containers of the service, which kills a running job after about 5 seconds. Force the update only while the class is idle. Refer to [Stop a busy Windows container](#stop-a-busy-windows-container).
 
    ```powershell
    docker service update --force runners_windows-default
@@ -138,7 +138,7 @@ A junction cannot be replaced in one step, so for a moment `current` does not ex
 
 - **Linux and Windows stock images.** Change the tag or digest of `image` in your stack file, and run `docker stack deploy`. Swarm resolves a tag to its digest when you deploy, so deploy again to pick up a tag that the publisher re-pushed.
 - **Your own images.** Rebuild, push, change the tag, and deploy. Rebuild on a schedule, for example monthly, and when the base image or a tool changes.
-- **Windows base images.** Microsoft republishes the Server Core tags each Patch Tuesday. Pin by digest, and rebuild your own images on top of them after each update. Change a Windows service only while its class is idle. Refer to [Windows drain](#windows-drain).
+- **Windows base images.** Microsoft republishes the Server Core tags each Patch Tuesday. Pin by digest, and rebuild your own images on top of them after each update. Change a Windows service only while its class is idle. Refer to [Stop a busy Windows container](#stop-a-busy-windows-container).
 
 For a single service, you can also run `docker service update --image <new image> runners_<service>`. Record the change in your stack file, so that the next deploy does not undo it.
 
@@ -222,12 +222,12 @@ Do not swap first. Until the old token is deleted in CircleCI, it stays valid fo
        runners_linux-default
    ```
 
-   Each replica still finishes the job that it runs before Swarm replaces it. On Windows, drop `uid`, `gid`, and `mode`, and expect the update to end a running job after about 5 seconds: rerun those jobs. Refer to [Windows drain](#windows-drain).
+   Each replica still finishes the job that it runs before Swarm replaces it. On Windows, drop `uid`, `gid`, and `mode`, and expect the update to end a running job after about 5 seconds: rerun those jobs. Refer to [Stop a busy Windows container](#stop-a-busy-windows-container).
 4. Do steps 4 and 5 above (wait for the update, record the new name in your stack file), and remove the old secret with `docker secret rm linux-default-token`. Then look for what the leaked token did: the runner inventory in CircleCI for names you do not know, and the jobs that ran on the class.
 
 ## Drain a node for patching
 
-Draining a node stops its tasks and keeps new tasks away. Swarm sends SIGTERM and waits for the grace period, so a running job finishes. On Windows, a drain kills a running job after about 5 seconds, so drain a Windows node only while its classes are idle. Refer to [Windows drain](#windows-drain). Restarting the Docker daemon stops every running container, because live restore does not work in Swarm mode, so always drain before you patch Docker or reboot.
+A node drain (`docker node update --availability drain`) stops the tasks of a node and keeps new tasks away. Swarm sends SIGTERM and waits for the grace period, so a running job finishes. On Windows, a drain kills a running job after about 5 seconds, so drain a Windows node only while its classes are idle. Refer to [Stop a busy Windows container](#stop-a-busy-windows-container). Restarting the Docker daemon stops every running container, because live restore does not work in Swarm mode, so always drain before you patch Docker or reboot.
 
 ```console
 $ docker node update --availability drain <node name>
@@ -242,17 +242,17 @@ $ docker node update --availability active <node name>
 
 Tasks do not move back to the node by themselves. Single-task replicas restart after every job, so new tasks spread over the nodes again within a short time. Patch managers one at a time, so the cluster keeps its quorum. Refer to [Managers and quorum](multi-node.md#managers-and-quorum).
 
-### Windows drain
+### Stop a busy Windows container
 
 On Linux, a stop lets the running job finish. On Windows, stopping a busy container from outside kills its job after about 5 seconds.
 
 **The normal flow is not affected.** A job finishes, the runner exits, and the container ends cleanly. Swarm then starts a new container for the next job. Nothing stops a container from outside, so no job is lost.
 
-**Only a stop of a busy container from outside kills the job.** When Docker stops a container, Windows sends the shutdown event to it. The runner turns the event into SIGTERM and drains: it accepts no new job and lets the running job finish. On Server Core, Windows waits only the time in the registry value `WaitToKillServiceTimeout` before it ends the processes. The default is 5 seconds, whatever `docker stop -t` or `stop_grace_period` says. The container then exits with the code 3221225786 (`0xC000013A`), and the job dies with it. Every one of these actions stops containers in this way:
+**Only a stop of a busy container from outside kills the job.** When Docker stops a container, Windows sends the shutdown event to it. The runner turns the event into SIGTERM and drains (a runner drain): it accepts no new job and lets the running job finish. On Server Core, Windows waits only the time in the registry value `WaitToKillServiceTimeout` before it ends the processes. The default is 5 seconds, whatever `docker stop -t` or `stop_grace_period` says. The container then exits with the code 3221225786 (`0xC000013A`), and the job dies with it. Every one of these actions stops containers in this way:
 
 - A rolling update, with `docker stack deploy` or `docker service update`: a deploy or an update.
 - `docker service scale` to a lower number: a scale-down.
-- `docker node update --availability drain`: a drain.
+- `docker node update --availability drain`: a node drain.
 - `docker stack rm`, and a restart of the Docker service.
 
 So roll out changes while the class is idle, or rerun the jobs that were interrupted.
@@ -288,11 +288,11 @@ Use the image as the `image:` of the service. The service still mounts the runne
 > [!WARNING]
 > Never use `New-Item -Force` on an existing registry key, in an image build or in a running container. It replaces the key and deletes its values and subkeys. On the `cexecsvc` service key, it makes the container fail to start with `hcs::System::Start: context deadline exceeded`. Use `reg add` or `Set-ItemProperty`, which set one value.
 
-An image like this is not part of the default path, and this repository does not build or test it. Before you rely on a long drain, test it. Run a job of a few minutes on a node that is not in production, force an update of its service with `docker service update --force`, and check that the job finishes.
+An image like this is not part of the default path, and this repository does not build or test it. Before you rely on a long runner drain, test it. Run a job of a few minutes on a node that is not in production, force an update of its service with `docker service update --force`, and check that the job finishes.
 
 ## Recycle a class
 
-A forced update replaces every replica of a service, one at a time and with a drain. Use it to pick up a new runner binary on the host, or to reset a persistent class.
+A forced update replaces every replica of a service, one at a time, each with a runner drain. Use it to pick up a new runner binary on the host, or to reset a persistent class.
 
 ```console
 $ docker service update --force runners_linux-persistent

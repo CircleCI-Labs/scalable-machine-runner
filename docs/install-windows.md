@@ -14,7 +14,7 @@ This page describes how to deploy CircleCI machine runner 3 as a Docker Swarm st
 The manual steps come first. The optional [setup helper](#optional-use-the-setup-helper) runs most of the same steps.
 
 > [!IMPORTANT]
-> The services run the stock Server Core image, and no image is built. A job that finishes ends its container cleanly. Stopping a busy container from outside kills its job after about 5 seconds, with the exit code 3221225786. This happens on a deploy or update, a scale-down, a node drain, `docker stack rm`, and a restart of Docker. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Windows drain](operations.md#windows-drain).
+> The services run the stock Server Core image, and no image is built. A job that finishes ends its container cleanly. Stopping a busy container from outside kills its job after about 5 seconds, with the exit code 3221225786. This happens on a deploy or update, a scale-down, a node drain, `docker stack rm`, and a restart of Docker. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ## Prerequisites
 
@@ -102,7 +102,7 @@ Create a namespace if your organization has none.
 $ circleci namespace create <namespace> --org <org>
 ```
 
-Create one resource class for each service in the stack files. The class name must equal the service name. The shipped file `windows\stack\runners.yaml` has the service `windows-default` and deploys on its own. The optional overlay files in the same directory add `windows-custom` (`custom-image.yaml`), `windows-persistent` (`persistent.yaml`), and `windows-docker-build` (`docker-build.yaml`). Create the classes you plan to use.
+Create one resource class for each service in the stack files. The class name must equal the service name. The shipped file `windows\stack\runners.yaml` has the service `windows-default` and deploys on its own. The optional add-on stack files in the same directory add `windows-custom` (`custom-image.yaml`), `windows-persistent` (`persistent.yaml`), and `windows-docker-build` (`docker-build.yaml`). Create the classes you plan to use.
 
 ```console
 $ circleci runner resource-class create <namespace>/windows-default --org <org> --generate-token
@@ -286,10 +286,10 @@ The stack files use absolute host paths, so they work from any directory. Copy e
 | `windows-persistent` | `persistent.yaml` | A long-lived runner with a named volume. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
 | `windows-docker-build` | `docker-build.yaml` | Builds Windows images with the host engine. Refer to [Docker Builds](docker-builds.md) |
 
-- `runners.yaml` needs only the secret `windows-default-token`. Each overlay file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
+- `runners.yaml` needs only the secret `windows-default-token`. Each add-on stack file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
 - A Server 2025 node runs the shipped `ltsc2022` services. For a class on the `ltsc2025` image, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-ltsc2025 == true`.
 
-The optional classes are overlay files. Add each with another `-c` flag, and pass the same set of files on every deploy. Each overlay repeats the anchors of `runners.yaml`, because an anchor does not reach into another file. When you change a common setting, change it in every file that you use.
+The optional classes are add-on stack files. Add each with another `-c` flag, and pass the same list of files on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each add-on stack file repeats the anchors of `runners.yaml`, because an anchor does not reach into another file. When you change a common setting, change it in every file that you use.
 
 Check that your copies parse. This needs no running Swarm.
 
@@ -396,7 +396,7 @@ Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-im
 
 ## Stop and uninstall
 
-Refer to [Uninstall](operations.md#uninstall). Every stop of a service, including a scale down, a rolling update, and a node drain, ends the containers. A running job is killed after about 5 seconds. Refer to [Windows drain](operations.md#windows-drain).
+Refer to [Uninstall](operations.md#uninstall). Every stop of a service, including a scale down, a rolling update, and a node drain, ends the containers. A running job is killed after about 5 seconds. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ## Troubleshooting
 

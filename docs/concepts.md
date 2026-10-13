@@ -50,6 +50,14 @@ flowchart TB
 
 The runner containers poll CircleCI for work. Nothing connects to a runner, so the stack publishes no ports.
 
+## Add-on stack files and how they merge
+
+Each operating system has one main stack file, `runners.yaml`, that defines the default classes and deploys on its own. The optional classes live in add-on stack files next to it: `persistent.yaml` and `docker-build.yaml` on both systems, and `custom-image.yaml` on Windows. An add-on stack file is not a patch of the main file. It defines services of its own, and each service needs its own resource class and its own `<service>-token` secret.
+
+`docker stack deploy -c runners.yaml -c persistent.yaml runners` reads the files in the order given and merges them into one stack, as Docker Compose does for several `-f` files. A service, network, secret, or volume that only one file defines is added, and a key that several files set takes the value of the later file. The shipped add-on stack files only add services. YAML anchors work inside one file only, so each add-on stack file repeats the common service settings, and a change to one of them goes into every file that you use.
+
+Pass the same list of files, in the same order, on every deploy. Swarm updates the services of the files you name. The services of a file you leave out stay as they are and stop following your edits, and `--prune` removes them. Check a merge without a Swarm with `docker stack config -c runners.yaml -c persistent.yaml`.
+
 ## Replicas set the concurrency
 
 `deploy.replicas` is the number of runners in the class, and so the number of jobs the class runs at the same time. A replica that cannot fit on any node stays in the `Pending` state until capacity is free. Refer to [Resource Classes](resource-classes.md) for sizing and for choosing the count.
@@ -99,9 +107,9 @@ Three timing facts follow from this design:
 - Every new container downloads the task agent from `circleci-binary-releases.s3.amazonaws.com`. Allow this host in your egress rules.
 - A single-task runner that finds no job exits after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is `1h` in the stack files. Swarm replaces it, so idle replicas pick up a rotated secret or a new image within an hour.
 
-Stopping a service sends SIGTERM to the runner. The runner drains, which means it accepts no new job and lets the running job finish. The stack sets `stop_grace_period: 5h5m`, which is the runner `max_run_time` of 5 hours plus 5 minutes.
+Stopping a service sends SIGTERM to the runner. The runner drains (a runner drain), which means it accepts no new job and lets the running job finish. The stack sets `stop_grace_period: 5h5m`, which is the runner `max_run_time` of 5 hours plus 5 minutes.
 
-On Windows, `stop_grace_period` is not enough. A stock Server Core container ends about 5 seconds after a stop, so a job that runs at that moment dies. The normal flow is not affected: a finished job ends the container by itself. Only a stop from outside, such as an update, a scale-down, or a drain, kills a busy container, so change a Windows service while its class is idle. Refer to [Windows drain](operations.md#windows-drain).
+On Windows, `stop_grace_period` is not enough. A stock Server Core container ends about 5 seconds after a stop, so a job that runs at that moment dies. The normal flow is not affected: a finished job ends the container by itself. Only a stop from outside, such as an update, a scale-down, or a drain, kills a busy container, so change a Windows service while its class is idle. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ## What a clean environment covers
 
@@ -156,7 +164,7 @@ The entrypoint `circleci-runner-entrypoint` starts as root, prepares the contain
    - Without sudo, or with `MACHINE_RUNNER_SWARM_JOB_SUDO=false`, the prefix is a `setpriv` command that gives the job no capabilities. In the hardened class it also carries `--no-new-privs`. The runner holds `CAP_SETUID` and `CAP_SETGID` as ambient capabilities only to call it.
 6. Creates the directories: the task agent directory, owned by uid 2000, and the working directory with its parent `/var/opt/circleci`, owned by the job user.
 7. Adds the job user to the group of `/var/run/docker.sock` when the class mounts the socket and the group is not root. Refer to [Docker Builds](docker-builds.md).
-8. Runs the runner with `exec` as uid 2000. The init process of the container (`init: true`) passes SIGTERM to it, which starts the drain.
+8. Runs the runner with `exec` as uid 2000. The init process of the container (`init: true`) passes SIGTERM to it, which starts the runner drain.
 
 The entrypoint does not validate the runner name, the token, the mode, or the timeouts, and it has no guard against the reuse of a container. The runner checks its own settings and exits with code 80 for a bad one, and Swarm never reuses a container.
 
@@ -175,3 +183,21 @@ Services carry constraints and nodes advertise capabilities. The built-in proper
 ## Why Swarm and not plain Compose
 
 A plain `docker compose up` restarts the same container, so the environment is not clean. Swarm creates a new container for every task. The [FAQ](faq.md#why-not-plain-docker-compose) lists the trade-offs.
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| Stack file | A Compose-format YAML file that `docker stack deploy` reads. Each OS has a main stack file (`runners.yaml`) and optional add-on stack files. This documentation never calls an add-on stack file an overlay, because an overlay network is a different thing |
+| Stack | The services that one `docker stack deploy` creates. The documentation names it `runners`, so the service `linux-default` is `runners_linux-default` in Swarm commands |
+| Resource class, service | A resource class is the CircleCI name, `<namespace>/<name>`, that a job selects with `resource_class`. A service is the Swarm object that runs it. One service serves one class, and the service name is the class name without the namespace |
+| Replica, container | A replica is one runner of a service, and `deploy.replicas` says how many. Swarm runs each replica as a task, which is one container at a time. When a job ends, the container ends, and Swarm creates a new task and container for the same slot |
+| Node | A host in the Swarm, a manager or a worker. Node labels and service constraints decide where a replica may run |
+| Single-task mode, continuous mode | The two modes of machine runner 3. Single-task runs one job and exits, which gives a clean environment. Continuous keeps the runner up for many jobs. Refer to [Single-task and continuous mode](#single-task-and-continuous-mode) |
+| Persistent class | A class that runs in continuous mode with a named volume, so jobs share state. It gives up the clean environment |
+| Default class, hardened class | The Linux default classes (`linux-default`, `linux-java`) keep passwordless sudo for jobs. The hardened class (`linux-hardened`) removes sudo and steps every job down with `setpriv --no-new-privs`. Refer to [Users and the runner token on Linux](#users-and-the-runner-token-on-linux) |
+| Token secret | The Swarm secret `<service>-token`. It is a runner config file that holds the token of the resource class |
+| Entrypoint | On Linux, the script `circleci-runner-entrypoint`, which prepares the users and then starts the runner. On Windows there is none: the runner is the main process |
+| Setup helper | The optional scripts `linux/setup.sh` and `windows\Setup.ps1`, which run steps of the install pages with checks |
+| Stock image, custom image | A stock image is a publisher's image as it is, for example `cimg/base` or Windows Server Core. The stack mounts the runner into it from the host. A custom image is one you derive from it, for example to add tools. A baked image is a Linux custom image with the runner inside. Refer to [Images](images.md) |
+| Drain | The word has two meanings. A **runner drain** happens when the runner gets SIGTERM: it takes no new job and finishes the running one. A **node drain** is `docker node update --availability drain`: Swarm stops the tasks of that node, which starts a runner drain in each, and starts replacements on other nodes. This documentation always says which one |

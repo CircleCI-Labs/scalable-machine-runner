@@ -142,7 +142,7 @@ $ printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create linux-persis
 $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml runners
 ```
 
-Recycle the runner with a forced update. The runner drains first, so a running job finishes. The volume survives.
+Recycle the runner with a forced update. The runner drains first (a runner drain: it takes no new job and finishes the running one), so a running job finishes. The volume survives.
 
 ```console
 $ docker service update --force runners_linux-persistent
@@ -150,7 +150,7 @@ $ docker service update --force runners_linux-persistent
 
 ### Windows
 
-The overlay file `windows\stack\persistent.yaml` defines `windows-persistent`. It sets `CIRCLECI_RUNNER_MODE: continuous` and sets no idle timeout. It declares and mounts the named volume `windows-persistent-cache` at `C:\cache`. Point NuGet, npm, and similar caches there with an environment variable in the job.
+The add-on stack file `windows\stack\persistent.yaml` defines `windows-persistent`. It sets `CIRCLECI_RUNNER_MODE: continuous` and sets no idle timeout. It declares and mounts the named volume `windows-persistent-cache` at `C:\cache`. Point NuGet, npm, and similar caches there with an environment variable in the job.
 
 The service is pinned to the nodes that carry the label `machine-runner-swarm.class.windows-persistent=true`. Create the secret `windows-persistent-token` first, then label the node and deploy the file with the main file:
 
@@ -245,7 +245,7 @@ The runner does not look for a config file on its own. The entrypoint arguments 
 
 | Code | Source | Meaning |
 |---|---|---|
-| 0 | Runner | A normal exit after a job or after a drain. Swarm starts a new container |
+| 0 | Runner | A normal exit after a job or after a runner drain. Swarm starts a new container |
 | 80 | Entrypoint | A prerequisite is missing: `/opt/machine-runner-swarm` is not root-owned or is writable, the image has neither sudo nor `setpriv` (or, for a hardened class, no util-linux `setpriv` with `--no-new-privs`), `MACHINE_RUNNER_SWARM_JOB_SUDO` is invalid, or the entrypoint cannot remove every sudo right of the job user |
 | 80 | Runner | A configuration error: a missing or invalid name, an empty token, an unknown log level, or an invalid mode |
 | 1 | Runner | The config file is missing because the secret is not attached, the YAML does not parse, or a duration is malformed |

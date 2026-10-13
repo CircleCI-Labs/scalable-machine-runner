@@ -39,7 +39,7 @@ Problems with the CircleCI platform or the runner agent itself go to [CircleCI s
 
 ## How it works
 
-A Docker Swarm cluster holds the nodes. One stack file for each operating system defines one service for each resource class, and optional overlay files add the persistent and docker-build classes, and on Windows a class with your own image. The replicas of a service are runner containers that poll `runner.circleci.com` for jobs over outbound HTTPS.
+A Docker Swarm cluster holds the nodes. One stack file for each operating system defines one service for each resource class, and optional add-on stack files add the persistent and docker-build classes, and on Windows a class with your own image. The replicas of a service are runner containers that poll `runner.circleci.com` for jobs over outbound HTTPS.
 
 ```mermaid
 flowchart TB

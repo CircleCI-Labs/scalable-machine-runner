@@ -60,7 +60,7 @@ The restart delay is a pause between starts, not a back-off. Swarm creates the r
 
 **Cause.** A service references an external secret that does not exist. Every service in the file needs its `<service>-token` secret.
 
-**Fix.** Create the secret, or delete the service from your copy of the stack file together with its entries under `secrets:` and `networks:`. On Windows, `runners.yaml` needs only `windows-default-token`, and each overlay file (`custom-image.yaml`, `persistent.yaml`, `docker-build.yaml`) needs its own `<service>-token` secret when you deploy it.
+**Fix.** Create the secret, or delete the service from your copy of the stack file together with its entries under `secrets:` and `networks:`. On Windows, `runners.yaml` needs only `windows-default-token`, and each add-on stack file (`custom-image.yaml`, `persistent.yaml`, `docker-build.yaml`) needs its own `<service>-token` secret when you deploy it.
 
 ### The runner log shows 401
 
@@ -243,7 +243,7 @@ A job ends about 5 seconds after a rolling update, a scale down, a node drain, o
 
 **Cause.** The container was stopped from outside while it ran a job. After the shutdown event, Windows waits only the time in the registry value `WaitToKillServiceTimeout` before it ends the processes of the container. The default is 5 seconds, whatever `stop_grace_period` says, so the runner and its job die before the drain ends. A job that finishes by itself does not end this way.
 
-**Fix.** Rerun the interrupted jobs, and change a service only while its class runs no job. Refer to [Windows drain](operations.md#windows-drain), which also shows an optional image of your own that lifts the limit.
+**Fix.** Rerun the interrupted jobs, and change a service only while its class runs no job. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container), which also shows an optional image of your own that lifts the limit.
 
 ### Error: hcs::System::Start: context deadline exceeded
 

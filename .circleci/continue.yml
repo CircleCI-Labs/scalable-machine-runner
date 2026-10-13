@@ -290,7 +290,7 @@ jobs:
 
   linux-swarm:
     description: >
-      L's test suite on the latest Ubuntu machine image (linux/tests/run-all.sh): a single-node
+      The Linux test suite on the latest Ubuntu machine image (linux/tests/run-all.sh): a single-node
       and a two-node Swarm inside privileged docker:dind containers, with the real stack file,
       the real entrypoint and the real runner binary, but no token. Covers stack validation,
       the installer, ephemerality (with a negative control), exit 80, token readability, placement,

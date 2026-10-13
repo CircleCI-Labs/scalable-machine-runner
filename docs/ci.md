@@ -110,7 +110,7 @@ The decision therefore has to happen before the e2e jobs are compiled into the w
 
 ## Linux jobs without a token
 
-`linux-swarm` runs L's suite and needs no secret. `linux-setup` and `linux-arm64` run [`ci/linux-smoke.sh`](../ci/linux-smoke.sh) on a fresh VM:
+`linux-swarm` runs the Linux suite and needs no secret. `linux-setup` and `linux-arm64` run [`ci/linux-smoke.sh`](../ci/linux-smoke.sh) on a fresh VM:
 
 1. `linux/setup.sh --check`, then `--swarm-init --install` twice (the second run must be a no-op).
 2. The layout is root-owned and not writable by others; the runner reports its version unmodified inside a stock `cimg/base` through `-v /opt/machine-runner-swarm/current:/opt/machine-runner-swarm:ro` (`current` is a link to the installed version), the container's architecture equals the host's, the runner binary is built for it (`file`), and `circleci-runner-entrypoint` with a config file but no runner name exits 80.
@@ -337,7 +337,7 @@ Measured on 2026-10-13 (pipeline `9aed4106`, a full run on `smr-swarm/ci`). Cred
 | `e2e-simulation` | Linux VM medium | 100 s |
 | `linux-setup`, `linux-arm64` | Linux VM medium, Arm medium | 31 s, 29 s |
 | `linux-image-example` | Linux VM medium | 96 s |
-| `linux-swarm` (L's whole suite) | Linux VM xlarge | 7 min 14 s |
+| `linux-swarm` (the whole Linux suite) | Linux VM xlarge | 7 min 14 s |
 | `windows-swarm-ltsc2022` | Windows | 12 min 31 s |
 | `windows-swarm-ltsc2025` | Windows | about 17 min |
 | `e2e-linux-host` (B1, B2, B3: 2 s each on the runner) | Linux VM medium | about 1.5 min |

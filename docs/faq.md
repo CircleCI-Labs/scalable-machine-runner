@@ -45,7 +45,8 @@ No. Docker has no macOS containers, so Swarm cannot schedule macOS jobs. Apple's
 
 | Platform | Status |
 |---|---|
-| Linux, Ubuntu LTS, amd64 and arm64 | Tested in CI |
+| Linux, Ubuntu LTS, amd64 | Tested in CI, including real jobs |
+| Linux, Ubuntu LTS, arm64 | CI tests the install and the start of the stack. It runs real jobs on amd64 only |
 | Linux, RHEL 8 and later | Steps documented, not tested in CI |
 | Windows Server 2025 and 2022 | Tested in CI |
 | Windows Server 2019 | Supported by machine runner 3. Untested here, and the stack files have no label for it |

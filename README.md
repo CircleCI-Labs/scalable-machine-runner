@@ -144,7 +144,8 @@ Windows works the same way with `windows/stack/runners.yaml`. Two things differ.
 
 | Platform | Versions | Architecture | Status |
 |---|---|---|---|
-| Linux | Ubuntu LTS | amd64, arm64 | Tested in CI |
+| Linux | Ubuntu LTS | amd64 | Tested in CI, including real jobs |
+| Linux | Ubuntu LTS | arm64 | CI tests the install and the start of the stack. It runs real jobs on amd64 only |
 | Linux | RHEL 8 and later | amd64, arm64 | Steps documented, not tested in CI |
 | Windows Server | 2025 | amd64 | Tested in CI |
 | Windows Server | 2022 | amd64 | Tested in CI |

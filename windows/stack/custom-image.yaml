@@ -89,6 +89,7 @@ services:
       placement:
         constraints:
           - node.platform.os == windows
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: a job there can read other classes' tokens
           - node.labels.machine-runner-swarm.windows-build == ltsc2022
         preferences:
           - spread: node.id

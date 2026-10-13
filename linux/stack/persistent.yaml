@@ -58,6 +58,7 @@ services:
       placement:
         constraints:
           - node.platform.os == linux
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node (see runners.yaml)
           - node.hostname == CHANGE-ME   # the node that holds the volume
 
 networks:

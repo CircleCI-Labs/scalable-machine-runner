@@ -9,6 +9,10 @@
 #   3. the label on the WORKER places it there, and the job user can use the bound Docker socket
 #      without sudo (pattern A) through the group the entrypoint adds
 #   4. linux-default (placement preference spread: node.id) puts its two replicas on different nodes
+#   5. Docker-build isolation: every other service carries node.labels.machine-runner-swarm.docker-build != true.
+#      It matches the UNLABELLED nodes (step 4), leaves a node as soon as that node gets the label (the
+#      constraint enforcer shuts the task down, so default replicas move to the other node), stays pending
+#      while every node is a Docker-build node, and returns when the labels go
 #
 # Usage: placement.sh        Env: TIMEOUT=120
 set -euo pipefail
@@ -51,12 +55,27 @@ nodes=$(idocker "$SWARM_TEST_MGR" service ps --filter desired-state=running --fo
 echo "RESULT test=placement step=spread service=linux-default nodes=$nodes"
 [[ $nodes == "$SWARM_TEST_MGR,$SWARM_TEST_WRK" || $nodes == "$SWARM_TEST_WRK,$SWARM_TEST_MGR" ]] || fail "replicas were not spread over both nodes: $nodes"
 
+default_tasks() { # "node|state" of every current linux-default task (a pending task has no node)
+  idocker "$SWARM_TEST_MGR" service ps --filter desired-state=running --format '{{.Node}}|{{.CurrentState}}' "${STACK}_linux-default"
+}
+# shellcheck disable=SC2329  # called through wait_for
+default_running_on() { # node count: exactly COUNT linux-default tasks run, all on NODE (any node when NODE is "any")
+  local t
+  t=$(default_tasks)
+  [[ $(grep -c '|Running' <<< "$t") -eq $2 ]] || return 1
+  [[ $1 == any || $(grep -c "^$1|Running" <<< "$t") -eq $2 ]]
+}
+
 # 2. label on the manager only
 idocker "$SWARM_TEST_MGR" node update --label-add machine-runner-swarm.docker-build=true "$SWARM_TEST_MGR" >/dev/null
 sleep 15
 state=$(state_of linux-docker-build)
 echo "RESULT test=placement step=label_on_manager_only state=${state%% *} (node.role == worker is not met)"
 [[ $state == Pending* ]] || fail "the label on a manager placed linux-docker-build ($state)"
+# 5a. the default class leaves the labelled manager: both replicas run on the unlabelled worker
+wait_for "$TIMEOUT" default_running_on "$SWARM_TEST_WRK" 2 ||
+  fail "linux-default stayed on, or was placed on, a Docker-build node: $(default_tasks | paste -sd' ' -)"
+echo "RESULT test=placement step=default_leaves_labelled_node node=$SWARM_TEST_WRK replicas=2 (the manager is a Docker-build node)"
 
 # 3. label on the worker
 idocker "$SWARM_TEST_MGR" node update --label-add machine-runner-swarm.docker-build=true "$SWARM_TEST_WRK" >/dev/null
@@ -70,4 +89,15 @@ sudo_used=$(idocker "$SWARM_TEST_WRK" exec -u circleci "$c" sh -c 'docker ps >/d
 echo "RESULT test=placement step=pattern_a job_user=circleci docker_without_sudo=$sudo_used detail=\"${as_job% }\""
 [[ $sudo_used == yes ]] || fail "the job user cannot use the bound Docker socket without sudo"
 
-pass "constraints and labels place services (pending on a mismatch, the role constraint holds, spread works, socket group for pattern A)"
+# 5b. every node is a Docker-build node: the default class has nowhere to go and stays pending
+wait_for "$TIMEOUT" bash -c "[ \$(docker exec $SWARM_TEST_MGR docker service ps --filter desired-state=running --format '{{.CurrentState}}|{{.Error}}' ${STACK}_linux-default | grep -c '^Pending.*no suitable node') -eq 2 ]" ||
+  fail "linux-default kept running with every node labelled docker-build: $(default_tasks | paste -sd' ' -)"
+echo "RESULT test=placement step=default_pending_on_docker_build_nodes replicas=2 reason=no_suitable_node"
+
+# 5c. the labels go: the default class comes back (an unlabelled node matches != true)
+idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.docker-build "$SWARM_TEST_MGR" >/dev/null
+idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.docker-build "$SWARM_TEST_WRK" >/dev/null
+wait_for "$TIMEOUT" default_running_on any 2 || fail "linux-default did not return after the labels were removed: $(default_tasks | paste -sd' ' -)"
+echo "RESULT test=placement step=default_returns_without_labels replicas=2"
+
+pass "constraints and labels place services (pending on a mismatch, the role constraint holds, spread works, socket group for pattern A, the other classes keep off Docker-build nodes)"

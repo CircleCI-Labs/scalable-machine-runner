@@ -110,8 +110,15 @@ Describe 'the stack files' {
         foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Match 'node\.platform\.os == windows' }
         foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Match 'node\.labels\.machine-runner-swarm\.windows-build == ltsc2022' }
         $script:blocks['windows-docker-build'] | Should -Match 'node\.labels\.machine-runner-swarm\.docker-build == true'
+        $script:blocks['windows-docker-build'] | Should -Not -Match 'docker-build !='
         $script:blocks['windows-persistent'] | Should -Match 'node\.labels\.machine-runner-swarm\.class\.windows-persistent == true'
         $script:blocks['windows-docker-build'] | Should -Match ([regex]::Escape('type: npipe') + '\r?\n        ' + [regex]::Escape("source: '\\.\pipe\docker_engine'"))
+    }
+
+    It 'keep every class except the Docker-build one off Docker-build nodes (a missing label also matches !=)' {
+        foreach ($s in @($script:blocks.Keys | Where-Object { $_ -ne 'windows-docker-build' })) {
+            $script:blocks[$s] | Should -Match 'node\.labels\.machine-runner-swarm\.docker-build != true'
+        }
     }
 
     It 'use nothing the Windows engine rejects' {

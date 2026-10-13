@@ -52,7 +52,7 @@ State also persists. The images, containers, volumes, and build cache of the hos
    $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml runners
    ```
 
-The file `linux/stack/docker-build.yaml` defines `linux-docker-build`. It mounts the socket, and constrains the service to `node.platform.os == linux`, `node.role == worker`, and `node.labels.machine-runner-swarm.docker-build == true`. The entrypoint adds the job user to the group of the socket, so jobs need no sudo to run `docker`. The `cimg/base` image includes the Docker CLI.
+The file `linux/stack/docker-build.yaml` defines `linux-docker-build`. It mounts the socket, and constrains the service to `node.platform.os == linux`, `node.role == worker`, and `node.labels.machine-runner-swarm.docker-build == true`. Every other service in the stack files carries `node.labels.machine-runner-swarm.docker-build != true`, so labeling a node moves the other classes off it. The entrypoint adds the job user to the group of the socket, so jobs need no sudo to run `docker`. The `cimg/base` image includes the Docker CLI.
 
 Use the class in a job:
 

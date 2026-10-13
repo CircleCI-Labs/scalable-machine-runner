@@ -43,6 +43,15 @@ for s in "${services[@]}"; do
   check "$s" 'resource reservations' '^        reservations:$'
   check "$s" 'a pids limit' '^          pids: [0-9]+$'
   check "$s" 'placement constraint node.platform.os == linux' '^          - node.platform.os == linux$'
+  if [[ $s == linux-docker-build ]]; then
+    if grep -q 'machine-runner-swarm.docker-build !=' <<< "$block"; then
+      echo "  $s: must run ON a Docker-build node, not stay off it"
+      problems=$((problems + 1))
+    fi
+  else
+    # Swarm reads a missing label as "not equal", so unlabelled nodes still match.
+    check "$s" 'the Docker-build isolation constraint (docker-build != true)' '^          - node.labels.machine-runner-swarm.docker-build != true$'
+  fi
   check "$s" 'a logging block with rotation' '^        max-size: 20m$'
   check "$s" 'cap_drop' '^    cap_drop:$'
   check "$s" 'CIRCLECI_RUNNER_NAME with the node and slot' "^      CIRCLECI_RUNNER_NAME: '\\{\\{\\.Node\\.Hostname\\}\\}-$s-\\{\\{\\.Task\\.Slot\\}\\}'$"

@@ -162,7 +162,7 @@ Constraints on labels use the form `node.labels.<key> == <value>`. For example, 
 
 ### Keep the docker-build node to itself
 
-A job on a docker-build class controls the whole Docker engine of its node, so it can inspect and enter every other container there. Keep other classes off that node by adding `node.labels.machine-runner-swarm.docker-build != true` to their constraints.
+A job on a docker-build class controls the whole Docker engine of its node, so it can inspect and enter every other container there, and read the tokens of any class that runs on that node. The stack files keep the other classes off that node: every service except the docker-build ones carries the constraint `node.labels.machine-runner-swarm.docker-build != true`. A node without the label matches it, because Swarm treats a missing label as "not equal". A node that gets the label stops running those services: Swarm shuts their tasks down and starts replacements on other nodes, or leaves them pending when no other node matches. Add the same constraint to every service you write yourself.
 
 ## Network zones
 

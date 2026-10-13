@@ -47,6 +47,9 @@ x-update: &update
 x-placement: &placement
   constraints:
     - node.platform.os == linux
+    # Never on a Docker-build node (docker-build.yaml): a job there reaches the engine and can read other classes' tokens.
+    # A node without the label matches: Swarm reads a missing label as not equal.
+    - node.labels.machine-runner-swarm.docker-build != true
     # - node.platform.arch == x86_64                # or aarch64
     # - node.labels.machine-runner-swarm.zone == <network zone>      # docker node update --label-add machine-runner-swarm.zone=<zone> <node>
   preferences:

@@ -488,11 +488,25 @@ jobs:
             .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Placement.ps1 -Report "reports\placement-$env:WINDOWS_TAG.txt"
             exit $LASTEXITCODE
       - run:
-          name: Stop handling, stock Server Core killed as the control and the stop-timeout image graceful (windows/tests/Test-StopHandling.ps1 -Online)
+          name: Stop handling on stock Server Core (windows/tests/Test-StopHandling.ps1 -Online)
           when: always
           no_output_timeout: 25m
           command: |
             .\ci\Invoke-Test.ps1 -Script windows\tests\Test-StopHandling.ps1 -Report "reports\stop-$env:WINDOWS_TAG.txt" -ScriptArguments '-Online'
+            exit $LASTEXITCODE
+      - run:
+          name: Bring-your-own-image example on stock Server Core (windows/images/example, Node.js; runner and Git mounted, PATH from custom-image.yaml)
+          when: always
+          no_output_timeout: 30m
+          command: |
+            docker build -f windows/images/example/Dockerfile --build-arg "WINDOWS_TAG=$env:WINDOWS_TAG" `
+              -t swarm-ci/windows-example:ci windows
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Import-Module .\windows\tests\SwarmTestHelpers.psm1
+            $mounts = Get-SwarmStockMountArgument
+            $path = (Select-String -LiteralPath windows\stack\custom-image.yaml -Pattern "^\s+PATH: '(.+)'").Matches[0].Groups[1].Value
+            docker run --rm --isolation=process @mounts --env "PATH=$path" --entrypoint powershell.exe swarm-ci/windows-example:ci `
+              -NoProfile -Command "node --version; npm --version; git --version; & 'C:\machine-runner-swarm\bin\circleci-runner.exe' --version"
             exit $LASTEXITCODE
       - run:
           name: Persistent mode - one container, a volume that survives (windows/tests/Test-Persistent.ps1)
@@ -504,75 +518,6 @@ jobs:
       - store_artifacts:
           path: C:\test-results
           destination: test-results
-      - store_artifacts:
-          path: reports
-          destination: reports
-
-  windows-baked:
-    description: >
-      The fallback: the baked Server Core image (windows/images/servercore) with the runner,
-      Git and entrypoint inside, built and checked without the C:\\machine-runner-swarm mount.
-    parameters:
-      os:
-        type: executor
-      tag:
-        type: enum
-        enum: [ltsc2022, ltsc2025]
-    executor: << parameters.os >>
-    environment:
-      WINDOWS_TAG: << parameters.tag >>
-      IMAGE: swarm-ci/windows:<< parameters.tag >>
-    steps:
-      - checkout
-      - run:
-          name: docker build windows/images/servercore (WINDOWS_TAG=<< parameters.tag >>)
-          no_output_timeout: 45m
-          command: |
-            docker version --format 'docker {{.Server.Version}}'
-            docker build --pull --build-arg "WINDOWS_TAG=$env:WINDOWS_TAG" `
-              --label "org.opencontainers.image.revision=$env:CIRCLE_SHA1" `
-              -f windows/images/servercore/Dockerfile -t $env:IMAGE windows
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            docker image ls $env:IMAGE
-      - run:
-          name: Baked image without the mount (windows/tests/Test-Injection.ps1 -Baked -Online)
-          when: always
-          no_output_timeout: 30m
-          command: |
-            New-Item -ItemType Directory -Force -Path reports | Out-Null
-            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Injection.ps1 -Report "reports\baked-$env:WINDOWS_TAG.txt" `
-              -ScriptArguments '-Baked','-Image',$env:IMAGE,'-Online'
-            exit $LASTEXITCODE
-      - run:
-          name: Exit 80 with the baked image (windows/tests/Test-Exit80.ps1 -Baked)
-          when: always
-          no_output_timeout: 15m
-          command: |
-            $ip = (Get-NetIPAddress -AddressFamily IPv4 |
-              Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet' -and $_.IPAddress -notlike '169.254.*' } |
-              Select-Object -First 1).IPAddress
-            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Exit80.ps1 -Report "reports\baked-exit80-$env:WINDOWS_TAG.txt" `
-              -ScriptArguments '-Baked','-Image',$env:IMAGE,'-AdvertiseAddr',$ip
-            exit $LASTEXITCODE
-      - run:
-          name: Stop handling on the baked image, which sets the stop timeout itself (Test-StopHandling.ps1 -Baked -Online)
-          when: always
-          no_output_timeout: 25m
-          command: |
-            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-StopHandling.ps1 -Report "reports\baked-stop-$env:WINDOWS_TAG.txt" `
-              -ScriptArguments '-Baked','-Image',$env:IMAGE,'-Online'
-            exit $LASTEXITCODE
-      - run:
-          name: Bring-your-own-image example on the baked image (windows/images/example, Node.js)
-          when: always
-          no_output_timeout: 30m
-          command: |
-            docker build -f windows/images/example/Dockerfile --build-arg "BASE_IMAGE=$env:IMAGE" `
-              -t swarm-ci/windows-example:ci windows
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            docker run --rm --isolation=process --entrypoint powershell.exe swarm-ci/windows-example:ci `
-              -NoProfile -Command "node --version; npm --version; git --version"
-            exit $LASTEXITCODE
       - store_artifacts:
           path: reports
           destination: reports
@@ -691,7 +636,7 @@ jobs:
             & .\ci\E2E-Host.ps1 -Mode Prepare
             exit $LASTEXITCODE
       - run:
-          name: Host the stack - probes b1, b2 and b3 (graceful stop), a fresh container each
+          name: Host the stack - probes b1, b2 and b3, a fresh container each
           no_output_timeout: 45m
           command: |
             $global:LASTEXITCODE = 1
@@ -728,10 +673,6 @@ jobs:
           B1 creates files and persists them to a workspace and a cache, B2 attaches and restores
           them and compares SHA-256 sums (Git's tar and gzip do the workspace, the agent's own tar
           the cache).
-      drain:
-        type: boolean
-        default: false
-        description: Run a 45 second step that the host interrupts with a service update (graceful stop).
       variant:
         type: string
         default: ltsc2022
@@ -773,12 +714,10 @@ jobs:
                   & .\ci\E2E-Storage.ps1 -Phase Verify
                   exit $LASTEXITCODE
       - run:
-          name: Residue, container identity, token readability<<# parameters.drain >> and the graceful stop<</ parameters.drain >> (<< parameters.probe >>)
+          name: Residue, container identity, token readability (<< parameters.probe >>)
           no_output_timeout: 10m
           command: |
-            $extra = @{}
-            if ('<< parameters.drain >>' -eq 'true') { $extra['Drain'] = $true }
-            & .\ci\E2E-Probe.ps1 -Probe << parameters.probe >> -Previous '<< parameters.previous >>' @extra
+            & .\ci\E2E-Probe.ps1 -Probe << parameters.probe >> -Previous '<< parameters.previous >>'
             exit $LASTEXITCODE
       - when:
           condition:
@@ -948,7 +887,6 @@ job-groups:
           name: e2e-windows-2022-b3
           probe: b3
           previous: b2
-          drain: true
           requires: [e2e-windows-2022-b2]
   e2e-windows-2025:
     jobs:
@@ -973,7 +911,6 @@ job-groups:
           name: e2e-windows-2025-b3
           probe: b3
           previous: b2
-          drain: true
           requires: [e2e-windows-2025-b2]
 
 workflows:
@@ -1001,17 +938,8 @@ workflows:
           name: windows-swarm-ltsc2022
           os: windows-2022
           tag: ltsc2022
-      - windows-baked:
-          name: windows-baked-ltsc2022
-          os: windows-2022
-          tag: ltsc2022
       - windows-swarm:
           name: windows-swarm-ltsc2025
-          os: windows-2025
-          tag: ltsc2025
-          filters: pipeline.parameters.full-suite
-      - windows-baked:
-          name: windows-baked-ltsc2025
           os: windows-2025
           tag: ltsc2025
           filters: pipeline.parameters.full-suite
@@ -1049,9 +977,7 @@ workflows:
             - linux-setup
             - linux-arm64
             - windows-swarm-ltsc2022
-            - windows-baked-ltsc2022
             - windows-swarm-ltsc2025
-            - windows-baked-ltsc2025
             - e2e-linux
             - e2e-windows-2022
             - e2e-windows-2025

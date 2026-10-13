@@ -15,10 +15,7 @@
     3. Leave residue in the same places for the next job.
     4. Try to read the runner token (the Swarm secret, the runner's config file) as the job user and
        record who the job runs as. Only a byte count is kept, never the content.
-    5. With -Drain: tell the host that the long job has started (<Probe>.<workflow id>.started),
-       then run a 45 second step. The host stops the container 10 seconds in (docker service
-       update --force); a graceful stop lets this step finish.
-    6. Write evidence for the host job to C:\e2e-evidence\<Probe>.<workflow id>.
+    5. Write evidence for the host job to C:\e2e-evidence\<Probe>.<workflow id>.
 
     Exits 0 only when no residue was found, residue was planted and (with -Previous)
     the container differs from the previous probe's. Evidence is written in every case.
@@ -32,7 +29,6 @@
 param(
     [Parameter(Mandatory = $true)][string] $Probe,
     [string] $Previous = '',
-    [switch] $Drain,
     [string] $EvidenceDir = 'C:\e2e-evidence',
     [string] $TokenFile = 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml'
 )
@@ -156,17 +152,7 @@ if ($tokenRead -eq 'absent') { Add-Failure "the token file $TokenFile does not e
 # Windows jobs run as ContainerAdministrator with no step-down, so a readable token is the
 # documented outcome here: it is recorded, not asserted.
 
-# 5. A long step for the graceful-stop check: the host stops this container while it runs.
-$drainResult = 'none'
-if ($Drain) {
-    Set-Content -LiteralPath (Join-Path $EvidenceDir "$Probe.$wf.started") -Value (Get-Date).ToUniversalTime().ToString('s') -Encoding ASCII
-    Write-Host 'long step: 45 seconds; the host stops this container while it runs'
-    for ($i = 1; $i -le 9; $i++) { Start-Sleep -Seconds 5; Write-Host "long step: $($i * 5) s" }
-    $drainResult = 'ok'
-}
-$finishedEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-
-# 6. Evidence for the host job, written atomically.
+# 5. Evidence for the host job, written atomically.
 $result = if ($failures.Count -eq 0) { 'pass' } else { 'fail' }
 $osText = try {
     $k = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
@@ -184,8 +170,6 @@ $tmp = Join-Path $EvidenceDir ".$Probe.$wf.tmp"
     "os=$osText",
     "token_read=$tokenRead",
     "token_env=$tokenEnv",
-    "drain=$drainResult",
-    "finished_epoch=$finishedEpoch",
     "residue=[$($residue -join ' ')]",
     "planted=[$($planted -join ' ')]",
     "result=$result"

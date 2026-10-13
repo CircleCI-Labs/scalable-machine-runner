@@ -20,7 +20,7 @@ BeforeAll {
         }
     }
     $script:allText = ($script:files.Values -join "`n")
-    $script:stockServices = @('windows-default', 'windows-persistent', 'windows-docker-build')
+    $script:stockServices = @('windows-default', 'windows-custom', 'windows-persistent', 'windows-docker-build')
 }
 
 Describe 'the stack files' {
@@ -61,18 +61,14 @@ Describe 'the stack files' {
     }
 
     It 'run circleci-runner.exe directly with --config on the secret, from the stock anchor in each file' {
-        # custom-image.yaml has only a baked-image service, so it has no stock anchor.
-        foreach ($name in 'runners.yaml', 'persistent.yaml', 'docker-build.yaml') {
+        foreach ($name in 'runners.yaml', 'custom-image.yaml', 'persistent.yaml', 'docker-build.yaml') {
             $script:files[$name] | Should -Match "(?m)^x-stock: &stock\r?\n  entrypoint: \['C:\\machine-runner-swarm\\bin\\circleci-runner\.exe', machine, '--config', 'C:\\ProgramData\\Docker\\secrets\\circleci_runner_config\.yaml'\]"
         }
         foreach ($s in $script:stockServices) { $script:blocks[$s] | Should -Match '<<: \[\*runner, \*stock\]' }
-        # A baked image has the runner as its ENTRYPOINT: no entrypoint, no mount and no PATH in its service.
-        $script:blocks['windows-custom'] | Should -Not -Match 'entrypoint|\*stock|PATH:|\*runner-mount|\*git-mount'
-        $script:files['custom-image.yaml'] | Should -Not -Match 'x-stock|x-runner-mount|x-git-mount|x-stock-env'
     }
 
     It 'mount the runner and Git read-only, Git at the path the task agent hard-codes' -TestCases @(
-        @{ Service = 'windows-default' }, @{ Service = 'windows-persistent' }, @{ Service = 'windows-docker-build' }
+        @{ Service = 'windows-default' }, @{ Service = 'windows-custom' }, @{ Service = 'windows-persistent' }, @{ Service = 'windows-docker-build' }
     ) {
         param($Service)
         $script:blocks[$Service] | Should -Match '- \*runner-mount\r?\n      - \*git-mount'
@@ -81,7 +77,7 @@ Describe 'the stack files' {
 
     It 'spell out PATH for stock services: Windows first, then Git cmd, usr\bin and ucrt64\bin' {
         $paths = [regex]::Matches($script:allText, "(?m)^\s+PATH: '([^']+)'") | ForEach-Object { $_.Groups[1].Value }
-        @($paths).Count | Should -Be 4   # runners.yaml, persistent.yaml, docker-build.yaml (twice: the anchor and the override with C:\docker); custom-image.yaml has none
+        @($paths).Count | Should -Be 5   # runners.yaml, custom-image.yaml, persistent.yaml, docker-build.yaml (twice: the anchor and the override with C:\docker)
         foreach ($p in $paths) {
             $entries = $p -split ';'
             foreach ($sys in 'C:\Windows\system32', 'C:\Windows', 'C:\Windows\System32\WindowsPowerShell\v1.0\') { $entries | Should -Contain $sys }

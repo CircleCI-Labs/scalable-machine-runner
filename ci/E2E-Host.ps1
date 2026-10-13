@@ -3,19 +3,17 @@
     Job A of the Windows e2e (see docs/ci.md): hosts the runner as a Docker Swarm service.
 
 .DESCRIPTION
-    -Mode Prepare  Stage C:\machine-runner-swarm with windows\Setup.ps1 -StageOnly, pull the stock image, build
-                   windows\images\stop-timeout from it (stock Server Core plus a registry value that
-                   lets a running job finish when the container is stopped), then
+    -Mode Prepare  Stage C:\machine-runner-swarm with windows\Setup.ps1 -StageOnly, pull the stock image, then
                    `Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the machine-runner-swarm.windows-build
                    node label). The order matters: the network is down for a few seconds after
                    the swarm is created.
-    -Mode Run      Deploy the stack with the stop-timeout image and host three single-task jobs:
+    -Mode Run      Deploy the stack on the stock Server Core image and host three single-task jobs:
                    the first container must claim probe b1, the second (Swarm replaces a
-                   finished task with a new container) probe b2. Both must report no residue,
-                   and the containers must differ. Probe b3 runs a 45 second job; the host
-                   runs `docker service update --force` while it runs, and the job must still
-                   finish and its container exit 0 (a stock Server Core container is killed
-                   about 5 seconds after a stop, exit code 3221225786). Prints the verdict.
+                   finished task with a new container) probe b2, the third probe b3. Every probe
+                   must report no residue, the containers must differ, and every container must
+                   exit 0 after its job. The workspace and the cache must round-trip. A stop of
+                   a busy container is not tested: a stock container is killed about 5 seconds
+                   after one (docs/operations.md). Prints the verdict.
     -Mode Cleanup  Remove the stack and its secrets, leave the swarm. Always runs.
     -Mode Sweep    After a failure: start one throwaway runner so that a probe still queued on
                    the e2e class is claimed and fails fast (it finds no C:\e2e-evidence\host)
@@ -58,10 +56,9 @@ if (-not $wf) { throw 'CIRCLE_WORKFLOW_ID is not set' }
 $build = if ($env:CIRCLE_BUILD_NUM) { $env:CIRCLE_BUILD_NUM } else { 'local' }
 $secrets = 'C:\e2e-secrets'          # never under $Root: $Root is uploaded as artifacts
 $fullService = "${Stack}_${Service}"
-# The image of the service under test: stock Server Core plus the stop timeout (built by Prepare).
+# The image of the service under test: the stock Server Core image of the shipped stack, unless -Image names another.
 $stockImage = if ($Image) { $Image } else { $null }
 $tag = if ($WindowsTag) { $WindowsTag } elseif ($env:E2E_WINDOWS_TAG) { $env:E2E_WINDOWS_TAG } else { 'ltsc2022' }
-if (-not $stockImage) { $stockImage = "swarm-e2e/servercore-stop:$tag" }
 $runnerIdle = $IdleTimeout
 $runnerMaxRun = $MaxRunTime
 $deadline = $DeadlineSeconds
@@ -180,19 +177,13 @@ function Exit-WithFailure([string] $Message) {
 function Invoke-Prepare {
     Invoke-Docker version | ForEach-Object { Write-Host $_ }
     Install-Layout
-    # Pull and build before the swarm exists: on a fresh VM the base layer takes about 10 minutes,
+    # Pull before the swarm exists: on a fresh VM the base layer takes about 10 minutes,
     # which must not count against the probes' deadline, and for a few seconds after
     # `docker swarm init` DNS lookups fail ("lookup mcr.microsoft.com: no such host").
     $base = "mcr.microsoft.com/windows/servercore:$tag"
     Write-E2ELog "docker pull $base"
     Invoke-Docker pull $base | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure "docker pull $base failed" }
-    # Stock Server Core ends a container about 5 seconds after a stop (HCS waits only
-    # WaitToKillServiceTimeout, exit code 3221225786), so a stop kills the running job. The
-    # stop-timeout image is the stock image plus that one registry value.
-    Write-E2ELog "docker build windows\images\stop-timeout -> $stockImage"
-    Invoke-Docker build -f (Join-Path $repo 'windows\images\stop-timeout\Dockerfile') --build-arg "WINDOWS_TAG=$tag" -t $stockImage (Join-Path $repo 'windows\images\stop-timeout') | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) { Exit-WithFailure "docker build of windows\images\stop-timeout failed" }
     # The shipped helper: docker swarm init and the machine-runner-swarm.windows-build node label (it stages first and
     # finds C:\machine-runner-swarm staged).
     $ip = Get-AdvertiseAddress
@@ -242,10 +233,9 @@ function Write-Override {
     $lines | Set-Content -LiteralPath $override -Encoding ASCII
 }
 
-function Wait-Probe([string] $Probe, [int] $DiesBefore, [datetime] $Start, [switch] $Drain) {
+function Wait-Probe([string] $Probe, [int] $DiesBefore, [datetime] $Start) {
     $ev = Get-EvidencePath $Probe
     Write-E2ELog "waiting for probe $Probe"
-    $updated = $false
     $printed = 0
     $lastNote = Get-Date
     while ($true) {
@@ -260,13 +250,6 @@ function Wait-Probe([string] $Probe, [int] $DiesBefore, [datetime] $Start, [swit
             }
         }
         if (Test-TokenRejected) { Exit-WithFailure 'the runner token was rejected (401). Rotate E2E_RUNNER_TOKEN_WINDOWS in the context.' }
-        if ($Drain -and -not $updated -and (Test-Path "$ev.started")) {
-            # The probe's job is running its long step: stop its container the way an operator does.
-            $updated = $true
-            Write-E2ELog "probe $Probe is running its long job: docker service update --force $fullService"
-            Invoke-Docker service update --force --detach=true $fullService | ForEach-Object { Write-Host $_ }
-            if ($LASTEXITCODE -ne 0) { Exit-WithFailure 'docker service update --force failed' }
-        }
         if ((Test-Path $ev) -and (Test-Path "$ev.status")) {
             $st = (Get-Content -LiteralPath "$ev.status" -TotalCount 1).Trim()
             Write-E2ELog "probe ${Probe}: result=$(Get-EvidenceField $ev 'result') residue=$(Get-EvidenceField $ev 'residue') status=$st"
@@ -276,10 +259,6 @@ function Wait-Probe([string] $Probe, [int] $DiesBefore, [datetime] $Start, [swit
         }
         $dies = Get-DieCount
         if ($dies -gt $DiesBefore -and -not (Test-Path $ev)) {
-            if ($Drain -and $updated) {
-                $code = (@(Get-ContainerEvent | Where-Object { $_.Action -eq 'die' }) | Select-Object -Skip $DiesBefore -First 1).ExitCode
-                Exit-WithFailure "the container was stopped while the job of probe $Probe was running and ended without letting it finish (exit code $code; 3221225786 is the kill that follows 5 seconds after a stop on stock Server Core)"
-            }
             Exit-WithFailure "the container for probe $Probe exited without evidence: the runner idled out ($runnerIdle) without claiming it, or claimed a job that is not ours"
         }
         $elapsed = [int] ((Get-Date) - $Start).TotalSeconds
@@ -352,8 +331,7 @@ function Invoke-Run {
     $start = Get-Date
     Wait-Probe 'b1' 0 $start
     Wait-Probe 'b2' 1 $start
-    # b3: its job runs 45 seconds; the host stops the container 10 seconds into it.
-    Wait-Probe 'b3' 2 $start -Drain
+    Wait-Probe 'b3' 2 $start
     Invoke-StackRemoval
     Start-Sleep -Seconds 3                 # let docker events flush the last die event
     $ok = Test-Evidence
@@ -370,13 +348,13 @@ function Test-Evidence {
     $events = @(Get-ContainerEvent)
     $starts = @($events | Where-Object { $_.Action -eq 'start' })
     $dies = @($events | Where-Object { $_.Action -eq 'die' })
-    # The first three containers ran the probes; a fourth, idle one starts when b3's is replaced.
+    # The first three containers ran the probes; a fourth, idle one starts when the third one is replaced.
     $ids = @($starts | Select-Object -First 3 | Select-Object -ExpandProperty Id -Unique)
     $codes = @($dies | Select-Object -First 3 | Select-Object -ExpandProperty ExitCode -Unique)
     Write-E2ELog "containers: started=$($starts.Count) exited=$($dies.Count) distinct(first three)=$($ids.Count) exit_codes(first three)=[$($codes -join ' ')]"
     if ($starts.Count -lt 3 -or $dies.Count -lt 3) { Write-E2ELog 'expected at least 3 containers'; $ok = $false }
     if ($ids.Count -ne 3) { Write-E2ELog 'expected 3 distinct container IDs'; $ok = $false }
-    if (($codes -join ' ') -ne '0') { Write-E2ELog 'expected every runner container, the stopped one included, to exit 0'; $ok = $false }
+    if (($codes -join ' ') -ne '0') { Write-E2ELog 'expected every runner container to exit 0 after its job'; $ok = $false }
 
     foreach ($p in $probes) {
         $ev = Get-EvidencePath $p
@@ -404,19 +382,6 @@ function Test-Evidence {
     if (@($names.Values | Select-Object -Unique).Count -ne $probes.Count) { Write-E2ELog "the probes must run in different containers (computer names: $($names.Values -join ' '))"; $ok = $false }
     if (@($instances.Values | Select-Object -Unique).Count -ne $probes.Count) { Write-E2ELog 'MACHINE_RUNNER_SWARM_INSTANCE_ID must differ between the probes'; $ok = $false }
 
-    # b3: the stop must not have ended the job. Its container is container 3: it died after the job finished.
-    $ev3 = Get-EvidencePath 'b3'
-    $finished = 0.0
-    [void] [double]::TryParse((Get-EvidenceField $ev3 'finished_epoch'), [ref] $finished)
-    $stopped = if ($dies.Count -ge 3) { $dies[2] } else { $null }
-    $gap = if ($stopped -and $finished -gt 0) { [math]::Round($stopped.Time - $finished, 1) } else { 'n/a' }
-    $graceful = $true
-    if (-not $stopped -or $finished -le 0 -or $stopped.Time -lt ($finished - 1)) { Write-E2ELog "b3: its container did not outlive its job (job finished $finished, container exited $(if ($stopped) { $stopped.Time } else { 'never' }))"; $graceful = $false }
-    if ((Get-EvidenceField $ev3 'drain') -ne 'ok') { Write-E2ELog 'b3: the job did not complete its long step'; $graceful = $false }
-    $stopExit = if ($stopped) { $stopped.ExitCode } else { 'n/a' }
-    if ($stopExit -ne '0') { Write-E2ELog "b3: the stopped container exited $stopExit, not 0"; $graceful = $false }
-    if (-not $graceful) { $ok = $false }
-
     # Workspaces and caches (probes b1 and b2 of the CircleCI jobs, written by ci\E2E-Storage.ps1).
     $storage = Join-Path $evidenceDir "storage.$wf"
     $ws = Get-EvidenceField $storage 'workspace'
@@ -432,7 +397,7 @@ function Test-Evidence {
     }
 
     $verdict = if ($ok) { 'PASS' } else { 'FAIL' }
-    $line = "RESULT e2e=windows probes=3 distinct_containers=$($ids.Count) b2_residue=$(Get-EvidenceField (Get-EvidencePath 'b2') 'residue') token_read=$(Get-EvidenceField (Get-EvidencePath 'b1') 'token_read') graceful_stop=$(if ($graceful) { 'yes' } else { 'no' }) stopped_container_exit=$stopExit container_outlived_job_by_s=$gap workspace=$ws cache=$cache symlink=$link use_go_tar=$goTar verdict=$verdict"
+    $line = "RESULT e2e=windows probes=3 distinct_containers=$($ids.Count) b2_residue=$(Get-EvidenceField (Get-EvidencePath 'b2') 'residue') token_read=$(Get-EvidenceField (Get-EvidencePath 'b1') 'token_read') workspace=$ws cache=$cache symlink=$link use_go_tar=$goTar verdict=$verdict"
     Write-Host $line
     Set-Content -LiteralPath (Join-Path $Root 'result.txt') -Value $line -Encoding ASCII
     return $ok

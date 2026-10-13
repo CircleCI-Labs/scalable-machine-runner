@@ -1,40 +1,24 @@
-# Pester 5+ unit tests for windows/Setup.ps1 and the pins it shares with the baked-image Dockerfile.
+# Pester 5+ unit tests for windows/Setup.ps1 and its pins.
 # Cross-platform (Linux pwsh or Windows); Docker and the network are never touched.
 
 BeforeAll {
     $script:windowsDir = Join-Path $PSScriptRoot '..'
     . (Join-Path $script:windowsDir 'Setup.ps1')
-    $script:dockerfile = Get-Content -LiteralPath (Join-Path $script:windowsDir 'images\servercore\Dockerfile') -Raw
-    function Get-DockerfileArg([string] $Name) {
-        if ($script:dockerfile -match "(?m)^ARG $Name=(\S+)\s*$") { return $Matches[1] }
-        return $null
-    }
 }
 
 Describe 'Pins' {
-    It 'are the same in Setup.ps1 and the baked-image Dockerfile' -TestCases @(
-        @{ Arg = 'GIT_VERSION'; Pin = 'GitVersion' }
-        @{ Arg = 'GIT_RELEASE_TAG'; Pin = 'GitReleaseTag' }
-        @{ Arg = 'GIT_SHA256'; Pin = 'GitSha256' }
-        @{ Arg = 'SEVENZIP_VERSION'; Pin = 'SevenZipVersion' }
-        @{ Arg = 'SEVENZIP_SHA256'; Pin = 'SevenZipSha256' }
-    ) {
-        param($Arg, $Pin)
-        Get-DockerfileArg $Arg | Should -Be $script:Pins[$Pin]
-    }
-
     It 'look like SHA-256 values' {
         $script:Pins.GitSha256 | Should -Match '^[0-9a-f]{64}$'
         $script:Pins.SevenZipSha256 | Should -Match '^[0-9a-f]{64}$'
-        Get-DockerfileArg 'RUNNER_SHA256' | Should -Match '^[0-9a-f]{64}$'
     }
 
     It 'derive the Git release tag from the version (2.56.0.2 is release tag v2.56.0.windows.2)' {
         $script:Pins.GitReleaseTag | Should -Be ('v' + ($script:Pins.GitVersion -replace '^(\d+\.\d+\.\d+)\.(\d+)$', '$1.windows.$2'))
     }
 
-    It 'give Setup.ps1 and the Dockerfile the same runner version' {
-        Get-DockerfileArg 'RUNNER_VERSION' | Should -Be '3.1.12'
+    It 'give Setup.ps1 the runner version of linux/setup.sh' {
+        $linux = Get-Content -LiteralPath (Join-Path $script:windowsDir '..\linux\setup.sh') -Raw
+        $linux | Should -Match '(?m)^MACHINE_RUNNER_SWARM_VERSION=3\.1\.12$'
         (Select-String -LiteralPath (Join-Path $script:windowsDir 'Setup.ps1') -Pattern "\[string\] \`$RunnerVersion = '3.1.12'" -Quiet) | Should -BeTrue
     }
 }

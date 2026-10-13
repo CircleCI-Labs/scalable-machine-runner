@@ -52,7 +52,7 @@ x-runner: &runner
   labels:
     machine-runner-swarm.role: runner
 
-# Stock images: the runner is the main process. (The baked image has this as its ENTRYPOINT.)
+# Stock images: the runner is the main process.
 x-stock: &stock
   entrypoint: ['C:\machine-runner-swarm\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
 
@@ -76,7 +76,7 @@ services:
   # docker.exe comes from the host: adjust the source to where it lives on your nodes.
   windows-docker-build:
     <<: [*runner, *stock]
-    image: mcr.microsoft.com/windows/servercore:ltsc2022   # better: your windows\images\stop-timeout build of it (see runners.yaml)
+    image: mcr.microsoft.com/windows/servercore:ltsc2022
     environment:
       <<: [*runner-env, *stock-env]
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-docker-build-{{.Task.Slot}}"

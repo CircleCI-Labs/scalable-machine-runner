@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Proves that a STOCK Windows Server Core image runs the runner with nothing but mounts and environment
-    variables (no entrypoint script), and that the baked image does the same without the mounts. Windows
+    variables (no entrypoint script). Windows
     host, Docker in Windows-container mode. Needs no runner token.
 
 .DESCRIPTION
@@ -13,8 +13,7 @@
       os-version         the image build can run process-isolated on this host
       runner-mount       C:\machine-runner-swarm\bin\circleci-runner.exe --version works through the read-only mount (the ACL
                          grants the container identity read and execute)
-      mount-readonly     a job cannot write to C:\machine-runner-swarm or to Git                              (injected only)
-      baked-entrypoint   the image's ENTRYPOINT is the runner with --config on the secret path  (baked only)
+      mount-readonly     a job cannot write to C:\machine-runner-swarm or to Git
       toolchain          with the stack's PATH: bash, sh, git, gzip, tar and ssh resolve; powershell.exe and
                          cmd.exe still do; C:\Program Files\Git\usr\bin\tar.exe, the path the task agent
                          hard-codes, is GNU tar; the user is ContainerAdministrator, holds
@@ -41,14 +40,11 @@
     .\windows\Setup.ps1 -StageOnly
     .\windows\tests\Test-Injection.ps1 -Online
 
-.EXAMPLE
-    .\windows\tests\Test-Injection.ps1 -Baked -Image machine-runner-swarm-windows-servercore:ltsc2022
 #>
 [CmdletBinding()]
 param(
     [string] $Image,
     [string] $SwarmRoot = 'C:\machine-runner-swarm',
-    [switch] $Baked,
     [switch] $Online,
     [int] $OnlineTimeoutSeconds = 300,
     [ValidateSet('process', 'hyperv', 'default')][string] $Isolation = 'process',
@@ -59,22 +55,16 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module (Join-Path $here 'SwarmTestHelpers.psm1') -Force
 
-if (-not $Image) {
-    if ($Baked) { throw '-Baked needs -Image <your baked image>' }
-    $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SwarmWindowsTag)
-}
+if (-not $Image) { $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SwarmWindowsTag) }
 $mode = 'injected'
-if ($Baked) { $mode = 'baked' }
 $iso = @()
 if ($Isolation -ne 'default') { $iso = @("--isolation=$Isolation") }
 
-# What the stack gives a service: the environment (without PATH for the baked image, which has it built in) and mounts.
+# What the stack gives a service: the environment and the mounts.
 $stackEnv = Get-SwarmStackEnvironment
 $stockPath = $stackEnv['PATH']
-if ($Baked) { $null = $stackEnv.Remove('PATH') }
 $envArgs = ConvertTo-SwarmEnvArgument -Environment $stackEnv
-$mountArgs = @()
-if (-not $Baked) { $mountArgs = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot }
+$mountArgs = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot
 $psHost = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass')
 $runner = 'C:\machine-runner-swarm\bin\circleci-runner.exe'
 $dummyToken = 'swarm-injection-not-a-real-token-0000'
@@ -117,19 +107,13 @@ try {
     $canProcess = Test-SwarmProcessIsolation -HostBuild $hostBuild -ImageBuild $imageBuild
     Write-SwarmCheck 'os-version' ($imageBuild -ne 0 -and ($canProcess -or $Isolation -eq 'hyperv')) "image_build=$imageBuild host_build=$hostBuild process_isolation=$canProcess mode=$mode"
 
-    # --- runner-mount, mount-readonly, baked-entrypoint ---------------------------------------------
+    # --- runner-mount, mount-readonly ---------------------------------------------------------------
     $r = Invoke-Container -Entrypoint $runner -Argument @('--version')
     Write-SwarmCheck 'runner-mount' ($r.ExitCode -eq 0 -and ($r.Output -join ' ') -match '\d+\.\d+\.\d+') "exit=$($r.ExitCode) $($r.Output -join ' ')"
 
-    if (-not $Baked) {
-        $r = Invoke-PowerShellProbe -Script "foreach (`$p in 'C:\machine-runner-swarm\job-wrote-this', 'C:\Program Files\Git\job-wrote-this') { try { Set-Content -LiteralPath `$p -Value x -ErrorAction Stop; 'WRITABLE' } catch { 'READONLY' } }"
-        $text = $r.Output -join ' '
-        Write-SwarmCheck 'mount-readonly' ($text -match 'READONLY READONLY' -and $text -notmatch 'WRITABLE') $text
-    } else {
-        $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('image', 'inspect', '--format', '{{json .Config.Entrypoint}}', $Image)
-        $entry = @($r.Output | Select-Object -Last 1) -join ''
-        Write-SwarmCheck 'baked-entrypoint' ($entry -match 'circleci-runner\.exe' -and $entry -match 'circleci_runner_config\.yaml') $entry
-    }
+    $r = Invoke-PowerShellProbe -Script "foreach (`$p in 'C:\machine-runner-swarm\job-wrote-this', 'C:\Program Files\Git\job-wrote-this') { try { Set-Content -LiteralPath `$p -Value x -ErrorAction Stop; 'WRITABLE' } catch { 'READONLY' } }"
+    $text = $r.Output -join ' '
+    Write-SwarmCheck 'mount-readonly' ($text -match 'READONLY READONLY' -and $text -notmatch 'WRITABLE') $text
 
     # --- toolchain, shell, tar-agent-style, git-local, long-paths -------------------------------------
     $probe = @'
@@ -237,14 +221,12 @@ $r | ConvertTo-Json -Compress
     }
 
     # --- path-default: nothing the image needs on PATH is lost by the stack's explicit PATH ------------
-    if (-not $Baked) {
-        $r = Invoke-Container -Entrypoint 'cmd.exe' -Argument @('/c', 'echo %PATH%') -NoStack
-        $imagePath = @($r.Output | Select-Object -Last 1) -join ''
-        $norm = { param($p) $p.Trim().TrimEnd('\').ToLowerInvariant() }
-        $have = @($stockPath -split ';' | ForEach-Object { & $norm $_ })
-        $lost = @($imagePath -split ';' | Where-Object { $_ -and $_ -notmatch '\\Users\\' -and ($have -notcontains (& $norm $_)) })
-        Write-SwarmCheck 'path-default' ($imagePath -ne '' -and $lost.Count -eq 0) "image PATH=$imagePath lost_from_stack_PATH=[$($lost -join ';')]"
-    }
+    $r = Invoke-Container -Entrypoint 'cmd.exe' -Argument @('/c', 'echo %PATH%') -NoStack
+    $imagePath = @($r.Output | Select-Object -Last 1) -join ''
+    $norm = { param($p) $p.Trim().TrimEnd('\').ToLowerInvariant() }
+    $have = @($stockPath -split ';' | ForEach-Object { & $norm $_ })
+    $lost = @($imagePath -split ';' | Where-Object { $_ -and $_ -notmatch '\\Users\\' -and ($have -notcontains (& $norm $_)) })
+    Write-SwarmCheck 'path-default' ($imagePath -ne '' -and $lost.Count -eq 0) "image PATH=$imagePath lost_from_stack_PATH=[$($lost -join ';')]"
 
     # --- runner-exit-80: the runner's own configuration check -----------------------------------------
     $cases = @(

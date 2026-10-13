@@ -1,8 +1,9 @@
-# Optional class: your own image on top of the baked runner image. Deploy with an extra -c flag:
+# Optional class: your own image on top of stock Server Core. Deploy with an extra -c flag:
 #   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml runners
 # Create the secret first (the runner config with the token, as in runners.yaml): windows-custom-token.
-# Replace the image below with yours: windows\images\example\Dockerfile adds Node.js to the baked image and shows the pattern.
-# A baked image carries the runner, Git, PATH and ENTRYPOINT, so this service has no mount, no PATH and no entrypoint.
+# Replace the image below with yours: windows\images\example\Dockerfile adds Node.js to stock Server Core and shows the pattern.
+# Your image holds the tools only. The runner and Git are mounted from the host as in runners.yaml, and PATH is set in this file,
+# so add the directory of your tools to it below.
 #
 # This file repeats the anchors it uses from runners.yaml (an anchor does not reach into another file): keep the common
 # settings in sync.
@@ -44,15 +45,38 @@ x-runner: &runner
   labels:
     machine-runner-swarm.role: runner
 
+# The stock image's PATH is replaced, so it is spelled out as in runners.yaml, plus the tools of the example image.
+x-stock-env: &stock-env
+  # yamllint disable-line rule:line-length
+  PATH: 'C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin;C:\Program Files\nodejs'
+
+x-stock: &stock
+  entrypoint: ['C:\machine-runner-swarm\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
+
+x-runner-mount: &runner-mount                     # the runner, read-only
+  type: bind
+  source: '${MACHINE_RUNNER_SWARM_DIR:-C:\machine-runner-swarm}'              # to roll out a new runner or Git: stage C:\machine-runner-swarm-<version> and
+  target: 'C:\machine-runner-swarm'                          # deploy with $env:MACHINE_RUNNER_SWARM_DIR='C:\machine-runner-swarm-<version>' (rolling update)
+  read_only: true
+
+x-git-mount: &git-mount                     # portable Git, where the task agent expects it
+  type: bind
+  source: '${MACHINE_RUNNER_SWARM_DIR:-C:\machine-runner-swarm}\git'
+  target: 'C:\Program Files\Git'
+  read_only: true
+
 services:
-  # Build your image (it starts FROM the baked image) and push it to a registry every Windows node can pull from.
+  # Build your image (it starts FROM stock Server Core) and push it to a registry every Windows node can pull from.
   windows-custom:
-    <<: *runner
+    <<: [*runner, *stock]
     image: registry.example.com/ci/machine-runner-swarm-windows-example:ltsc2022   # replace with your image
     environment:
-      <<: *runner-env
+      <<: [*runner-env, *stock-env]
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-custom-{{.Task.Slot}}"
       CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h
+    volumes:
+      - *runner-mount
+      - *git-mount
     secrets:
       - source: windows-custom-token
         target: circleci_runner_config.yaml

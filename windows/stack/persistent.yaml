@@ -50,7 +50,7 @@ x-runner: &runner
   labels:
     machine-runner-swarm.role: runner
 
-# Stock images: the runner is the main process. (The baked image has this as its ENTRYPOINT.)
+# Stock images: the runner is the main process.
 x-stock: &stock
   entrypoint: ['C:\machine-runner-swarm\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
 
@@ -74,7 +74,7 @@ services:
   # Swarm still replaces the container if the runner exits; the volume survives that.
   windows-persistent:
     <<: [*runner, *stock]
-    image: mcr.microsoft.com/windows/servercore:ltsc2022   # better: your windows\images\stop-timeout build of it (see runners.yaml)
+    image: mcr.microsoft.com/windows/servercore:ltsc2022
     environment:
       <<: [*runner-env, *stock-env]
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-persistent-{{.Task.Slot}}"

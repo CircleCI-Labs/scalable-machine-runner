@@ -17,7 +17,6 @@
 #   (Setup.ps1 creates it; the Windows docs describe the same steps by hand), mounted read-only into
 #   the unmodified Microsoft Server Core image: C:\machine-runner-swarm at C:\machine-runner-swarm, and C:\machine-runner-swarm\git at
 #   C:\Program Files\Git, the path the task agent hard-codes for tar.exe. PATH is set here, in full.
-#   The baked alternative (windows\images) needs neither mount nor PATH.
 # * The secret is the runner config, one per class. It is NOT created by this file:
 #       printf 'api:\n  auth_token: <token>\n' | docker secret create windows-default-token -
 #   (Setup.ps1 -Class asks for the token with hidden input and does this.) On Windows a secret lands
@@ -34,16 +33,16 @@
 #       docker node update --label-add machine-runner-swarm.windows-build=ltsc2022 <node>     # Server 2022
 #       docker node update --label-add machine-runner-swarm.windows-build=ltsc2025 <node>     # Server 2025
 # Optional classes are separate files, deployed with extra -c flags (see the comment at the top of each):
-#   custom-image.yaml   your own image on top of the baked runner image (a class you build yourself)
+#   custom-image.yaml   your own image on top of stock Server Core (a class you build yourself)
 #   persistent.yaml     a long-lived continuous-mode runner with a named volume
 #   docker-build.yaml   Windows image builds through the host Docker engine (administrator-equivalent)
 #   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.yaml runners
 #
-# Stopping a service (a rolling update, docker stop, scale down) shuts its containers down. Server Core gives a container only
-# 5 seconds (registry value WaitToKillServiceTimeout) before it kills its processes, whatever stop_grace_period says, so on the
-# plain Microsoft image a running job dies about 5 seconds after any stop (exit code 3221225786). The fix is that one registry value
-# in the image: build windows\images\stop-timeout (stock Server Core plus only that value) and use it as the image of the stock-image
-# services; the baked image has it built in. Until you do, only change a service while its class runs no job.
+# Stopping a BUSY container from outside (a rolling update, a scale down, a node drain, "docker stack rm", a Docker restart)
+# gives its job only about 5 seconds on Server Core (registry value WaitToKillServiceTimeout), whatever stop_grace_period says:
+# the job dies with exit code 3221225786. The normal flow is not affected: a finished job ends the runner, and the container
+# ends by itself. So change a service while its class is idle, or rerun the jobs that were interrupted. An optional image
+# that lifts the limit is described in docs/operations.md ("Windows drain").
 #
 # A runner that exits 80 (a missing or invalid name or token, an invalid mode: the runner's own
 # configuration check) is restarted every restart_policy.delay forever: there is no max_attempts
@@ -109,7 +108,7 @@ x-runner: &runner
   labels:
     machine-runner-swarm.role: runner
 
-# Stock images: the runner is the main process. (The baked image has this as its ENTRYPOINT.)
+# Stock images: the runner is the main process.
 x-stock: &stock
   entrypoint: ['C:\machine-runner-swarm\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
 
@@ -130,7 +129,7 @@ services:
   # name (and resource class), use :ltsc2025 and the constraint machine-runner-swarm.windows-build == ltsc2025.
   windows-default:
     <<: [*runner, *stock]
-    image: mcr.microsoft.com/windows/servercore:ltsc2022   # better: your windows\images\stop-timeout build of it (see above)
+    image: mcr.microsoft.com/windows/servercore:ltsc2022
     environment:
       <<: [*runner-env, *stock-env]
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-default-{{.Task.Slot}}"

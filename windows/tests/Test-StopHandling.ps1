@@ -1,8 +1,7 @@
 <#
 .SYNOPSIS
-    Checks that stopping a runner container lets the running job finish, with no code of ours in the
-    container, and that a runner under Swarm can read its config secret. Windows host, Docker in
-    Windows-container mode. Needs no runner token.
+    Measures what stopping a busy runner container does on the STOCK Server Core image, and checks that a runner
+    under Swarm can read its config secret. Windows host, Docker in Windows-container mode. Needs no runner token.
 
 .DESCRIPTION
     circleci-runner.exe is the container's main process. The runner is a Go program: its runtime (checked in
@@ -10,29 +9,22 @@
     CLOSE, LOGOFF or SHUTDOWN event into SIGTERM and blocks the handler, and the runner (service.go,
     ex/termination) drains on SIGTERM: the job it is running finishes (up to max_run_time), then it exits.
 
-    Windows is the problem, not the runner. "docker stop" and "docker service update" shut a Windows container
+    Windows is the limit, not the runner. "docker stop" and "docker service update" shut a Windows container
     down with HCS; on Server Core that sends CTRL_SHUTDOWN_EVENT and waits only WaitToKillServiceTimeout, five
-    seconds by default (HKLM\SYSTEM\CurrentControlSet\Control, REG_SZ, milliseconds), before it kills the
-    processes, whatever "docker stop -t" or stop_grace_period say. A job running in a stock Server Core container
-    dies about five seconds after any stop, with exit code 3221225786 (0xC000013A). The fix is the registry value
-    in the IMAGE (windows\images\stop-timeout, or the baked image, which has it built in). This test shows both:
+    seconds by default, before it kills the processes, whatever "docker stop -t" or stop_grace_period say. A job
+    running in a stock Server Core container dies about five seconds after an outside stop, with exit code
+    3221225786 (0xC000013A). The normal flow is not affected: a finished job ends the runner, and the container
+    ends by itself. The documented way around the rule is optional (docs/operations.md, "Windows drain").
 
       control            (informational, a NOTE) fixtures\FakeRunner.cs, compiled here with csc.exe, is the main
-                         process of a container of the UNMODIFIED image and "runs a job" for FAKE_JOB_SECONDS,
-                         like the real runner does after a stop. docker stop: the job is expected to be killed
-      stop-docker        the same on an image with WaitToKillServiceTimeout set (built here from
-                         windows\images\stop-timeout with -ShutdownSeconds, or the given image with -Baked):
-                         the job must finish, the container must exit 0, and the stop must take about as long as
-                         the rest of the job. The log shows which console event arrived
-      stop-real-runner   (-Online) the REAL runner with a bogus token on that image, stopped with docker stop: it
-                         must drain (log "terminated") and exit 0 well inside the timeout
+                         process of a container of the stock image and "runs a job" for FAKE_JOB_SECONDS. After
+                         docker stop the job is expected to be killed: this is the measurement behind the docs
+      stop-real-runner   (-Online) the REAL runner with a bogus token and nothing to drain, stopped with docker
+                         stop: it must log "terminated" and exit 0 well inside the timeout
       swarm-secret       a stack like windows\stack\runners.yaml with a real Swarm secret: the process can read
                          C:\ProgramData\Docker\secrets\circleci_runner_config.yaml and finds the token
-      stop-swarm-update  "docker service update --force" with stop_grace_period 3m: the OLD container's job
-                         finishes first (stop-first)
 
-    If stop-docker fails on the image with the registry value, the value is not what limits the container here:
-    see docs/operations.md ("Windows drain"). Prints "CHECK ..." lines and "RESULT stop ...".
+    Prints "CHECK ..." lines and "RESULT stop ...".
 
 .EXAMPLE
     .\windows\tests\Test-StopHandling.ps1 -Online
@@ -41,12 +33,10 @@
 param(
     [string] $Image,
     [string] $SwarmRoot = 'C:\machine-runner-swarm',
-    [switch] $Baked,
     [switch] $Online,
     [ValidateSet('all', 'docker', 'swarm')][string] $Mode = 'all',
     [int] $JobSeconds = 40,
     [int] $StopTimeoutSeconds = 300,
-    [int] $ShutdownSeconds = 300,
     [ValidateSet('process', 'hyperv', 'default')][string] $Isolation = 'process',
     [string] $AdvertiseAddr,
     [string] $DockerCommand = 'docker'
@@ -87,17 +77,6 @@ function Get-ExitCode {
 }
 
 
-# The image under test: the given image with WaitToKillServiceTimeout set (the baked image has it already).
-$testImage = $Image
-$builtImage = $null
-if (-not $Baked) {
-    $builtImage = "swarm-stop-test:$PID"
-    $r = Invoke-Docker @('build', '-f', (Join-Path $here '..\images\stop-timeout\Dockerfile'), '--build-arg', "BASE_IMAGE=$Image",
-        '--build-arg', "SHUTDOWN_TIMEOUT_SECONDS=$ShutdownSeconds", '-t', $builtImage, (Join-Path $here '..\images\stop-timeout'))
-    if ($r.ExitCode -ne 0) { throw "building the stop-timeout image failed: $($r.Output | Select-Object -Last 5)" }
-    $testImage = $builtImage
-}
-
 function Invoke-FakeStop {
     # Runs the fake runner as the main process of a container of ImageName, stops it, and reports what happened.
     param([string] $ImageName, [string] $Suffix, [int] $StopTimeout)
@@ -126,31 +105,20 @@ $swarmStack = $null
 $secretName = $null
 try {
     if ($Mode -in @('all', 'docker')) {
-        # --- control: the unmodified image --------------------------------------------------------------
-        if (-not $Baked) {
-            $c = Invoke-FakeStop -ImageName $Image -Suffix 'control' -StopTimeout $StopTimeoutSeconds
-            $verdict = 'the job survived the stop, so this host needs no registry value'
-            if (-not $c.Finished) { $verdict = 'the job was KILLED by the stop, as expected on stock Server Core (WaitToKillServiceTimeout is 5 s)' }
-            [Console]::Out.WriteLine("NOTE control, unmodified $Image : console_event=$($c.Event) stop_took=$($c.Elapsed)s container_exit=$($c.Code) job_finished=$($c.Finished): $verdict")
-        }
-
-        # --- stop-docker: the image with the registry value ----------------------------------------------
-        $d = Invoke-FakeStop -ImageName $testImage -Suffix 'docker' -StopTimeout $StopTimeoutSeconds
-        $d.Log | Select-Object -Last 12 | ForEach-Object { [Console]::Out.WriteLine("  log: $_") }
-        $minimum = [Math]::Max(5, $JobSeconds - 15)
-        Write-SwarmCheck 'stop-docker' ($d.Up -and $d.Finished -and $d.Code -eq '0' -and $d.Elapsed -ge $minimum) `
-            "runner_started=$($d.Up) console_event=$($d.Event) (2 close, 5 logoff, 6 shutdown) stop_exit=$($d.StopExit) job_finished=$($d.Finished) container_exit=$($d.Code) stop_took=$($d.Elapsed)s (job ${JobSeconds}s, at least ${minimum}s expected)"
+        # --- control: a busy stock container is killed by an outside stop ---------------------------------
+        $c = Invoke-FakeStop -ImageName $Image -Suffix 'control' -StopTimeout $StopTimeoutSeconds
+        $verdict = 'the job survived the stop, so this host does not apply the 5 second rule'
+        if (-not $c.Finished) { $verdict = 'the job was KILLED by the stop, as expected on stock Server Core (WaitToKillServiceTimeout is 5 s)' }
+        [Console]::Out.WriteLine("NOTE control, stock $Image : console_event=$($c.Event) stop_took=$($c.Elapsed)s container_exit=$($c.Code) job_finished=$($c.Finished): $verdict")
 
         if ($Online) {
             # --- stop-real-runner: the real runner, a bogus token, nothing to drain -------------------------
             $name = "swarm-stop-real-$PID"
-            $mounts = @()
-            if (-not $Baked) { $mounts = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot }
+            $mounts = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot
             $stackEnv = Get-SwarmStackEnvironment
-            if ($Baked) { $null = $stackEnv.Remove('PATH') }
             $run = @('run', '--detach', '--name', $name) + $iso + $mounts + (ConvertTo-SwarmEnvArgument -Environment $stackEnv) + @(
                 '--env', 'CIRCLECI_RUNNER_NAME=swarm-stop-real', '--env', 'CIRCLECI_RUNNER_API_AUTH_TOKEN=swarm-stop-not-a-real-token',
-                '--env', 'CIRCLECI_RUNNER_IDLE_TIMEOUT=10m', '--entrypoint', 'C:\machine-runner-swarm\bin\circleci-runner.exe', $testImage, 'machine')
+                '--env', 'CIRCLECI_RUNNER_IDLE_TIMEOUT=10m', '--entrypoint', 'C:\machine-runner-swarm\bin\circleci-runner.exe', $Image, 'machine')
             $null = Invoke-Docker $run
             $up = Wait-Log -Container $name -Pattern '401|Unauthorized|starting agent' -TimeoutSeconds 300
             Start-Sleep -Seconds 5
@@ -167,7 +135,7 @@ try {
     }
 
     if ($Mode -in @('all', 'swarm')) {
-        # --- swarm: a Swarm secret as the runner config, then a rolling update ---------------------------
+        # --- swarm: a Swarm secret as the runner config --------------------------------------------------
         $swarm = Initialize-SwarmCluster -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
         $swarmStack = "swarmstop$PID"
         $service = "${swarmStack}_runner"
@@ -180,7 +148,7 @@ try {
         $iso1 = ''
         if ($Isolation -ne 'default') { $iso1 = "    isolation: $Isolation" }
         $yaml = @(
-            'services:', '  runner:', "    image: $testImage", $iso1,
+            'services:', '  runner:', "    image: $Image", $iso1,
             '    entrypoint: [''C:\swarm-test\FakeRunner.exe'', machine, ''--config'', ''C:\ProgramData\Docker\secrets\circleci_runner_config.yaml'']',
             '    environment:', '      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-stop-{{.Task.Slot}}"', '      MACHINE_RUNNER_SWARM_INSTANCE_ID: "{{.Task.ID}}"',
             "      FAKE_JOB_SECONDS: ""$JobSeconds""",
@@ -203,18 +171,6 @@ try {
         $readable = $startLog -match ('FAKERUNNER config=' + [regex]::Escape($secretPath) + ' config_has_token=True')
         $inEnv = $startLog -match 'token_in_env=True'
         Write-SwarmCheck 'swarm-secret' ($readable -and -not $inEnv) "config_secret_readable_with_token=$readable token_in_runner_environment=$inEnv (the token is in the file only)"
-
-        Start-Sleep -Seconds 5
-        $t0 = Get-Date
-        $null = Invoke-Docker @('service', 'update', '--detach=false', '--force', $service)
-        $elapsed = [int]((Get-Date) - $t0).TotalSeconds
-        $oldLog = @()
-        if ($oldId) { $oldLog = (Invoke-Docker @('logs', $oldId)).Output }
-        $finished = ($oldLog -join "`n") -match 'FAKERUNNER job-finished'
-        $oldCode = ''
-        if ($oldId) { $oldCode = Get-ExitCode -Container $oldId }
-        $oldLog | Select-Object -Last 8 | ForEach-Object { [Console]::Out.WriteLine("  log: $_") }
-        Write-SwarmCheck 'stop-swarm-update' ($oldId -ne '' -and $finished -and $oldCode -eq '0') "old_container=$($oldId.Substring(0, [Math]::Min(12, $oldId.Length))) job_finished=$finished container_exit=$oldCode update_took=${elapsed}s"
     }
 } finally {
     if ($swarmStack) { $null = Invoke-Docker @('stack', 'rm', $swarmStack) }
@@ -222,7 +178,6 @@ try {
         $null = Wait-SwarmCondition -TimeoutSeconds 60 -IntervalSeconds 3 -Condition { (Invoke-Docker @('secret', 'rm', $secretName)).ExitCode -eq 0 }
     }
     if ($swarm -and $swarm.Initialised) { $null = Invoke-Docker @('swarm', 'leave', '--force') }
-    if ($builtImage) { $null = Invoke-Docker @('rmi', '--force', $builtImage) }
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 

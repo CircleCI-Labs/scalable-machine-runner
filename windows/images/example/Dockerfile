@@ -1,24 +1,23 @@
 # escape=`
 #
-# EXAMPLE: bring your own image. How a team adds its tooling on top of the baked runner image
-# (windows/images/servercore): this one adds Node.js from the official zip, pinned by version and SHA-256.
-# Copy it, swap the tool, keep the pattern:
-#   1. start FROM the baked image, which has the runner as its ENTRYPOINT and Git on PATH;
+# EXAMPLE: bring your own image. How a team adds its tooling on top of STOCK Server Core: this one adds Node.js
+# from the official zip, pinned by version and SHA-256. Copy it, swap the tool, keep the pattern:
+#   1. start FROM the stock Server Core image of your host's tag (the build must match the host);
 #   2. download a PINNED release and verify its SHA-256 before using it;
-#   3. put the tool on the machine PATH (the stack file sets no PATH for a baked image);
+#   3. install it in a fixed directory, and add that directory to PATH in the stack file (the stack sets PATH in full,
+#      see windows/stack/custom-image.yaml): the image holds the tool, and the host provides the runner and Git;
 #   4. check that it runs. Do not change USER (the runner needs ContainerAdministrator) or ENTRYPOINT.
 #
-# Build the baked image first, then this one (the build context is the windows directory):
-#   docker build -f windows/images/servercore/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 `
-#     -t machine-runner-swarm-windows-servercore:ltsc2022 windows
-#   docker build -f windows/images/example/Dockerfile `
-#     --build-arg BASE_IMAGE=machine-runner-swarm-windows-servercore:ltsc2022 -t machine-runner-swarm-windows-example:ltsc2022 windows
+# Build it (the build context is the windows directory):
+#   docker build -f windows/images/example/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 `
+#     -t machine-runner-swarm-windows-example:ltsc2022 windows
 #
 # It is the windows-custom service in windows/stack/custom-image.yaml, an optional overlay file: deploy it with
 #   docker stack deploy -c windows/stack/runners.yaml -c windows/stack/custom-image.yaml runners
 # Push the image to a registry that every Windows node can pull from. Rebuild it when the base image or the tool changes.
 
-ARG BASE_IMAGE=machine-runner-swarm-windows-servercore:ltsc2022
+ARG WINDOWS_TAG=ltsc2022
+ARG BASE_IMAGE=mcr.microsoft.com/windows/servercore:${WINDOWS_TAG}
 # hadolint ignore=DL3006
 FROM ${BASE_IMAGE}
 

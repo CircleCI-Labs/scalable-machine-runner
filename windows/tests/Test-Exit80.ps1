@@ -11,8 +11,7 @@
     direct   the runner exits 80 and says why: no name, no token, invalid name
     swarm    a service whose runner exits 80 (no token anywhere) is restarted by restart_policy condition
              any, delay <DelaySeconds>. Over <ObserveSeconds> the number of container exits must stay near
-             ObserveSeconds / DelaySeconds (no hot loop), and every exit code must be 80. With -Baked the
-             service runs the image's own ENTRYPOINT, whose config file is missing, so the code is 1.
+             ObserveSeconds / DelaySeconds (no hot loop), and every exit code must be 80.
 
     About Swarm: "condition: any" with no max_attempts retries FOREVER, once per delay (plus the time a
     Windows container takes to start). Nothing stops the loop; watch "docker service ps <service>" for
@@ -27,7 +26,6 @@
 param(
     [string] $Image,
     [string] $SwarmRoot = 'C:\machine-runner-swarm',
-    [switch] $Baked,
     [int] $DelaySeconds = 10,
     [int] $ObserveSeconds = 60,
     [ValidateSet('process', 'hyperv', 'default')][string] $Isolation = 'process',
@@ -47,8 +45,7 @@ function Invoke-Docker {
 
 $iso = @()
 if ($Isolation -ne 'default') { $iso = @("--isolation=$Isolation") }
-$mounts = @()
-if (-not $Baked) { $mounts = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot }
+$mounts = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot
 $runner = 'C:\machine-runner-swarm\bin\circleci-runner.exe'
 $tok = 'swarm-exit80-not-a-real-token-0000'
 
@@ -69,17 +66,14 @@ $swarm = $null
 $service = "swarm-exit80-$PID"
 $dieCodes = @()
 $expected = '80'
-if ($Baked) { $expected = '1' }
 try {
     $swarm = Initialize-SwarmCluster -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
     $create = @('service', 'create', '--detach', '--name', $service, '--restart-condition', 'any', '--restart-delay', "${DelaySeconds}s",
         '--endpoint-mode', 'dnsrr', '--env', 'CIRCLECI_RUNNER_NAME=swarm-exit80-swarm')
     if ($Isolation -ne 'default') { $create += "--isolation=$Isolation" }
-    if (-not $Baked) { $create += $mounts }
-    # "docker service create ... IMAGE COMMAND" replaces the stock image's default command; a baked image
-    # already has the runner as its ENTRYPOINT.
-    $create += $Image
-    if (-not $Baked) { $create += @($runner, 'machine') }
+    # "docker service create ... IMAGE COMMAND" replaces the stock image's default command.
+    $create += $mounts
+    $create += @($Image, $runner, 'machine')
     $r = Invoke-Docker $create
     if ($r.ExitCode -ne 0) { throw "docker service create failed: $($r.Output -join ' ')" }
     $since = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()

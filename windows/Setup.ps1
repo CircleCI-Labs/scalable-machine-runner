@@ -42,7 +42,7 @@ param(
     [switch] $Force
 )
 
-# Pinned. windows\images\servercore\Dockerfile pins the same Git and 7-Zip (a unit test checks they match).
+# Pinned: the runner comes with its SHA-256 from CircleCI's release manifest, Git and 7-Zip from here.
 $script:Pins = @{
     GitVersion      = '2.56.0.2'
     GitReleaseTag   = 'v2.56.0.windows.2'
@@ -129,7 +129,7 @@ function Install-Stage {
     $manifest = (Invoke-WebRequest -Uri $script:ManifestUrl -UseBasicParsing).Content | ConvertFrom-Json
     $entry = $manifest.releases.$Version.windows.amd64
     if (-not $entry) { throw "runner version '$Version' has no windows/amd64 build in the release manifest" }
-    $installer = Join-Path $PSScriptRoot 'images\servercore\install-runner.ps1'
+    $installer = Join-Path $PSScriptRoot 'install-runner.ps1'
     & $installer -RunnerVersion $Version -RunnerSha256 $entry.sha256 -GitVersion $script:Pins.GitVersion -GitReleaseTag $script:Pins.GitReleaseTag `
         -GitSha256 $script:Pins.GitSha256 -SevenZipVersion $script:Pins.SevenZipVersion -SevenZipSha256 $script:Pins.SevenZipSha256 `
         -RunnerDir (Join-Path $Dir 'bin') -GitDir (Join-Path $Dir 'git')

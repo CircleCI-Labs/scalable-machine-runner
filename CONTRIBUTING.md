@@ -109,7 +109,7 @@ docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.18.1 '**/*.md
 
 ### Pinned versions
 
-This repository does not use Renovate. Update pinned versions by hand, and change the version and its checksum together. The runner version appears in `linux/setup.sh`, `linux/images/example/Dockerfile`, `windows/Setup.ps1`, `windows/images/servercore/Dockerfile`, and the manual commands in `README.md`, `docs/install-linux.md`, and `docs/install-windows.md`. The Git and 7-Zip checksums appear in `windows/Setup.ps1`, the Dockerfile, and `docs/install-windows.md`. Pin images by tag and digest.
+This repository does not use Renovate. Update pinned versions by hand, and change the version and its checksum together. The runner version appears in `linux/setup.sh`, `linux/images/example/Dockerfile`, `windows/Setup.ps1`, `windows/images/servercore/Dockerfile`, and the manual commands in `docs/install-linux.md` and `docs/install-windows.md`. The Git and 7-Zip checksums appear in `windows/Setup.ps1`, the Dockerfile, and `docs/install-windows.md`. Pin images by tag and digest.
 
 ## Releases
 

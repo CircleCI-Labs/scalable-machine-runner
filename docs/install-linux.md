@@ -11,7 +11,7 @@ This page describes how to deploy CircleCI machine runner 3 as a Docker Swarm st
 > [!NOTE]
 > If you can run Kubernetes, CircleCI recommends [container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/) for containerized jobs. CircleCI documents a plain [machine runner 3 on Docker](https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-docker/) setup too. This page is a sibling of those pages for teams that run Docker Swarm and want a clean container for every job.
 
-The manual steps come first and need nothing from this repository except two files. The optional [setup helper](#optional-use-the-setup-helper) runs the same steps. For a first run, [Quickstart on Linux](quickstart-linux.md) is shorter.
+The manual steps come first and use ordinary `docker` commands. Nothing is installed on a node by hand: the stack has a service that installs the runner on every node, and `docker stack deploy` is the whole install. The optional [setup helper](#optional-use-the-setup-helper) runs the same steps. For a first run, [Quickstart on Linux](quickstart-linux.md) is shorter.
 
 ## Prerequisites
 
@@ -21,13 +21,13 @@ The manual steps come first and need nothing from this repository except two fil
 
   | Operating system | Architecture | Status in this repository |
   |---|---|---|
-  | Ubuntu LTS | amd64, arm64 | Tested in CI on Ubuntu 26.04. On arm64, CI checks the install and the start of the stack, and the end-to-end jobs run on amd64 |
+  | Ubuntu LTS | amd64, arm64 | Tested in CI on Ubuntu 26.04. On arm64, CI checks that the stack installs the runner and starts, and the end-to-end jobs run on amd64 |
   | RHEL 8 and later, and compatible distributions | amd64, arm64 | Steps documented, not tested in CI |
 
 - Docker Engine 24 or later, running, with Swarm mode available. Podman cannot run Swarm.
-- Root access, and the tools `curl`, `tar`, `sha256sum`, and `install` for the manual steps.
+- Root access, or membership of the `docker` group. Docker and a Swarm join are all that a node needs: no runner, entrypoint, or tool is installed on a node.
 - A node clock that is synchronized with NTP. TLS to CircleCI fails silently when the clock drifts.
-- Outbound HTTPS access from each node to the hosts in [Egress hosts](security.md#egress-hosts). No inbound access is required.
+- Outbound HTTPS access from each node to the hosts in [Egress hosts](security.md#egress-hosts), which include the release bucket of CircleCI (the runner download) and a registry that serves the stock image `alpine` (the distributor). No inbound access is required. For nodes without internet access, refer to [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror).
 - Enough CPU and memory for the services. The shipped file reserves 10 CPUs and 20 GB of memory in total, and replicas that do not fit stay pending.
 
 Membership of the `docker` group is equivalent to root on the node. Limit it to administrators.
@@ -49,7 +49,7 @@ Each [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/r
 
 | File | Content |
 |---|---|
-| `machine-runner-swarm-<version>.tar.gz` | The bundle for Linux: the stack files, the entrypoint, the setup scripts, the documentation, and the examples, without the tests |
+| `machine-runner-swarm-<version>.tar.gz` | The bundle for Linux: the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, without the tests |
 | `machine-runner-swarm-<version>.zip` | The same bundle for Windows |
 | `SHA256SUMS` | The SHA-256 checksum of both bundles |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of `SHA256SUMS` |
@@ -104,7 +104,7 @@ Create a namespace if your organization has none. Each organization can have one
 $ circleci namespace create <namespace> --org <org>
 ```
 
-Create one resource class for each service in the stack file. The class name must equal the service name. The shipped file `linux/stack/runners.yaml` has the services `linux-default`, `linux-java`, and `linux-hardened`. For a first run, keep these names. To rename or drop a service, edit your copy of the file first ([step 6](#6-review-the-stack-file)), and then create the classes and secrets of the services you keep.
+Create one resource class for each service in the stack file. The class name must equal the service name. The shipped file `linux/stack/runners.yaml` has the services `linux-default`, `linux-java`, and `linux-hardened`. For a first run, keep these names. To rename or drop a service, edit your copy of the file first ([step 5](#5-review-the-stack-file)), and then create the classes and secrets of the services you keep.
 
 ```console
 $ circleci runner resource-class create <namespace>/linux-default --org <org> --generate-token
@@ -147,54 +147,12 @@ A single node needs no firewall change. Multi-node clusters open the ports in [I
    $ timedatectl show -p NTPSynchronized --value
    ```
 
-3. Keep SELinux enforcing. If SELinux denies the container access to `/opt/machine-runner-swarm`, refer to [Permission denied on /opt/machine-runner-swarm with SELinux](troubleshooting.md#permission-denied-on-optmachine-runner-swarm-with-selinux).
+3. Keep SELinux enforcing. The runner is in a Docker volume and not in a host directory, so no directory needs a label for it.
 
 > [!NOTE]
 > CI does not run on RHEL, so these steps follow Docker's documentation and have not been exercised in this repository.
 
-## 3. Install the runner and the entrypoint
-
-The stack mounts the host link `/opt/machine-runner-swarm/current` read-only at `/opt/machine-runner-swarm` in every container. The link points to the directory of the installed version, which holds the statically linked runner and the entrypoint, so a stock image needs no rebuild when the runner version changes. A new version goes into its own directory, and the link moves to it: refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
-
-| Path | Content |
-|---|---|
-| `/opt/machine-runner-swarm/<version>/bin/circleci-runner` | Machine runner 3 binary |
-| `/opt/machine-runner-swarm/<version>/bin/circleci-runner-entrypoint` | Entrypoint script from `linux/entrypoint/circleci-runner-entrypoint` |
-| `/opt/machine-runner-swarm/<version>/VERSION` | Runner version |
-| `/opt/machine-runner-swarm/current` | A link to the version directory that the stack mounts |
-
-Run the following as root from the root of the repository. It downloads the runner, verifies its SHA-256 checksum against the file that CircleCI publishes, and installs both files.
-
-```bash
-repo=$PWD
-v=3.1.12
-case "$(uname -m)" in
-  x86_64) arch=amd64 ;;
-  aarch64) arch=arm64 ;;
-  *) echo "unsupported architecture" >&2; exit 1 ;;
-esac
-base=https://circleci-binary-releases.s3.amazonaws.com/circleci-runner
-cd "$(mktemp -d)"
-curl -fsSLO --proto '=https' --tlsv1.2 "$base/$v/circleci-runner_linux_$arch.tar.gz"
-curl -fsSL --proto '=https' --tlsv1.2 "$base/$v/checksums.txt" \
-  | grep "circleci-runner_linux_$arch.tar.gz" | sha256sum -c -
-tar -xzf "circleci-runner_linux_$arch.tar.gz" --no-same-owner circleci-runner
-./circleci-runner --version
-d=/opt/machine-runner-swarm
-install -d -m 0755 -o root -g root "$d" "$d/$v" "$d/$v/bin"
-install -m 0755 -o root -g root circleci-runner "$repo/linux/entrypoint/circleci-runner-entrypoint" "$d/$v/bin/"
-echo "$v" > "$d/$v/VERSION"
-ln -s "$v" "$d/.current.new"
-mv -T "$d/.current.new" "$d/current"
-```
-
-The last two commands make the link `current`: a new link under a temporary name, and then one atomic rename over the old one, so a container is never created while the link is missing.
-
-Inside the container the link appears as `/opt/machine-runner-swarm`. The entrypoint refuses to start a container when that directory, its `bin` directory, or the runner binary is not owned by root or is writable by the group or others. Use runner version 3.1.12 or later, which fixes the enforcement of `max_run_time`.
-
-Repeat this step on every node. The directory must exist on each node that can run a service, otherwise the task fails with `bind source path does not exist`. Install the build that matches the architecture of the node.
-
-## 4. Start Swarm
+## 3. Start Swarm
 
 On a single node, start Swarm so that it listens on the loopback address only. Nothing is exposed to the network.
 
@@ -205,9 +163,9 @@ $ docker swarm update --task-history-limit 2
 
 The second command keeps fewer stopped containers on the node. Each finished job leaves a stopped container until Swarm prunes its task, and every stopped container keeps its writable layer on disk.
 
-A node that listens on the loopback address cannot accept other nodes. For several nodes, initialize Swarm with a routable address instead. Refer to [Multi-Node Clusters](multi-node.md#create-the-swarm).
+A node that listens on the loopback address cannot accept other nodes. For several nodes, initialize Swarm with a routable address instead. Refer to [Multi-Node Clusters](multi-node.md#create-the-swarm). A node that joins needs nothing else, because the distributor service starts on it by itself.
 
-## 5. Create the secrets
+## 4. Create the secrets
 
 Create one secret for each service in the stack file. The secret is the config file of the runner and holds only the token:
 
@@ -232,20 +190,22 @@ unset TOKEN
 
 Run every `docker` command in these steps with `sudo`, or as a user in the `docker` group. Without either, `docker` cannot reach the daemon. The setup helper below does the same in one command: `sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened`.
 
-The secret name is the service name plus `-token`. `docker stack deploy` fails with `secret not found` when a service references a secret that does not exist. Create every secret that the file references, or delete the services you do not need from your copy of the file. Each optional class in step 6 needs its own secret.
+The secret name is the service name plus `-token`. `docker stack deploy` fails with `secret not found` when a service references a secret that does not exist. Create every secret that the file references, or delete the services you do not need from your copy of the file. Each optional class in step 5 needs its own secret.
 
 `docker stack config` prints the mode `0400` as `256`, its decimal value.
 
-## 6. Review the stack file
+## 5. Review the stack file
 
 Copy `linux/stack/runners.yaml` into a directory of your own, `deploy/`, and keep it under version control. From here on you check and deploy your copy and never the shipped file, so an edit never touches the shipped files. For a first run, change nothing: the copy works as it is, and you review it later.
 
+The stack file reads the entrypoint and the script of the distributor from files of this repository, as two Swarm configs (`file: ../entrypoint/circleci-runner-entrypoint` and `file: ../runner-distributor.sh`). The paths are relative to the stack file, so the copy needs them changed. This `sed` command points them from `deploy/` at the root of the repository to the shipped files:
+
 ```console
 $ mkdir -p deploy
-$ cp linux/stack/runners.yaml deploy/runners.yaml
+$ sed 's|file: \.\./|file: ../linux/|' linux/stack/runners.yaml > deploy/runners.yaml
 ```
 
-The stack files use absolute host paths, so they work from any directory. Copy each add-on stack file that you use the same way. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
+Keep the service `runner-distributor` and the top-level `configs:` and `volumes:` in your copy: every class needs them. A Swarm config cannot change, so its name carries the first 12 hex digits of the SHA-256 of its file. If you edit the entrypoint or the distributor script, rename its config the same way: `sha256sum <file> | cut -c1-12`. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
 
 | Setting | Default | Change it to |
 |---|---|---|
@@ -254,6 +214,7 @@ The stack files use absolute host paths, so they work from any directory. Copy e
 | `deploy.replicas` | 2, 1, 1 | The number of concurrent jobs you need |
 | `deploy.resources` | 2 CPUs and 4 GB, or 4 CPUs and 8 GB | The size of one runner. Limits and reservations are equal |
 | `placement.constraints` | `node.platform.os == linux` | Add architecture or zone constraints |
+| `x-distributor-env` | The runner version `current`, major version 3, a check every 24 hours | A pinned version, or a mirror. These are variables of `docker stack deploy` and need no edit. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux) |
 
 Check that the file parses. This needs no running Swarm.
 
@@ -269,11 +230,17 @@ The optional classes are separate add-on stack files. Add each with another `-c`
 | `linux/stack/persistent.yaml` (copy to `deploy/`) | `linux-persistent` | A long-lived runner with a named volume. Needs the node name edited in the file. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
 | `linux/stack/ssh-rerun.yaml` (copy to `deploy/`) | `linux-default-ssh` | A class that supports Rerun job with SSH. Publishes port 54782 on the node. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh) |
 
-An add-on stack file repeats the common service settings of `runners.yaml`, because YAML anchors do not cross files. When you change a common setting, such as `stop_grace_period` or the logging options, change it in every file that you use.
+Copy each add-on stack file that you use with the same `sed` command, for example:
 
-## 7. Deploy the stack
+```console
+$ sed 's|file: \.\./|file: ../linux/|' linux/stack/persistent.yaml > deploy/persistent.yaml
+```
 
-Deploy your copy of the file from step 6. The command returns before the replicas run, because `docker stack deploy` does not wait.
+An add-on stack file repeats the common service settings of `runners.yaml`, because YAML anchors do not cross files. That includes the four keys that a class needs for the runner: `user: "0"`, the `entrypoint`, the config `entrypoint`, and the volume `runner-bin` mounted read-only. It repeats the top-level `configs:` and `volumes:` too, so it also loads alone. When you change a common setting, such as `stop_grace_period` or the logging options, change it in every file that you use.
+
+## 6. Deploy the stack
+
+Deploy your copy of the file from step 5. The command returns before the replicas run, because `docker stack deploy` does not wait.
 
 ```console
 $ docker stack deploy -c deploy/runners.yaml runners
@@ -285,17 +252,22 @@ To add the optional classes, pass your copies of their files with more `-c` flag
 $ docker stack deploy -c deploy/runners.yaml -c deploy/persistent.yaml runners
 ```
 
+This command is the whole install. The service `runner-distributor` starts on every Linux node, also on a node that joins later. It downloads the runner of CircleCI, checks its SHA-256, and puts it in the volume `runner-bin` of the node. A runner container that starts first waits up to 120 seconds for it. To deploy with other distributor settings, for example a pinned version, set them as variables of this command. A host with `sudo` drops the environment, so write `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 docker stack deploy ...`, or run the command as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+
 ## Verify the deployment
 
 1. List the services. Each shows the running and desired replicas.
 
    ```console
    $ docker stack services runners
-   ID             NAME                 MODE         REPLICAS   IMAGE
-   ...            runners_linux-default    replicated   2/2        cimg/base:2026.10
-   ...            runners_linux-java       replicated   1/1        cimg/openjdk:21.0
-   ...            runners_linux-hardened   replicated   1/1        cimg/base:2026.10
+   ID             NAME                        MODE         REPLICAS   IMAGE
+   ...            runners_linux-default       replicated   2/2        cimg/base:2026.10
+   ...            runners_linux-java          replicated   1/1        cimg/openjdk:21.0
+   ...            runners_linux-hardened      replicated   1/1        cimg/base:2026.10
+   ...            runners_runner-distributor  global       1/1        alpine:3
    ```
+
+   The distributor shows one task for each Linux node, so `1/1` on a single node and `3/3` on three.
 
 2. Check the tasks of a service. A task in the `Running` state is a runner that polls CircleCI.
 
@@ -303,45 +275,44 @@ $ docker stack deploy -c deploy/runners.yaml -c deploy/persistent.yaml runners
    $ docker service ps runners_linux-default
    ```
 
-3. Check that the runners connected. `circleci runner instance list --org <org> --resource-class <namespace>/linux-default` lists each replica with the status `online`, and the web app shows the same under **Runners**. A replica has a name of the form `<node hostname>-<service>-<slot>`, for example `node1-linux-default-1`.
+3. Check that the distributor installed the runner. Its log has a line such as `runner-distributor: [ ok ] current -> versions/3.1.13: circleci-runner 3.1.13 linux/amd64` for each node. Refer to [See what runs](operations.md#see-what-runs).
 
-4. Run a job. Use [`examples/linux-hello.yml`](../examples/linux-hello.yml): it is a complete config, and the [quickstart](quickstart-linux.md#steps) shows it. Run the workflow twice. After each job, Swarm shows a new task for the slot. The file [`examples/linux-jobs.yml`](../examples/linux-jobs.yml) has a job named `clean-check` that fails if anything from an earlier job is still present.
+   ```console
+   $ docker service logs --tail 20 runners_runner-distributor
+   ```
+
+4. Check that the runners connected. `circleci runner instance list --org <org> --resource-class <namespace>/linux-default` lists each replica with the status `online`, and the web app shows the same under **Runners**. A replica has a name of the form `<node hostname>-<service>-<slot>`, for example `node1-linux-default-1`.
+
+5. Run a job. Use [`examples/linux-hello.yml`](../examples/linux-hello.yml): it is a complete config, and the [quickstart](quickstart-linux.md#steps) shows it. Run the workflow twice. After each job, Swarm shows a new task for the slot. The file [`examples/linux-jobs.yml`](../examples/linux-jobs.yml) has a job named `clean-check` that fails if anything from an earlier job is still present.
 
 ## Optional: use the setup helper
 
-`linux/setup.sh` performs the steps above with checks. It never prints the token, and every step is idempotent. It needs bash 4.4 or later and the tools `curl`, `tar`, `sha256sum`, and `install`.
+`linux/setup.sh` performs the steps above with checks. It never prints the token, and every step is idempotent. It needs bash 4.4 or later. It installs nothing on a node: the service `runner-distributor` of the stack installs the runner.
 
 | Step | Effect |
 |---|---|
 | `--check` | Preflight: Linux, amd64 or arm64, Docker running and 24 or later, Swarm state, NTP |
 | `--swarm-init` | Runs `docker swarm init` on the loopback address unless Swarm is active, and sets the task history limit to 2 |
-| `--install` | Downloads the runner, verifies the SHA-256 checksum, installs the runner and entrypoint into `--prefix/<version>` (default prefix `/opt/machine-runner-swarm`), and points `--prefix/current` at it. Another `--version` installs next to the others and moves the link, and an installed version is only switched to, which is the rollback. Needs root |
 | `--secret <service>` | Creates the secret `<service>-token` from a token read on stdin |
-| `--deploy` | Runs `docker stack deploy` with each `--stack-file`. Without one it deploys the shipped `linux/stack/runners.yaml`, so pass your copy from step 6 |
+| `--deploy` | Runs `docker stack deploy` with each `--stack-file`. Without one it deploys the shipped `linux/stack/runners.yaml`, so pass your copy from step 5 |
 
-With no step, it runs `--check --install`. The steps always run in the order of the table, whatever order you type them, and the hint that starts with `Next:` prints after every run, even when nothing is left to do. Options are `--version`, `--sha256`, `--prefix`, `--stack-file` (repeatable), and `--stack-name`.
+With no step, it runs `--check`. The steps always run in the order of the table, whatever order you type them, and the hint that starts with `Next:` prints after every run, even when nothing is left to do. Options are `--stack-file` (repeatable) and `--stack-name`.
 
 ```bash
-sudo linux/setup.sh --check --swarm-init --install
+sudo linux/setup.sh --check --swarm-init
 sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened   # a hidden prompt asks for each token
 sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml
 ```
 
-Create one secret for every service of the stack files you deploy. `--deploy` fails with `secret not found` when one is missing, and `linux-hardened` is in `runners.yaml` too. Every command needs `sudo` or membership of the `docker` group, because each one talks to the Docker daemon, and `--install` needs root. The helper is a bash script with a `#!/usr/bin/env bash` line, so it runs from any shell, including zsh. To script one secret, pipe the token: `printf %s "$TOKEN" | sudo linux/setup.sh --secret linux-default`. Several `--secret` values need a terminal, because stdin carries one token.
+Create one secret for every service of the stack files you deploy. `--deploy` fails with `secret not found` when one is missing, and `linux-hardened` is in `runners.yaml` too. Every command needs `sudo` or membership of the `docker` group, because each one talks to the Docker daemon. The helper is a bash script with a `#!/usr/bin/env bash` line, so it runs from any shell, including zsh. To script one secret, pipe the token: `printf %s "$TOKEN" | sudo linux/setup.sh --secret linux-default`. Several `--secret` values need a terminal, because stdin carries one token.
 
-The helper pins the SHA-256 checksums of runner version 3.1.12 for amd64 and arm64. For another version, pass `--version X.Y.Z --sha256 <hash>` with the hash from the `checksums.txt` of that release. The helper does not look up the latest version. It installs a pinned version, so that it knows the checksum before the download. Set `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` to an HTTPS mirror for hosts without internet access. The mirror must use the same layout: `<base>/<version>/circleci-runner_linux_<arch>.tar.gz`.
+The distributor reads its settings from the environment of `--deploy`: `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`, `MACHINE_RUNNER_SWARM_CHECK_INTERVAL`, `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL`, and `MACHINE_RUNNER_SWARM_RUNNER_SHA256`. A host with `sudo` drops the environment, so to deploy with these variables, run `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 linux/setup.sh --deploy`, or run `docker stack deploy` as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
 The helper accepts a token that has only letters, digits, `.`, `_`, and `-`, and it keeps an existing secret unchanged. To replace a token, refer to [Rotate a runner token](operations.md#rotate-a-runner-token). The preflight warns when the clock is not NTP-synchronized. The helper does not label nodes. For a docker-build class, run `docker node update --label-add machine-runner-swarm.docker-build=true <worker node>` yourself.
 
-To install the runner without any other step, source the script:
-
-```bash
-. linux/setup.sh && swarm_install_runner 3.1.12 /opt/machine-runner-swarm
-```
-
 ## Upgrade
 
-Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images) to move to a new runner version, a new image, or a new release of this repository.
+With the default settings, a new release of the runner reaches the nodes by itself, without a redeploy. Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images) to pin or roll back the runner version, or to move to a new image or a new release of this repository.
 
 ## Stop and uninstall
 
@@ -349,7 +320,7 @@ Refer to [Uninstall](operations.md#uninstall).
 
 ## Troubleshooting
 
-Refer to [Troubleshooting](troubleshooting.md). The most common problems on a first install are a missing secret, a missing `/opt/machine-runner-swarm` on a node, and a task that stays pending because no node matches its constraints.
+Refer to [Troubleshooting](troubleshooting.md). The most common problems on a first install are a missing secret, a node whose distributor cannot download the runner, and a task that stays pending because no node matches its constraints.
 
 ## Additional resources
 

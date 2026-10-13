@@ -51,13 +51,13 @@ flowchart TB
   r1 & r2 & r3 & r4 & r5 --> api
 ```
 
-Nothing is built. The stack mounts the runner from the host into stock images such as `cimg/base` and Windows Server Core. Refer to [Concepts](docs/concepts.md) for the model, the job lifecycle, and what a clean environment covers.
+Nothing is built. On Linux, the global service `runner-distributor` keeps the runner in a volume on every node, and the stack mounts it into stock images such as `cimg/base`, so `docker stack deploy` is the whole install. On Windows, the stack mounts the runner from the host into Windows Server Core. Refer to [Concepts](docs/concepts.md) for the model, the job lifecycle, and what a clean environment covers.
 
 ## Quickstart
 
 You need Docker Engine 24 or later, the [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, root access to the node, and an organization admin who agreed to the [CircleCI Runner Terms](https://circleci.com/legal/runner-terms/). The quickstarts take you from nothing to a first job in a dozen commands:
 
-- [Quickstart on Linux](docs/quickstart-linux.md): one node as a trial, or the start of a cluster.
+- [Quickstart on Linux](docs/quickstart-linux.md): one node as a trial, or the start of a cluster. Start Swarm, create the secrets, and deploy. Nothing is installed on a node by hand.
 - [Quickstart on Windows Server](docs/quickstart-windows.md): Server 2022 or 2025, in six steps.
 
 Linux runs on Ubuntu LTS and RHEL 8 or later, on amd64 and arm64. Refer to the [FAQ](docs/faq.md#which-operating-systems-does-it-support) for what CI tests on each, and to [Security](docs/security.md) before you give a class to a team.
@@ -75,14 +75,14 @@ Linux runs on Ubuntu LTS and RHEL 8 or later, on amd64 and arm64. Refer to the [
 | [Images](docs/images.md) | Stock images with the mounted runner, and your own images |
 | [Docker Builds](docs/docker-builds.md) | The opt-in host engine pattern and the alternatives |
 | [Security](docs/security.md) | Threat model, token model, a comparison with the official installs, hardening, and egress |
-| [Operations](docs/operations.md) | Status, running the cluster, upgrades, token rotation, node drain, and uninstall |
+| [Operations](docs/operations.md) | Status, running the cluster, runner upgrades and rollbacks, token rotation, node drain, and uninstall |
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms, causes, and fixes |
 | [FAQ](docs/faq.md) | What to build, how it compares, scaling, jobs that cannot run, and node loss |
 | [Migrate from Docker Compose](docs/migration.md) | Move from the old `docker-compose.yml` |
 | [Examples](examples) | Job configs for every class, starting with [`linux-hello.yml`](examples/linux-hello.yml) |
 | [CI/CD](docs/ci.md), [Releasing](docs/releasing.md), [Contributing](CONTRIBUTING.md) | What the pipeline tests, how a release is made, and how to contribute |
 
-Each [release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) carries a bundle with the stack files, the entrypoint, the setup scripts, the documentation, and the examples, with a keyless signature. Refer to [Verify a release](docs/install-linux.md#verify-a-release). The project uses [Semantic Versioning](https://semver.org/) and starts at `0.x`, so review the [changelog](CHANGELOG.md) before you upgrade.
+Each [release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) carries a bundle with the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, with a keyless signature. Refer to [Verify a release](docs/install-linux.md#verify-a-release). The project uses [Semantic Versioning](https://semver.org/) and starts at `0.x`, so review the [changelog](CHANGELOG.md) before you upgrade.
 
 ## Support
 

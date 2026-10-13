@@ -96,9 +96,10 @@ $ docker node ls
 On each node:
 
 1. Install Docker Engine and confirm that the clock is synchronized. Refer to [Prepare each node](install-linux.md#2-prepare-each-node).
-2. Install the runner and entrypoint into `/opt/machine-runner-swarm/<version>` and the link `current`. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint). The directory must exist on every node that can run a service.
-3. Open the ports in [Inter-node ports](#inter-node-ports).
-4. Run the join command.
+2. Open the ports in [Inter-node ports](#inter-node-ports).
+3. Run the join command.
+
+Nothing else is installed on the node. The `runner-distributor` service is `global`, so Swarm starts it on the new node by itself, and it installs the runner into the volume `runner-bin` of that node. A runner container that Swarm starts there first waits up to 120 seconds for it.
 
 ### Arm nodes
 

@@ -182,7 +182,7 @@ Not without a route to CircleCI. Every runner needs outbound HTTPS to `runner.ci
 
 ## Does it work with SELinux on RHEL?
 
-The RHEL steps are documented and not tested in CI. Keep SELinux enforcing, and label `/opt/machine-runner-swarm` for containers if it denies access. Refer to [Permission denied on /opt/machine-runner-swarm with SELinux](troubleshooting.md#permission-denied-on-optmachine-runner-swarm-with-selinux).
+The RHEL steps are documented and not tested in CI. Keep SELinux enforcing. The runner is in a Docker volume and not in a host directory, so no directory needs a label for it.
 
 ## What happens to a job when a node dies?
 

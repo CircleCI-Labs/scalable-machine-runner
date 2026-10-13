@@ -49,7 +49,7 @@ Add the missing label with `docker node update --label-add`, lower `replicas`, o
 | `runner.name must contain only letters, numbers, .()_-, and spaces` | The name has other characters, or exceeds 64 characters because of a long hostname or class name |
 | `--runner.mode must be one of "continuous","single-task"` | `CIRCLECI_RUNNER_MODE` has another value |
 | `error parsing config file`, or a missing file (exit code 1) | The secret is not valid YAML, or it is not attached with the target `circleci_runner_config.yaml` |
-| `circleci-runner-entrypoint: error: ...` | The entrypoint found a missing prerequisite. Refer to the Linux entries below |
+| `circleci-runner-entrypoint: error: ...` | The entrypoint found a missing prerequisite, or no runner. Refer to the Linux entries below |
 
 **Fix.** Correct the stack file or the secret, and deploy again. To stop the loop meanwhile, run `docker service scale runners_<service>=0`.
 
@@ -179,21 +179,76 @@ Swarm commands such as `docker stack deploy` fail on a worker.
 
 ## Linux
 
-### Error: bind source path does not exist
+### The runner waits for the distributor, and then exits with code 80
 
-A task is rejected with `invalid mount config for type "bind": bind source path does not exist: /opt/machine-runner-swarm/current`.
+The log of a runner container shows `circleci-runner-entrypoint: waiting for the runner-distributor of this node to install the runner`. After the wait, which is 120 seconds by default, the container exits with code 80 and the message `/opt/machine-runner-swarm/current is 'missing': the runner-distributor of this node has not installed the runner`. Swarm starts a new container after 10 seconds, and the loop repeats.
 
-**Cause.** The node has no `/opt/machine-runner-swarm/current` link, because the runner is not installed there, or the link points to a version that was deleted.
+**Cause.** The volume `runner-bin` of the node has no runner yet. The `runner-distributor` task of the node is not running, or it cannot download the runner, or it refuses the download. A first deploy and a node that just joined are normal: the wait covers a download of a few seconds, and the next container starts as soon as `current` exists.
 
-**Fix.** Install the runner and the entrypoint on that node. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint).
+**Fix.** Check that the distributor runs on that node, and read its log. Each line starts with the task and the node.
+
+```console
+$ docker service ps --no-trunc runners_runner-distributor
+$ docker service logs --tail 50 runners_runner-distributor
+```
+
+A node that has no task is `Down`, drained, or not a Linux node. Otherwise the log names the problem: refer to [The distributor log shows cannot download](#the-distributor-log-shows-cannot-download) and [The distributor log shows SHA-256 mismatch](#the-distributor-log-shows-sha-256-mismatch). To wait longer, set `MACHINE_RUNNER_SWARM_RUNNER_WAIT` in the environment of the runner services.
+
+### Error: does not match its SHA-256 record
+
+The container exits with code 80 and a message such as `/opt/machine-runner-swarm/versions/3.1.13/bin/circleci-runner does not match its SHA-256 record ...: refusing to start`.
+
+**Cause.** The binary in the volume is not the one that the distributor recorded. The install is incomplete, the volume was changed, or the disk is damaged. The entrypoint checks the binary at every start and never runs one that differs. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux).
+
+**Fix.** The distributor compares the active binary with its record at every check, and installs the version again when it differs. To do it now, force an update of the distributor. It downloads the version again on every node, and the next containers start:
+
+```console
+$ docker service update --force runners_runner-distributor
+```
+
+If the binary changes again, find out what writes to the volume: a privileged container on the node, or a person with access to it.
+
+### The distributor log shows cannot download
+
+A line of `docker service logs runners_runner-distributor` reads `runner-distributor: cannot download <address>`, for the file `manifest.json` or for a tarball such as `<version>/circleci-runner_linux_amd64.tar.gz`. The distributor keeps the runner that it has and tries again in 5 minutes. Without a runner, the runner containers of the node end in the entry above.
+
+**Cause.** The node cannot reach `circleci-binary-releases.s3.amazonaws.com` or your mirror: an egress rule, a proxy, DNS, or the clock. Or the file is not on the mirror, for example the version that you pinned. An `https` mirror needs a certificate from a public certificate authority, because the distributor uses the CA bundle of the stock Alpine image.
+
+**Fix.** Download the same file from the node with the same tool:
+
+```console
+$ docker run --rm alpine wget -q -O /dev/null https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json && echo reachable
+```
+
+Open the host in [Egress hosts](security.md#egress-hosts), or fix the mirror. Refer to [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror).
+
+### The distributor log shows SHA-256 mismatch
+
+A line reads `runner-distributor: SHA-256 mismatch for circleci-runner_linux_amd64.tar.gz <version>: got <hash>, wanted <hash>: refusing to install`. The distributor installs nothing and tries again later.
+
+**Cause.** The tarball does not have the SHA-256 that the manifest, or your list in `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, names. The usual causes are a list that lacks the value of one architecture (a fleet with amd64 and arm64 nodes needs both), a mirror whose tarball and manifest do not belong together, and a proxy that changes the download.
+
+**Fix.** Compare `wanted` with the SHA-256 of the file that you expect, from the `checksums.txt` of the release or from the manifest. Correct the list, the mirror, or the proxy. Never copy the `got` value into the list without checking where the file came from.
+
+### The distributor log shows not adopting it
+
+The log has `runner-distributor: current is <version> (major <n>), not 3: not adopting it (MACHINE_RUNNER_SWARM_RUNNER_MAJOR)`, or `current has SHA-256 <hash>, which no versioned release of the manifest has: not adopting it`.
+
+**Cause.** The first line says that `current` of CircleCI moved to another major version. The distributor keeps the version that it has, so nothing breaks, and the nodes stay where they are. The second line says that the manifest names no version for `current`, which happens with a mirror that has an old or edited `manifest.json`.
+
+**Fix.** For a new major version, read the changelog of the runner, try it, and then set `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` or pin the version. Refer to [Pin a version](operations.md#pin-a-version). For the second line, copy `manifest.json` to the mirror again, with the tarball of the version that `current` names.
 
 ### Error: must be owned by root and not group/world writable
 
-The container exits with code 80 and a message such as `/opt/machine-runner-swarm/bin/circleci-runner must be owned by root and not group/world writable`.
+The container exits with code 80 and a message such as `/opt/machine-runner-swarm/versions/3.1.13/bin/circleci-runner must be owned by root and not group/world writable`.
 
-**Cause.** The entrypoint refuses to run a runner that the job user or the runner user can replace.
+**Cause.** The entrypoint refuses to run a runner that the job user or the runner user can replace. The distributor makes the files of the volume owned by root with the mode `0755`, so something changed them.
 
-**Fix.** On the node, run `sudo chown -R root:root /opt/machine-runner-swarm` and `sudo chmod -R go-w /opt/machine-runner-swarm`.
+**Fix.** On the node, set the owner and the mode again:
+
+```console
+$ docker run --rm -v runners_runner-bin:/v alpine sh -c 'chown -R 0:0 /v && chmod -R go-w /v'
+```
 
 ### Error: jobs cannot be stepped down in this image
 
@@ -220,21 +275,6 @@ Every task fails. The runner log shows `failed to remove working directory befor
 **Cause.** This happens only if someone sets `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` to `true` on a Linux service: the entrypoint and the stack files default it to `false`. The runner removes its working directory itself, as the runner user (uid 2000), but the job user owns that directory and its files. The removal fails even for the first task, because the parent directory belongs to the job user too. The stack files and the entrypoint set the variable to `false` for this reason.
 
 **Fix.** Set `CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"`, or remove the variable so that the entrypoint default applies, and deploy again. A single-task container is discarded after the job, so nothing is lost. In a persistent class, start every job with a step that removes what an earlier job left. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
-
-### Permission denied on /opt/machine-runner-swarm with SELinux
-
-On RHEL, a task fails or the runner reports `Permission denied` for files under `/opt/machine-runner-swarm` while SELinux is enforcing.
-
-**Cause.** The Docker daemon has SELinux support enabled, and the files in `/opt/machine-runner-swarm` have a type that containers may not read. This repository's CI does not run on RHEL, so verify the fix on your host.
-
-**Fix.** Label the directory for containers.
-
-```console
-$ sudo semanage fcontext -a -t container_file_t '/opt/machine-runner-swarm(/.*)?'
-$ sudo restorecon -Rv /opt/machine-runner-swarm
-```
-
-Keep SELinux enforcing. Do not disable it to work around the error.
 
 ### Warning: sudo unable to send audit message
 
@@ -377,4 +417,4 @@ $ docker stack ps runners --no-trunc
 $ docker service logs --tail 200 runners_<service>
 ```
 
-Include the contents of `/opt/machine-runner-swarm/current/VERSION` or `C:\machine-runner-swarm\current\VERSION`, and open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).
+On Linux, include the runner version and the log of the distributor: `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node, and `docker service logs --tail 100 runners_runner-distributor`. On Windows, include the contents of `C:\machine-runner-swarm\current\VERSION`. Then open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).

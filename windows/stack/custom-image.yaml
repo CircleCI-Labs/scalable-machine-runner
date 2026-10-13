@@ -1,0 +1,74 @@
+# Optional class: your own image on top of the baked runner image. Deploy with an extra -c flag:
+#   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml smr
+# Create the secret first (the runner config with the token, as in runners.yaml): windows-custom-token.
+# Replace the image below with yours: windows\images\example\Dockerfile adds Node.js to the baked image and shows the pattern.
+# A baked image carries the runner, Git, PATH and ENTRYPOINT, so this service has no mount, no PATH and no entrypoint.
+#
+# This file repeats the anchors it uses from runners.yaml (an anchor does not reach into another file): keep the common
+# settings in sync.
+
+x-runner-env: &runner-env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
+  CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
+  # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
+  # HTTPS_PROXY / NO_PROXY: set here when the host needs a proxy (jobs inherit the runner's environment)
+  SMR_INSTANCE_ID: "{{.Task.ID}}"           # lets a job tell which container it ran in
+  # Git for Windows ships Git Credential Manager; nothing in a container can answer its prompts.
+  GIT_TERMINAL_PROMPT: "0"
+  GCM_INTERACTIVE: never
+  GIT_CONFIG_COUNT: "1"                     # the system gitconfig is in the read-only Git tree
+  GIT_CONFIG_KEY_0: core.longpaths
+  GIT_CONFIG_VALUE_0: "true"
+
+x-runner-deploy: &runner-deploy
+  endpoint_mode: dnsrr                      # no VIP: nothing connects to a runner
+  restart_policy:
+    condition: any                          # every exit (job done, idle timeout, exit 80) -> a NEW container
+    delay: 10s                              # also the pause between attempts when the runner exits 80
+  update_config:
+    order: stop-first
+    parallelism: 1
+    failure_action: pause
+
+x-runner: &runner
+  isolation: process                        # the image build must match the host (windows.build label)
+  stop_grace_period: 5h5m                   # runner max_run_time (5h) plus 5 minutes to drain
+  logging:
+    driver: json-file                       # rotation; "local" also works on Windows
+    options:
+      max-size: 20m
+      max-file: "3"
+  labels:
+    io.circleci.smr.role: runner
+
+services:
+  # Build your image (it starts FROM the baked image) and push it to a registry every Windows node can pull from.
+  windows-custom:
+    <<: *runner
+    image: registry.example.com/ci/smr-windows-example:ltsc2022   # replace with your image
+    environment:
+      <<: *runner-env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-custom-{{.Task.Slot}}"
+      CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h
+    secrets:
+      - source: windows-custom-token
+        target: circleci_runner_config.yaml
+    deploy:
+      <<: *runner-deploy
+      replicas: 1
+      resources:
+        limits: {cpus: "2", memory: 4g}
+        reservations: {cpus: "2", memory: 4g}
+      placement:
+        constraints:
+          - node.platform.os == windows
+          - node.labels.windows.build == ltsc2022
+        preferences:
+          - spread: node.id
+
+secrets:
+  windows-custom-token:
+    external: true

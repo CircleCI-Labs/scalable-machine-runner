@@ -1,0 +1,159 @@
+# Machine runner 3 on Windows Server, one Docker Swarm service per runner resource class.
+#
+#   docker stack deploy -c windows\stack\runners.yaml smr
+#
+# * One service = one resource class. The service name is the class short name, so
+#   "windows-default" serves <namespace>/windows-default. deploy.replicas = how many runners of
+#   that class run at once.
+# * Every runner is single-use. CIRCLECI_RUNNER_MODE=single-task makes the runner exit after one
+#   job, and restart_policy "any" makes Swarm start a NEW container for the next one, so no job
+#   sees another job's files, registry, environment or processes. Never use plain Compose or a
+#   docker --restart policy for this: they restart the SAME container.
+# * No entrypoint script. circleci-runner.exe is the container's main process, configured by
+#   environment variables (they override the config file) and one config file, which is the
+#   Swarm secret: a YAML file holding only the token. Swarm templates give every replica its own
+#   runner name.
+# * Stock images. The runner and portable Git for Windows come from the host directory C:\smr
+#   (Setup.ps1 creates it; the Windows docs describe the same steps by hand), mounted read-only into
+#   the unmodified Microsoft Server Core image: C:\smr at C:\smr, and C:\smr\git at
+#   C:\Program Files\Git, the path the task agent hard-codes for tar.exe. PATH is set here, in full.
+#   The baked alternative (windows\images) needs neither mount nor PATH.
+# * The secret is the runner config, one per class. It is NOT created by this file:
+#       printf 'api:\n  auth_token: <token>\n' | docker secret create windows-default-token -
+#   (Setup.ps1 -Class asks for the token with hidden input and does this.) On Windows a secret lands
+#   at C:\ProgramData\Docker\secrets\<target>, is readable by administrators only, and is "persisted
+#   in clear text to the container's root disk" until the container stops. Enable BitLocker on the
+#   volume that holds the Docker root directory. Jobs run as ContainerAdministrator, so a job can
+#   read that file (the token is not in the job's environment). Treat each resource class as a
+#   trust boundary.
+#
+# Host prerequisites: Windows Server 2022 or 2025, Docker engine in Windows-container mode, C:\smr staged
+# (stage it BEFORE "docker swarm init": the network drops for a few seconds after it), Swarm initialised
+# with "docker swarm init --advertise-addr <host IPv4 address>". Label every node with the OS build its
+# containers need, because process isolation requires the image build to match the host:
+#       docker node update --label-add windows.build=ltsc2022 <node>     # Server 2022
+#       docker node update --label-add windows.build=ltsc2025 <node>     # Server 2025
+# Optional classes are separate files, deployed with extra -c flags (see the comment at the top of each):
+#   custom-image.yaml   your own image on top of the baked runner image (a class you build yourself)
+#   persistent.yaml     a long-lived continuous-mode runner with a named volume
+#   docker-build.yaml   Windows image builds through the host Docker engine (administrator-equivalent)
+#   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.yaml smr
+#
+# Stopping a service (a rolling update, docker stop, scale down) shuts its containers down. Server Core gives a container only
+# 5 seconds (registry value WaitToKillServiceTimeout) before it kills its processes, whatever stop_grace_period says, so on the
+# plain Microsoft image a running job dies about 5 seconds after any stop (exit code 3221225786). The fix is that one registry value
+# in the image: build windows\images\stop-timeout (stock Server Core plus only that value) and use it as the image of the stock-image
+# services; the baked image has it built in. Until you do, only change a service while its class runs no job.
+#
+# A runner that exits 80 (a missing or invalid name or token, an invalid mode: the runner's own
+# configuration check) is restarted every restart_policy.delay forever: there is no max_attempts
+# here. A missing config FILE (secret not attached) exits 1, also restarted. Watch
+# "docker service ps --no-trunc smr_<service>" for "non-zero exit".
+#
+# Which compose keys "docker stack deploy" honours for Windows services (from the docker/cli and moby
+# source; docs/resource-classes.md, "Stack keys on Windows", has the same list):
+#   Used:        isolation (-> ContainerSpec.Isolation), volumes type bind (directories only) and npipe,
+#                secrets (no uid/gid/mode on Windows), stop_grace_period, logging, environment with
+#                Swarm placeholders, deploy.placement, deploy.resources limits (cpus, memory),
+#                deploy.restart_policy, deploy.update_config, entrypoint, labels.
+#   Scheduler only: deploy.resources.reservations (never sent to the engine, which rejects
+#                MemoryReservation on Windows).
+#   Rejected by the Windows engine, so absent here: deploy.resources.limits.pids (PidsLimit) and ulimits.
+#                A cpus limit above the host's CPU count is rejected too: size the limits to your nodes.
+#   Ignored or n/a on Windows: init, cap_drop, read_only, tmpfs, sysctls, security_opt (and stack
+#                deploy ignores security_opt, privileged, userns_mode and restart everywhere).
+#   Not set on purpose: hostname (a Windows computer name is limited to 15 characters, and
+#                COMPUTERNAME, the container ID, tells containers apart).
+
+x-runner-env: &runner-env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
+  CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
+  # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
+  # HTTPS_PROXY / NO_PROXY: set here when the host needs a proxy (jobs inherit the runner's environment)
+  SMR_INSTANCE_ID: "{{.Task.ID}}"           # lets a job tell which container it ran in
+  # Git for Windows ships Git Credential Manager; nothing in a container can answer its prompts.
+  GIT_TERMINAL_PROMPT: "0"
+  GCM_INTERACTIVE: never
+  GIT_CONFIG_COUNT: "1"                     # the system gitconfig is in the read-only Git tree
+  GIT_CONFIG_KEY_0: core.longpaths
+  GIT_CONFIG_VALUE_0: "true"
+
+# The stock image's PATH is replaced, so it is spelled out: Windows first (its find, sort and tar stay
+# ahead of Git's), then Git's cmd, ucrt64\bin and usr\bin (bash, sh, tar, gzip, ssh). Tests\Test-Injection.ps1
+# checks the Windows part against the image's own PATH.
+x-stock-env: &stock-env
+  # yamllint disable-line rule:line-length
+  PATH: 'C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin'
+
+x-runner-deploy: &runner-deploy
+  endpoint_mode: dnsrr                      # no VIP: nothing connects to a runner
+  restart_policy:
+    condition: any                          # every exit (job done, idle timeout, exit 80) -> a NEW container
+    delay: 10s                              # also the pause between attempts when the runner exits 80
+  update_config:
+    order: stop-first
+    parallelism: 1
+    failure_action: pause
+
+x-runner: &runner
+  isolation: process                        # the image build must match the host (windows.build label)
+  stop_grace_period: 5h5m                   # runner max_run_time (5h) plus 5 minutes to drain
+  logging:
+    driver: json-file                       # rotation; "local" also works on Windows
+    options:
+      max-size: 20m
+      max-file: "3"
+  labels:
+    io.circleci.smr.role: runner
+
+# Stock images: the runner is the main process. (The baked image has this as its ENTRYPOINT.)
+x-stock: &stock
+  entrypoint: ['C:\smr\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
+
+x-smr-mount: &smr-mount                     # the runner, read-only
+  type: bind
+  source: '${SMR_DIR:-C:\smr}'              # to roll out a new runner or Git: stage C:\smr-<version> and
+  target: 'C:\smr'                          # deploy with $env:SMR_DIR='C:\smr-<version>' (rolling update)
+  read_only: true
+
+x-git-mount: &git-mount                     # portable Git, where the task agent expects it
+  type: bind
+  source: '${SMR_DIR:-C:\smr}\git'
+  target: 'C:\Program Files\Git'
+  read_only: true
+
+services:
+  # Default class on the stock Server Core image. For Server 2025 nodes, copy the service under another
+  # name (and resource class), use :ltsc2025 and the constraint windows.build == ltsc2025.
+  windows-default:
+    <<: [*runner, *stock]
+    image: mcr.microsoft.com/windows/servercore:ltsc2022   # better: your windows\images\stop-timeout build of it (see above)
+    environment:
+      <<: [*runner-env, *stock-env]
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-default-{{.Task.Slot}}"
+      CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h      # idle slots recycle onto a new secret or image
+    volumes:
+      - *smr-mount
+      - *git-mount
+    secrets:
+      - source: windows-default-token
+        target: circleci_runner_config.yaml
+    deploy:
+      <<: *runner-deploy
+      replicas: 2
+      resources:
+        limits: {cpus: "2", memory: 4g}
+        reservations: {cpus: "2", memory: 4g}   # no overcommit: replicas that do not fit stay pending
+      placement:
+        constraints:
+          - node.platform.os == windows
+          - node.labels.windows.build == ltsc2022
+        preferences:
+          - spread: node.id
+
+secrets:
+  windows-default-token:
+    external: true

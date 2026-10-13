@@ -1,12 +1,12 @@
 ---
 page-title: Operations
 page-audience: admin
-page-description: Check status and logs, upgrade the runner and images with rolling updates, rotate tokens, drain nodes for patching, and uninstall the stack.
+page-description: Check status and logs, run the cluster with monitoring, capacity, backups and recovery, upgrade the runner and images, rotate tokens, drain nodes for patching, and uninstall the stack.
 ---
 
 # Operations
 
-This page describes the day-to-day tasks for a running stack: checking status, upgrading, rotating tokens, patching nodes, and uninstalling. The commands use the stack name `runners` and the service names of the shipped files. Run them on a manager node.
+This page describes the day-to-day tasks for a running stack: checking status, running the cluster, upgrading, rotating tokens, patching nodes, and uninstalling. The commands use the stack name `runners` and the service names of the shipped files. Run them on a manager node.
 
 ## Check status and logs
 
@@ -36,6 +36,135 @@ Healthy single-task replicas show a steady stream of tasks that end in `Complete
 - Tasks that stay `Pending`.
 
 In the web app, select **Runners** to see the replicas of each class in the inventory. A name that you do not recognize means that someone else holds a token of that class.
+
+## Run the cluster
+
+The sections below cover what a team that runs the stack in production needs beyond the day-one commands: logs that survive, signals to watch, capacity, backups, certificates, and what a failure costs.
+
+### Ship the logs
+
+`docker service logs` reads the logs of the tasks that Swarm still holds. Every finished job ends a task, and the task history limit of 2 makes Swarm prune old tasks and their containers, so the log of a job is gone after a few more jobs. The stack files keep the logs on the node, with the `local` driver on Linux (3 files of 20 MB) and `json-file` on Windows, and rotate them.
+
+To keep logs for incidents, move them off the node. Choose one:
+
+- **A logging driver.** Change `logging:` in your copy of every stack file to a driver that ships logs, such as `syslog`, `fluentd`, or `gelf`. The stack files set the driver per service, so a default in `daemon.json` does not apply. `docker service logs` then works only for drivers that can be read back, which these are not.
+- **A log agent on every node.** Run an agent that reads container logs through the Docker API and forwards them. The stack files stay as they are, and `docker service logs` keeps working.
+
+Keep the lines that start with `circleci-runner-entrypoint:` and `circleci-runner:`, and alert on the signals in [Check status and logs](#check-status-and-logs).
+
+### Monitor the cluster
+
+Watch the Swarm and CircleCI. The Swarm commands run on a manager.
+
+```console
+$ docker service ls
+$ docker node ls
+$ docker stack ps runners --filter desired-state=running --format '{{.Name}} {{.Node}} {{.CurrentState}}' | grep -v Running
+```
+
+The runner API shows what CircleCI sees. It needs a personal API token. Refer to the [runner API reference](https://circleci.com/docs/reference/runner-api/).
+
+```console
+$ curl -s -H "Circle-Token: $CIRCLECI_API_TOKEN" \
+    "https://runner.circleci.com/api/v3/runner?resource-class=<namespace>/linux-default" \
+    | jq -r '.items[] | "\(.name) \(.last_connected)"'
+$ curl -s -H "Circle-Token: $CIRCLECI_API_TOKEN" \
+    "https://runner.circleci.com/api/v3/runner/tasks?resource-class=<namespace>/linux-default"
+$ curl -s -H "Circle-Token: $CIRCLECI_API_TOKEN" \
+    "https://runner.circleci.com/api/v3/runner/tasks/running?resource-class=<namespace>/linux-default"
+```
+
+| Signal | Where | Alert when |
+|---|---|---|
+| Replicas running against desired | `docker service ls`, the `REPLICAS` column | Fewer than desired for more than 10 minutes. Refer to [A task stays pending](troubleshooting.md#a-task-stays-pending) |
+| Node state | `docker node ls` | A node is not `Ready`, a manager is `Unreachable`, or no manager is `Leader` |
+| Runners connected | `/api/v3/runner`, `items` and `last_connected` | Fewer items than replicas, or a `last_connected` older than 2 minutes, which is when the CLI stops calling an instance `online` |
+| Jobs that wait | `/api/v3/runner/tasks`, `unclaimed_task_count` | Above 0 for several minutes. With every replica busy, add replicas. With idle replicas, check [concurrency](#capacity-and-concurrency) |
+| Jobs that run | `/api/v3/runner/tasks/running`, `running_runner_tasks` | Equal to the replicas of the class for a long time: the class is full |
+| Task exits | `docker service ps` | Exit code 80, or a restart loop. Refer to [The container restarts every 10 seconds](troubleshooting.md#the-container-restarts-every-10-seconds) |
+| Disk | `docker system df` and the free space of the Docker data directory | Above 80 percent. Refer to [Free disk space](#free-disk-space) |
+
+### Capacity and concurrency
+
+The replicas of a class are the jobs it runs at the same time, and the sum over all classes is the capacity of the cluster. A job with `parallelism: n` is `n` tasks, so it needs `n` replicas at once.
+
+Two limits sit above the replicas, and both are set on the CircleCI side:
+
+- **The runner concurrency of your plan**, which all self-hosted runner jobs of the organization share.
+- **`maxConcurrentTasks` of the resource class**, which is 20 by default and which CircleCI support raises. A class with more than 20 replicas leaves the extra replicas idle until it is raised.
+
+Queued tasks count against concurrency, and the runner inventory shows running tasks only, so runners can look idle while jobs wait. A job for a class that has no runner queues indefinitely and holds concurrency. Check `unclaimed_task_count`, and cancel the tasks of a class that no longer has runners. Refer to [Jobs wait while the runners are idle](troubleshooting.md#jobs-wait-while-the-runners-are-idle).
+
+On the Swarm side, the reservations of the replicas on a node must fit in the node. Refer to [Size the limits](resource-classes.md#size-the-limits).
+
+### Back up the managers, and recover
+
+The state of the cluster is the directory `/var/lib/docker/swarm` of each manager. It holds the Raft log with every Swarm secret, so **the backup holds every runner token**. Keep it as you keep a password vault, and delete old copies.
+
+1. If the managers use autolock, save the unlock key first: `docker swarm unlock-key`.
+2. Stop Docker on one manager that is not the leader, so that nothing changes during the copy. The other managers keep the quorum, so use three managers.
+3. Copy the whole directory, and start Docker again:
+
+   ```console
+   $ sudo systemctl stop docker
+   $ sudo tar -czf swarm-backup-$(date +%F).tar.gz -C /var/lib/docker swarm
+   $ sudo systemctl start docker
+   ```
+
+For this stack, **disaster recovery means redeploying and issuing new tokens**, because the stack files hold the whole desired state and the tokens are the only secrets:
+
+1. Create a new Swarm on a new manager, and join the nodes. Refer to [Create the swarm](multi-node.md#create-the-swarm).
+2. Create a new token for each class, delete the old tokens, and create the secrets. Refer to [Rotate a runner token](#rotate-a-runner-token).
+3. Deploy the same stack files, with the same list of `-c` files.
+
+Restore the backup only to keep the node membership, or after a loss of quorum. Stop Docker on the target manager, replace the contents of `/var/lib/docker/swarm` with the backup, start Docker, and run `docker swarm init --force-new-cluster --advertise-addr <manager IP address>`. This makes the manager a single-manager cluster with the old state. Unlock it if the swarm uses autolock, check `docker node ls` and `docker service ls`, and then add managers and workers again. Back up again afterwards.
+
+### Unlock a locked swarm
+
+With autolock (`docker swarm update --autolock=true`), a manager that restarts cannot read the Raft log until you unlock it. A locked manager answers Swarm commands with `Swarm is encrypted and needs to be unlocked before it can be used`, and it takes no part in the quorum. Running containers on other nodes keep running, but nothing creates replacement tasks without a quorum, so a reboot of managers without unlocking them drains the capacity of the cluster.
+
+```console
+$ docker swarm unlock
+$ docker swarm unlock-key
+$ docker swarm unlock-key --rotate
+```
+
+The first command asks for the key on the locked manager. The second prints the key, on an unlocked manager. The third makes a new key, so run it after anyone who knew the old key leaves, and store the new key outside the cluster. Plan every patching reboot of a manager with its unlock.
+
+### Rotate the cluster certificates
+
+Every node has a certificate from the Swarm CA, and Swarm renews them before they expire (90 days by default). A node that is offline longer than that must leave and join again.
+
+After a node was compromised, for example a build job that took over a docker-build node, remove the node and rotate the CA, so that its certificate stops working:
+
+```console
+$ docker node rm --force <node name>
+$ docker swarm ca --rotate
+$ docker node ls
+```
+
+Rotate the join tokens too (`docker swarm join-token --rotate worker` and `manager`). A compromised node could read the secrets of the tasks that ran on it, and a compromised manager could read every secret, so also rotate the tokens of those classes. Refer to [If a token leaked](#if-a-token-leaked).
+
+### Upgrade Docker and the nodes in order
+
+Upgrade one node at a time, managers first and then workers, and wait until the cluster is healthy before the next node:
+
+1. Drain the node (a node drain), as in [Drain a node for patching](#drain-a-node-for-patching). On Windows, drain only a node whose classes are idle.
+2. Upgrade Docker and reboot. Unlock a manager that uses autolock.
+3. Return the node to service, and check that `docker node ls` shows it `Ready`, and a manager `Reachable` or `Leader`.
+
+Managers go one at a time so the quorum holds: with three managers, one is down at most. Leave mixed Docker versions in place only for the length of the upgrade. The runner and the entrypoint upgrade separately, with no stop. Refer to [Upgrade the runner on Linux](#upgrade-the-runner-on-linux).
+
+### Node death
+
+When a node dies, Swarm marks it `Down` after it misses its heartbeats, and starts replacement tasks on other nodes that match the constraints of the service.
+
+- **The jobs that ran on the node are lost.** CircleCI reports them as failed because of a problem with your infrastructure. Self-hosted runners have no automatic retry, so rerun the workflow from the failed job.
+- **Services that are pinned to the node stay `Pending`.** That includes the persistent class, which uses `node.hostname`, and the docker-build classes, which need a labeled node.
+- **The capacity drops** by the replicas of the node, until the node returns or the other nodes have room. Queued jobs wait for the replicas to start.
+- **A node that returns** rejoins by itself when its certificate is still valid, and Swarm does not move tasks back to it.
+- **A node that is gone for good** is removed with `docker node rm --force <node name>`. Remove a lost manager with `docker node demote` (if it can still be reached) or `docker node rm --force`, and add a new manager so that the quorum holds.
+- **The loss of a manager** keeps the cluster running while a majority remains. Without a majority, running jobs finish but no replica is replaced. Refer to [Managers and quorum](multi-node.md#managers-and-quorum).
 
 ## Upgrade the runner and images
 

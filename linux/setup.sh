@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
-# setup.sh: OPTIONAL helper for machine-runner-swarm on a Linux Docker Swarm host. Every step is an
-# ordinary command that the docs show by hand. It can also be sourced to call swarm_install_runner alone:
-#   . linux/setup.sh && swarm_install_runner 3.1.12 /opt/machine-runner-swarm
+# setup.sh: OPTIONAL helper for machine-runner-swarm on a Linux Docker Swarm host. Every step is an ordinary docker command
+# that docs/install-linux.md shows by hand. The runner is not installed here: the runner-distributor service of the stack does that
+# on every node (docs/operations.md).
 set -euo pipefail
 
-MACHINE_RUNNER_SWARM_VERSION=3.1.12
-# SHA-256 of circleci-runner_linux_<arch>.tar.gz for MACHINE_RUNNER_SWARM_VERSION, from the release's checksums.txt.
-MACHINE_RUNNER_SWARM_SHA256_AMD64=d97cb1cde2b596a57be0b62b59e22ed361e4c9a3178ea8a0473c733a38393c0c
-MACHINE_RUNNER_SWARM_SHA256_ARM64=429d3f996a64f561a58e9cabf6260318d13d9af2f214afbcb073365aef872edd
-# An https mirror for an air-gapped host; layout: <base>/<version>/circleci-runner_linux_<arch>.tar.gz
-MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=${MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL:-https://circleci-binary-releases.s3.amazonaws.com/circleci-runner}
 swarm_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 info() { printf '%s\n' "$*" >&2; }
@@ -17,35 +11,31 @@ die() { printf 'setup.sh: error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<'EOF'
-Usage: setup.sh [STEPS] [OPTIONS]    (no steps: --check --install; every step is idempotent)
+Usage: setup.sh [STEPS] [OPTIONS]    (no steps: --check; every step is idempotent)
 Steps, run in this order:
   --check            preflight only: Linux, amd64/arm64, Docker running and 24+, Swarm state, clock
   --swarm-init       docker swarm init for one node (listens on 127.0.0.1 only) unless Swarm is active
-  --install          download, verify and install the runner and circleci-runner-entrypoint into --prefix/VERSION, then
-                     point --prefix/current at it (root). Versions sit side by side: a version that is installed already
-                     is only switched to, so the same command is the rollback
   --secret SERVICE   create the Swarm secret SERVICE-token (a runner config holding the token); the token
                      comes from stdin (hidden prompt, or one line from a pipe), never printed
-  --deploy           docker stack deploy of the --stack-file files
+  --deploy           docker stack deploy of the --stack-file files (the runner-distributor service installs the runner)
 Options:
-  --version X.Y.Z    runner version (default 3.1.12, SHA-256 pinned here; others need --sha256)
-  --sha256 HEX       expected SHA-256 of the tarball, from that release's checksums.txt
-  --prefix DIR       directory of the versions and of the current link (default /opt/machine-runner-swarm)
   --stack-file FILE  stack file for --deploy, repeatable (default: stack/runners.yaml)
   --stack-name NAME  default: runners
+The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION, _RUNNER_MAJOR, _CHECK_INTERVAL, _DOWNLOAD_BASE_URL and _RUNNER_SHA256
+from the environment of --deploy (docs/operations.md).
 EOF
 }
 
-swarm_arch() {
-  case $(uname -m) in x86_64 | amd64) echo amd64 ;; aarch64 | arm64) echo arm64 ;; *) return 1 ;; esac
-}
-
 preflight() { # NEEDS_DOCKER
-  local bad=0 arch v t
+  local bad=0 arch v
   chk() { printf '[%s] %s\n' "$1" "$2" >&2; [[ $1 != FAIL ]] || bad=1; }
   if [[ $(uname -s) == Linux ]]; then chk ' ok ' "Linux"; else chk FAIL "this helper is for Linux (Windows: windows/Setup.ps1)"; fi
-  if arch=$(swarm_arch); then chk ' ok ' "architecture $arch"; else chk FAIL "unsupported architecture $(uname -m): amd64 and arm64 only"; fi
-  for t in curl tar sha256sum install; do command -v "$t" >/dev/null || chk FAIL "$t is required"; done
+  case $(uname -m) in
+    x86_64 | amd64) arch=amd64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) arch= ;;
+  esac
+  if [[ -n $arch ]]; then chk ' ok ' "architecture $arch"; else chk FAIL "unsupported architecture $(uname -m): amd64 and arm64 only"; fi
   if v=$(docker version --format '{{.Server.Version}}' 2>/dev/null) && [[ -n $v ]]; then
     if [[ ${v%%.*} -ge 24 ]]; then chk ' ok ' "Docker Engine $v"; else chk FAIL "Docker Engine $v is too old: 24 or newer"; fi
     chk ' ok ' "Swarm: $(docker info --format '{{.Swarm.LocalNodeState}}')"
@@ -59,45 +49,6 @@ preflight() { # NEEDS_DOCKER
   fi
   [[ $bad -eq 0 ]] || die "preflight failed"
 }
-
-# swarm_install_runner [VERSION [PREFIX [SHA256]]]: download circleci-runner for this architecture, verify the
-# SHA-256 and --version, and install it with circleci-runner-entrypoint into PREFIX/VERSION/bin, root-owned and not
-# writable by anyone else. Then point PREFIX/current at VERSION: the stack mounts that link, and Docker resolves it
-# whenever it creates a container, so running jobs finish on the old version and every next container gets the new one.
-# A version that is installed already is not downloaded again, only switched to (a rollback). Runs in a subshell, so a
-# failure returns non-zero instead of exiting a shell that sourced this file.
-swarm_install_runner() (
-  set -euo pipefail
-  local version=${1:-$MACHINE_RUNNER_SWARM_VERSION} prefix=${2:-/opt/machine-runner-swarm} sha=${3:-} arch tarball tmp dir
-  put() { install -m 0755 -o root -g root "$1" "$2.new" && mv -f "$2.new" "$2"; }
-  [[ $(id -u) -eq 0 ]] || die "installing into $prefix needs root: run with sudo"
-  [[ $version =~ ^[0-9][0-9A-Za-z._-]*$ ]] || die "invalid version '$version'"
-  [[ -f $swarm_dir/entrypoint/circleci-runner-entrypoint ]] || die "run setup.sh from a checkout: entrypoint/circleci-runner-entrypoint not found"
-  arch=$(swarm_arch) || die "unsupported architecture $(uname -m)"
-  tarball=circleci-runner_linux_$arch.tar.gz
-  dir=$prefix/$version
-  if ! "$dir/bin/circleci-runner" --version 2>&1 | grep -qF "version $version"; then
-    if [[ -z $sha ]]; then
-      [[ $version == "$MACHINE_RUNNER_SWARM_VERSION" ]] || die "no pinned SHA-256 for $version: pass --sha256 (see $MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL/$version/checksums.txt)"
-      if [[ $arch == amd64 ]]; then sha=$MACHINE_RUNNER_SWARM_SHA256_AMD64; else sha=$MACHINE_RUNNER_SWARM_SHA256_ARM64; fi
-    fi
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
-    info "downloading circleci-runner $version linux/$arch"
-    curl -fsSL --retry 3 --proto '=https' --tlsv1.2 -o "$tmp/$tarball" "$MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL/$version/$tarball" || die "download failed"
-    (cd "$tmp" && echo "$sha  $tarball" | sha256sum -c - >/dev/null 2>&1) || die "SHA-256 mismatch for $tarball: refusing to install"
-    tar -xzf "$tmp/$tarball" -C "$tmp" --no-same-owner circleci-runner
-    "$tmp/circleci-runner" --version 2>&1 | grep -qF "version $version" || die "the downloaded binary does not report version $version"
-    install -d -m 0755 -o root -g root "$prefix" "$dir" "$dir/bin"
-    put "$tmp/circleci-runner" "$dir/bin/circleci-runner"
-  fi
-  put "$swarm_dir/entrypoint/circleci-runner-entrypoint" "$dir/bin/circleci-runner-entrypoint"
-  echo "$version" > "$dir/VERSION"
-  [[ -z $(find "$prefix" ! -type l \( ! -user root -o -perm /022 \)) ]] || die "$prefix has files that are not root-owned or are group/world-writable"
-  ln -s "$version" "$prefix/.current.$$"   # a new link, then an atomic rename over the old one
-  mv -T "$prefix/.current.$$" "$prefix/current"
-  info "[ ok ] $prefix/current -> $version: $("$dir/bin/circleci-runner" --version | head -n 1), and circleci-runner-entrypoint"
-)
 
 swarm_init() {
   if [[ $(docker info --format '{{.Swarm.LocalNodeState}}') == active ]]; then info "[ ok ] Swarm is already active"; return; fi
@@ -118,20 +69,16 @@ swarm_create_secret() {
 }
 
 main() {
-  local version=$MACHINE_RUNNER_SWARM_VERSION sha='' prefix=/opt/machine-runner-swarm stack=runners check=false install=false swarm=false deploy=false
+  local stack=runners check=false swarm=false deploy=false
   local -a secrets=() files=()
   while [[ $# -gt 0 ]]; do
     case $1 in
       --check) check=true ;;
-      --install) install=true ;;
       --swarm-init) swarm=true ;;
       --deploy) deploy=true ;;
-      --secret | --version | --sha256 | --prefix | --stack-file | --stack-name)
+      --secret | --stack-file | --stack-name)
         [[ $# -ge 2 ]] || die "$1 needs a value"
-        case $1 in
-          --secret) secrets+=("$2") ;; --version) version=$2 ;; --sha256) sha=$2 ;;
-          --prefix) prefix=$2 ;; --stack-file) files+=("$2") ;; --stack-name) stack=$2 ;;
-        esac
+        case $1 in --secret) secrets+=("$2") ;; --stack-file) files+=("$2") ;; --stack-name) stack=$2 ;; esac
         shift
         ;;
       -h | --help) usage; return 0 ;;
@@ -139,20 +86,19 @@ main() {
     esac
     shift
   done
-  [[ $check == true || $install == true || $swarm == true || $deploy == true || ${#secrets[@]} -gt 0 ]] || { check=true; install=true; }
+  [[ $check == true || $swarm == true || $deploy == true || ${#secrets[@]} -gt 0 ]] || check=true
   [[ ${#files[@]} -gt 0 ]] || files=("$swarm_dir/stack/runners.yaml")
   [[ ${#secrets[@]} -le 1 || -t 0 ]] || die "several --secret values need a terminal: stdin carries one token"
 
   preflight "$([[ $swarm == true || $deploy == true || ${#secrets[@]} -gt 0 ]] && echo true || echo false)"
   if [[ $swarm == true ]]; then swarm_init; fi
-  if [[ $install == true ]]; then swarm_install_runner "$version" "$prefix" "$sha"; fi
   for s in "${secrets[@]}"; do swarm_create_secret "$s"; done
   if [[ $deploy == true ]]; then
     local -a args=()
     for f in "${files[@]}"; do args+=(-c "$f"); done
     docker stack deploy "${args[@]}" "$stack"
   fi
-  info "Next: sudo $0 --install (every runner node); $0 --swarm-init; printf %s \"\$TOKEN\" | $0 --secret linux-default; $0 --deploy"
+  info "Next: $0 --swarm-init; printf %s \"\$TOKEN\" | $0 --secret linux-default; $0 --deploy; docker service logs ${stack}_runner-distributor"
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

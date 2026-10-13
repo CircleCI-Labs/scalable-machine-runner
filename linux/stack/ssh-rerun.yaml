@@ -29,7 +29,9 @@ services:
   linux-default-ssh:
     image: cimg/base:2026.10
     user: "0"
-    entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]
+    entrypoint: ["/circleci-runner-entrypoint"]
+    configs:
+      - {source: entrypoint, target: /circleci-runner-entrypoint, mode: 0555}
     init: true
     stop_grace_period: 5h5m
     hostname: "{{.Node.Hostname}}-linux-default-ssh-{{.Task.Slot}}"
@@ -58,10 +60,7 @@ services:
       driver: local
       options: {max-size: 20m, max-file: "3"}
     volumes:
-      - type: bind
-        source: /opt/machine-runner-swarm/current   # a link to the installed version (see runners.yaml)
-        target: /opt/machine-runner-swarm
-        read_only: true
+      - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}   # the runner of this node (runners.yaml)
     deploy:
       replicas: 1
       restart_policy: {condition: any, delay: 10s}
@@ -82,3 +81,9 @@ networks:
 
 secrets:
   linux-default-ssh-token: {external: true}
+
+configs:   # as in runners.yaml (ci/config-names.sh keeps the name in step with the file), so that this file also loads alone
+  entrypoint: {name: machine-runner-swarm-entrypoint-bba40a2db581, file: ../entrypoint/circleci-runner-entrypoint}
+
+volumes:
+  runner-bin: {}   # the volume that runner-distributor fills (runners.yaml)

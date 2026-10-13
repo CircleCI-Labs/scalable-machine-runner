@@ -66,13 +66,20 @@ The restart delay is a pause between starts, not a back-off. Swarm creates the r
 
 The log contains `401 (Unauthorized)`, and the runner never claims a job.
 
-**Cause.** CircleCI rejects the token. The token was deleted, the secret holds a token of another class, or the clock drifted.
+**Cause.** CircleCI rejected the token. The token was deleted, or the secret holds a token of another class or a mistyped one. A 401 is not a clock problem: a clock that drifted fails the TLS handshake before any request, which gives the error in the next entry.
 
 **Fix.**
 
 - Check that the secret `<service>-token` holds the token of the resource class with the same name as the service. A swapped token does not fail loudly. The runner serves the class of its token, so jobs of the intended class stay queued.
-- Check the clock with `timedatectl show -p NTPSynchronized --value`. TLS to CircleCI fails silently when the clock drifts.
 - Create a new token and rotate it. Refer to [Rotate a runner token](operations.md#rotate-a-runner-token).
+
+### The runner log shows x509 certificate errors
+
+The log contains `x509: certificate has expired or is not yet valid`, or `x509: certificate signed by unknown authority`, and the runner never connects.
+
+**Cause.** The clock of the node drifted, so TLS to CircleCI fails silently as far as the job is concerned. Or an inspecting proxy re-signs the traffic with a CA that the container does not trust.
+
+**Fix.** Check the clock with `timedatectl show -p NTPSynchronized --value`, which must print `yes`, and fix NTP on the node. For a proxy CA, add the CA to your image. Refer to [Do proxies and custom certificate authorities work?](faq.md#do-proxies-and-custom-certificate-authorities-work).
 
 ### Jobs queue but no runner claims them
 
@@ -83,6 +90,69 @@ The log contains `401 (Unauthorized)`, and the runner never claims a job.
 1. Check that `<namespace>/<class>` in the job config equals the namespace and the service name.
 2. Check the inventory under **Runners** in the web app. If the replicas are missing, check that the tasks run and that the egress rules allow the hosts in [Egress hosts](security.md#egress-hosts).
 3. Check that jobs are not in a class that has `replicas: 0`.
+
+### Jobs wait while the runners are idle
+
+The runner inventory shows idle runners, and jobs stay queued.
+
+**Cause.** The inventory shows running tasks only. Queued tasks are invisible there, and they count against concurrency. A class can sit at the `maxConcurrentTasks` limit of the resource class (20 by default) or at the runner concurrency of your plan, and jobs for a class that has no runner queue forever and hold concurrency.
+
+**Fix.** Ask the runner API how many tasks wait, and compare it with the replicas:
+
+```console
+$ curl -s -H "Circle-Token: $CIRCLECI_API_TOKEN" \
+    "https://runner.circleci.com/api/v3/runner/tasks?resource-class=<namespace>/<class>"
+```
+
+A count above 0 with idle replicas points at a limit or at a class name that no service serves. Cancel the tasks of a class that no longer has runners, and ask CircleCI support to raise `maxConcurrentTasks`. Refer to [Capacity and concurrency](operations.md#capacity-and-concurrency).
+
+### A service shows no logs
+
+`docker service logs runners_<service>` prints nothing, or prints less than you expect.
+
+**Cause.** Swarm prunes the old tasks of a slot, and their logs go with them, because every finished job ends a task and the history limit is 2. The command also works only for the `local`, `json-file`, and `journald` drivers, so a service that you moved to a shipping driver has no logs to read back.
+
+**Fix.** Read `docker service ps --no-trunc runners_<service>` for the reason a task ended, and `docker logs <container>` on the node for a task that still has its container. To keep logs, ship them. Refer to [Ship the logs](operations.md#ship-the-logs).
+
+### Error: The swarm does not have a leader
+
+A Swarm command fails with `The swarm does not have a leader. It's possible that too few managers are online.`
+
+**Cause.** The managers lost their quorum. A majority of them must be online: two of three, or three of five. Without it, running jobs finish, but no replacement task starts, so the capacity of the cluster drops to zero.
+
+**Fix.** Bring the managers back, starting with the ones that were stopped last, and check `docker node ls` on a reachable manager. A manager that is locked needs `docker swarm unlock`. If the managers are lost for good, recover the cluster from one surviving manager with `docker swarm init --force-new-cluster`. Refer to [Back up the managers, and recover](operations.md#back-up-the-managers-and-recover) and [Managers and quorum](multi-node.md#managers-and-quorum).
+
+### Error: Swarm is encrypted and needs to be unlocked
+
+A Swarm command fails with `Swarm is encrypted and needs to be unlocked before it can be used`.
+
+**Cause.** The managers use autolock, and this manager restarted. It stays out of the cluster until someone unlocks it.
+
+**Fix.** Run `docker swarm unlock` on the manager and enter the unlock key. Get the key from a manager that is unlocked with `docker swarm unlock-key`. Refer to [Unlock a locked swarm](operations.md#unlock-a-locked-swarm).
+
+### A service update is paused or rolled back
+
+`docker service update` or `docker stack deploy` stops partway, and `docker service inspect --format '{{.UpdateStatus.State}}' runners_<service>` prints `paused`, `rollback_started`, or `rollback_completed`. The `Message` field says which task failed.
+
+**Cause.** A new task failed to start, for example with exit code 80 after a wrong setting or a missing secret. The stack files set no `failure_action`, so Swarm pauses the update at the first failure, and the replicas that it did not reach keep the old version.
+
+**Fix.** Read why the task failed with `docker service ps --no-trunc runners_<service>`, correct the cause in your stack file, and deploy again with the same list of files. To go back at once, run `docker service update --rollback runners_<service>`. Refer to [Update the images](operations.md#update-the-images).
+
+### A job exits with code 137, or fails to start processes
+
+A task or a step ends with exit code 137, or a build fails with `fork: Resource temporarily unavailable` or `Cannot allocate memory`.
+
+**Cause.** Code 137 is SIGKILL. On Linux the kernel kills a job that exceeds the memory limit of the service, and `docker inspect <container>` shows `OOMKilled: true`. The same code appears when a stop outlasts `stop_grace_period`. A build that starts more processes than `limits.pids` (4096) fails to fork.
+
+**Fix.** Raise `limits.memory` or `limits.pids` of that class in your stack file, and deploy again. Size the class for its largest job, and keep the reservation equal to the limit. Refer to [Size the limits](resource-classes.md#size-the-limits). A job that runs near its limit also needs room on the node.
+
+### A job fails with an issue with your infrastructure
+
+The job ends with a message that points at an issue with your infrastructure, and its log stops without an error of its own.
+
+**Cause.** The runner stopped while it ran the job, or its connection to CircleCI broke. Typical causes are a node that died or rebooted, a stop from outside (an update, a scale-down, or a node drain) that outlasted the grace period or, on Windows, killed the job after about 5 seconds, or an out-of-memory kill.
+
+**Fix.** Find the container that ran the job with `docker service ps --no-trunc runners_<service>`: a task that ended with `non-zero exit` or on a node that is `Down` names the cause. Self-hosted runners do not retry a job, so rerun it. Refer to [Node death](operations.md#node-death) and [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ### A task is rejected because the image cannot be pulled
 
@@ -188,6 +258,14 @@ Every `sudo` call in a job prints `unable to send audit message`.
 **Cause.** The class does not mount a Docker engine, by design.
 
 **Fix.** Use the opt-in class, or a daemonless builder. Refer to [Docker Builds](docker-builds.md).
+
+### Permission denied on the Docker socket in a docker-build job
+
+A job on a docker-build class fails with `permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock`.
+
+**Cause.** The entrypoint adds the job user to the group of the mounted socket so that the job can use it, but it skips a socket whose group id is 0, because group 0 is root's group and giving the job user that group would be wrong. A host whose socket is owned by `root:root` therefore leaves the job user without access.
+
+**Fix.** Give the socket on the host a group that is not root, normally `docker`. With systemd, the socket unit of Docker sets it with `SocketGroup=docker`. Check with `stat -c '%U:%G %g' /var/run/docker.sock`, which must show a group id above 0, and deploy again so that the new containers pick it up. Refer to [Docker Builds](docker-builds.md).
 
 ### The disk fills up
 

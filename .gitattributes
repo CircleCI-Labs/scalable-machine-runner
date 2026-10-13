@@ -1,0 +1,6 @@
+# Files that a container or the stack reads byte for byte stay LF on every platform: Swarm configs are named after the SHA-256
+# of their content (ci/config-names.sh), and a CRLF checkout of a shell script breaks it.
+*.sh text eol=lf
+linux/entrypoint/* text eol=lf
+windows/runner-distributor.ps1 text eol=lf
+linux/runner-distributor.sh text eol=lf

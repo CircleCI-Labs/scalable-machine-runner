@@ -29,10 +29,16 @@ Read the runner output of a service. On Linux, the entrypoint prints one line th
 $ docker service logs --tail 100 --follow runners_linux-default
 ```
 
+On Linux, the lines of the `runner-distributor` service start with `runner-distributor:`. They say which version the node installs and when the link `current` moves.
+
+```console
+$ docker service logs --tail 50 runners_runner-distributor
+```
+
 Healthy single-task replicas show a steady stream of tasks that end in `Complete`, because every finished job ends a task. A task that ends in `Failed` with `task: non-zero exit` needs attention. Alert on these signals:
 
 - Tasks that end with a non-zero exit code, including 80 and 1. Code 143 is the exception: a replica that gets SIGTERM while it still retries to reach CircleCI at start-up exits with 143, and needs no action.
-- Log lines that start with `circleci-runner: error` or `circleci-runner-entrypoint: error`, and lines that contain `401`.
+- Log lines that start with `circleci-runner: error` or `circleci-runner-entrypoint: error`, and lines that contain `401`. In the log of the distributor, alert on `cannot download`, `SHA-256 mismatch`, and `error`.
 - Tasks that stay `Pending`.
 
 In the web app, select **Runners** to see the replicas of each class in the inventory. A name that you do not recognize means that someone else holds a token of that class.
@@ -50,7 +56,7 @@ To keep logs for incidents, move them off the node. Choose one:
 - **A logging driver.** Change `logging:` in your copy of every stack file to a driver that ships logs, such as `syslog`, `fluentd`, or `gelf`. The stack files set the driver per service, so a default in `daemon.json` does not apply. `docker service logs` then works only for drivers that can be read back, which these are not.
 - **A log agent on every node.** Run an agent that reads container logs through the Docker API and forwards them. The stack files stay as they are, and `docker service logs` keeps working.
 
-Keep the lines that start with `circleci-runner-entrypoint:` and `circleci-runner:`, and alert on the signals in [Check status and logs](#check-status-and-logs).
+Keep the lines that start with `circleci-runner-entrypoint:`, `circleci-runner:`, and `runner-distributor:`, and alert on the signals in [Check status and logs](#check-status-and-logs).
 
 ### Monitor the cluster
 
@@ -82,6 +88,7 @@ $ curl -s -H "Circle-Token: $CIRCLECI_API_TOKEN" \
 | Jobs that wait | `/api/v3/runner/tasks`, `unclaimed_task_count` | Above 0 for several minutes. With every replica busy, add replicas. With idle replicas, check [concurrency](#capacity-and-concurrency) |
 | Jobs that run | `/api/v3/runner/tasks/running`, `running_runner_tasks` | Equal to the replicas of the class for a long time: the class is full |
 | Task exits | `docker service ps` | Exit code 80, or a restart loop. Refer to [The container restarts every 10 seconds](troubleshooting.md#the-container-restarts-every-10-seconds) |
+| Runner distributor | `docker service ps runners_runner-distributor`, and its log | Fewer running tasks than Linux nodes, or log lines with `cannot download` or `SHA-256 mismatch`. A line with `not adopting it` says that `current` is not a version that the distributor follows |
 | Disk | `docker system df` and the free space of the Docker data directory | Above 80 percent. Refer to [Free disk space](#free-disk-space) |
 
 ### Capacity and concurrency
@@ -153,7 +160,7 @@ Upgrade one node at a time, managers first and then workers, and wait until the 
 2. Upgrade Docker and reboot. Unlock a manager that uses autolock.
 3. Return the node to service, and check that `docker node ls` shows it `Ready`, and a manager `Reachable` or `Leader`.
 
-Managers go one at a time so the quorum holds: with three managers, one is down at most. Leave mixed Docker versions in place only for the length of the upgrade. The runner and the entrypoint upgrade separately, with no stop. Refer to [Upgrade the runner on Linux](#upgrade-the-runner-on-linux).
+Managers go one at a time so the quorum holds: with three managers, one is down at most. Leave mixed Docker versions in place only for the length of the upgrade. The runner upgrades separately, with no stop. Refer to [Upgrade the runner on Linux](#upgrade-the-runner-on-linux).
 
 ### Node death
 
@@ -172,64 +179,126 @@ Swarm replaces containers one at a time. The stack files set `update_config` to 
 
 ### Upgrade the runner on Linux
 
-> [!NOTE]
-> Draft of a new default: with the [runner distributor](runner-distributor.md) there is no install on the host, and an upgrade is a change of three pins and `docker stack deploy`. The steps below stay valid until it replaces them.
+The `runner-distributor` service is the only way a runner reaches a Linux node, and it is the only place that says which version the nodes run. A runner service carries no version and no hash. An upgrade, a pin, and a rollback therefore change the distributor service only: no runner service restarts, and no job is interrupted. Refer to [The runner distributor on Linux](concepts.md#the-runner-distributor-on-linux) for the model.
 
-The runner lives on the host in `/opt/machine-runner-swarm/<version>/bin`, not in the images. The stack mounts the link `/opt/machine-runner-swarm/current` at `/opt/machine-runner-swarm`. An upgrade installs the new version next to the old one and moves the link. Docker follows the link when it creates a container, so every new container, which is the next job of every replica, runs the new version. A job that runs now finishes on the old version, because its container keeps the directory that it started with. Nothing stops, so no job is interrupted.
+A container resolves the link `current` once, when it starts. A job that runs now, and its container, keep their version. The next container, which is the next job, gets the new one. Idle replicas keep the old binary until they claim a job or exit after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack files.
 
-1. Pick the new version. Use the latest `3.1.x` or later, and never a version below 3.1.12. The [runner changelog](https://circleci.com/changelog/runner/) lists releases.
-2. On every node, install the new version and move the link. The helper downloads the runner, verifies the checksum from the release's `checksums.txt`, installs it into `/opt/machine-runner-swarm/<new version>`, and then replaces the link with one atomic rename:
+#### Settings of the distributor
 
-   ```console
-   $ sudo linux/setup.sh --install --version <new version> --sha256 <hash>
-   ```
+The settings are variables of `docker stack deploy`. They apply to the distributor service only. The file `linux/stack/runners.yaml` reads them in `x-distributor-env` and sets the defaults.
 
-   The hash is the one of the `circleci-runner_linux_<arch>.tar.gz` file of the node's architecture. To do it by hand, repeat the commands of [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint) with the new directory, and then move the link: `ln -s <new version> /opt/machine-runner-swarm/.current.new && mv -T /opt/machine-runner-swarm/.current.new /opt/machine-runner-swarm/current`.
+| Variable | Default | Effect |
+|---|---|---|
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | `current` | `current` follows the manifest of CircleCI. A version such as `3.1.12` pins that version |
+| `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` | `3` | The major version that `current` may adopt |
+| `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often the distributor looks again. A number of seconds, or a number with `s`, `m`, `h`, or `d` |
+| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `https://circleci-binary-releases.s3.amazonaws.com/circleci-runner` | Where `manifest.json` and the tarballs are. Set it for a [mirror](#run-the-downloads-from-a-mirror) |
+| `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | Empty | A comma-separated list of the SHA-256 values of the tarballs that may be installed, for every architecture of your nodes. It replaces the value of the manifest. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) |
 
-3. Check the version on each node:
-
-   ```console
-   $ readlink /opt/machine-runner-swarm/current
-   $ /opt/machine-runner-swarm/current/bin/circleci-runner --version
-   ```
-
-4. Move the replicas that already wait for a job. A replica that is idle keeps the old version until it claims a job or exits after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack files. A persistent class runs one container for all jobs, so it keeps the old version until you recycle it. To move a service now, force an update. An idle replica stops within seconds, and a busy one finishes its job first:
-
-   ```console
-   $ docker service update --force runners_linux-default
-   ```
-
-5. To roll back, run the same command with the previous version. A version that is installed is not downloaded again, and the command only moves the link back. Then force the update again.
-
-   ```console
-   $ sudo linux/setup.sh --install --version <previous version>
-   ```
-
-6. Delete the old version when no container uses it: `sudo rm -rf /opt/machine-runner-swarm/<old version>`. The entrypoint always comes from the checkout that you run the helper from, and every run copies it into the version directory.
-
-#### Install on every node with one command
-
-A Swarm global job runs a short script on every node from a small image, so you do not log in to each node. The script `linux/install-job.sh` does what `setup.sh --install` does with the tools of Alpine (BusyBox): `wget`, `sha256sum`, and `tar`. It reads the architecture from `uname -m`. The job mounts `/opt` of the node, and the entrypoint reaches it as a Swarm config, because it comes from this repository and not from the runner release. Run it on a manager node:
+A command that sets a variable must reach `docker stack deploy`. A host with `sudo` drops the environment, so pass the variable with `env`, or run the command as a user in the `docker` group. Set the same variables on every later deploy, because a deploy without them sets the defaults again.
 
 ```console
-$ docker config create machine-runner-swarm-entrypoint-<date> linux/entrypoint/circleci-runner-entrypoint
-$ docker service create --name runner-install --mode global-job --restart-condition none \
-    --constraint node.platform.os==linux \
-    --mount type=bind,source=/opt,target=/host-opt \
-    --config source=machine-runner-swarm-entrypoint-<date>,target=/circleci-runner-entrypoint,mode=0444 \
-    --env MACHINE_RUNNER_SWARM_VERSION=<new version> \
-    --env MACHINE_RUNNER_SWARM_SHA256_AMD64=<hash> --env MACHINE_RUNNER_SWARM_SHA256_ARM64=<hash> \
-    alpine:3.22 sh -c "$(cat linux/install-job.sh)"
-$ docker service ps runner-install
-$ docker service rm runner-install
+$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 docker stack deploy -c deploy/runners.yaml runners
+$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 linux/setup.sh --deploy --stack-file deploy/runners.yaml
 ```
 
-`docker service ps` shows one task for each node, and every task ends in `Complete`. Read `docker service logs runner-install` for the line `[ ok ] ... current -> <version>` of each node. Then continue with step 4 above. Notes:
+#### What the default does
 
-- A global job runs on the nodes that exist when you create it. A node that joins later has no install, so run the helper on it, or remove the job and create it again.
-- Swarm configs are immutable. Create a new config, with a new name, for each change of the entrypoint.
-- To roll back, create the job again with the previous version. An installed version is only switched to.
-- The job runs as root and writes to `/opt` of every node, so start it only from a manager that you trust. Pin the image by digest in production. Every node needs HTTPS access to `circleci-binary-releases.s3.amazonaws.com`.
+With `current`, the distributor reads `manifest.json` when it starts and at every check interval. It finds the version that `current` names by matching the SHA-256 of `current` to a versioned entry of the manifest. It adopts that version only when its major version equals `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`. For another major version it logs `not adopting it` and keeps what it has.
+
+For a new version, it downloads the tarball, checks the SHA-256 of the tarball, extracts the runner, records the SHA-256 of the binary, and moves the link `current` with one atomic rename. A new release reaches every node within one check interval, with no redeploy. At every check the distributor also compares the active binary with its record, and it installs the version again when the binary changed.
+
+To move the replicas that already wait for a job, force an update. An idle replica stops within seconds, and a busy one finishes its job first:
+
+```console
+$ docker service update --force runners_linux-default
+```
+
+A persistent class runs one container for all jobs, so it keeps its version until its container restarts. Recycle it in a quiet moment, for example with `docker service update --force runners_linux-persistent`. Refer to [Recycle a class](#recycle-a-class).
+
+#### Pin a version
+
+A version such as `3.1.12` pins that version. The distributor takes its SHA-256 from the manifest, installs it, and never moves to another version by itself. Pin a version when a change of the runner must go through your own change process, and then upgrade by changing the pin.
+
+```console
+$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.13 docker stack deploy -c deploy/runners.yaml runners
+```
+
+A strict organization sets `MACHINE_RUNNER_SWARM_RUNNER_SHA256` too, with the SHA-256 values of the tarballs from the `checksums.txt` of that release. The distributor then installs only a tarball with one of these values, whatever the manifest says. With `current`, a new release is refused until you update the list, so set the list together with a pinned version.
+
+The distributor switches to a version that is installed already without any network access. Use `3.1.12` or later: it fixes the enforcement of `max_run_time`.
+
+#### Freeze the nodes now
+
+To stop all change at once, pin the version that the nodes run now. That version is installed, so the pin needs no network. Read it first, as in [See what runs](#see-what-runs), and then update the distributor:
+
+```console
+$ docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 runners_runner-distributor
+```
+
+Set the same value in the environment of your next `docker stack deploy`. A deploy without it sets `current` again.
+
+#### Roll back
+
+A rollback is a pin of an older version. The distributor keeps the last 3 versions that were active, so a rollback to one of them only moves the link: no download, and no network. A version that was removed is downloaded again.
+
+```console
+$ docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.11 runners_runner-distributor
+```
+
+The next container of every runner service runs the old version. Running jobs are not affected. Set the same value in the environment of your next `docker stack deploy`, as for the pin above.
+
+#### What the distributor keeps
+
+Each version takes about 75 MB in the volume. After each flip the distributor removes the versions beyond the last 3 that were active, and it never removes the active one. The file `history` in the volume lists the versions with the time of each flip.
+
+#### See what runs
+
+The distributor logs each flip, and each version that it installs or finds installed:
+
+```console
+$ docker service logs --tail 20 runners_runner-distributor
+```
+
+The volume `runners_runner-bin` exists on every node, so run these commands on the node that you want to inspect:
+
+```console
+$ docker run --rm -v runners_runner-bin:/v:ro alpine readlink /v/current
+$ docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/history
+```
+
+The runner of a container names the version directory that the container resolved when it started:
+
+```console
+$ docker top <container ID> | grep circleci-runner
+```
+
+#### Run the downloads from a mirror
+
+A site without a route to the release bucket of CircleCI serves two things from an internal HTTP server: `manifest.json`, and the tarball `<version>/circleci-runner_linux_<arch>.tar.gz` of every version that the nodes may run. The distributor builds the address of a tarball from the base URL and the version, and it does not follow the `url` fields of the manifest, so a mirror may hold a copy of `manifest.json` unchanged.
+
+```console
+$ base=https://circleci-binary-releases.s3.amazonaws.com/circleci-runner
+$ mkdir -p mirror && curl -fsSL "$base/manifest.json" -o mirror/manifest.json
+$ jq -r '.releases | keys[] | select(test("^[0-9]"))' mirror/manifest.json
+$ for v in 3.1.12 3.1.13; do
+    mkdir -p "mirror/$v"
+    for arch in amd64 arm64; do
+      curl -fsSL "$base/$v/circleci-runner_linux_$arch.tar.gz" -o "mirror/$v/circleci-runner_linux_$arch.tar.gz"
+    done
+  done
+```
+
+Serve the directory `mirror`, and point the distributor at it:
+
+```console
+$ sudo env MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner docker stack deploy -c deploy/runners.yaml runners
+```
+
+- Copy the tarballs of the architectures that your nodes have. With `current`, copy the version that `current` names, and copy `manifest.json` again when you want the nodes to adopt a new release. The command `jq -r '.releases as $r | $r.current.linux.amd64.sha256 as $s | $r | to_entries[] | select(.key | test("^[0-9]")) | select(.value.linux.amd64.sha256 == $s) | .key' mirror/manifest.json` prints that version.
+- The distributor downloads with the `wget` of the stock Alpine image and its CA bundle, so an `https` mirror needs a certificate from a public certificate authority.
+- For plain `http` inside a trusted network, set `MACHINE_RUNNER_SWARM_RUNNER_SHA256` together with a pinned version. The manifest then travels unprotected, and the list keeps it out of the chain.
+- The mirror replaces the runner download only. Every runner container still downloads its task agent from `circleci-binary-releases.s3.amazonaws.com`, and every node still pulls the `alpine` image of the distributor from a registry. Refer to [Does it work on hosts without internet access?](faq.md#does-it-work-on-hosts-without-internet-access).
 
 ### Upgrade the runner on Windows
 
@@ -278,8 +347,18 @@ For a single service, you can also run `docker service update --image <new image
 
 1. Read the [changelog](../CHANGELOG.md). Entries marked `[BREAKING]` say what to change.
 2. Compare your stack file with the file of the new release, and merge the differences.
-3. Install the new `circleci-runner-entrypoint` on every Linux node. The install step copies the runner and the entrypoint together into the version directory. A new release can change the entrypoint, and the stack runs the copy behind `/opt/machine-runner-swarm/current`. Run `sudo linux/setup.sh --install --version <installed version>` from the new checkout, which refreshes the entrypoint and keeps the version.
-4. Run `docker stack deploy` with the same set of `-c` files as before.
+3. Run `docker stack deploy` with the same set of `-c` files as before, and with the same distributor variables as before.
+
+The entrypoint and the script of the distributor are Swarm configs, so this command is the whole upgrade. A Swarm config cannot change, so the name of each config carries the first 12 hex digits of the SHA-256 of its file. A release that changes the entrypoint or the script has new names. `docker stack deploy` creates the new config and updates the services that use it: the runner services one replica at a time, as in [Upgrade the runner and images](#upgrade-the-runner-and-images), and the distributor on every node.
+
+If you edit one of these files in your own copy, rename the config in your stack file after each edit, or Swarm keeps the old file. The new name is the old prefix and the first 12 digits of the new hash:
+
+```console
+$ sha256sum linux/entrypoint/circleci-runner-entrypoint | cut -c1-12
+$ sha256sum linux/runner-distributor.sh | cut -c1-12
+```
+
+In a clone of this repository, `ci/config-names.sh --write` renames the configs of the shipped stack files.
 
 ## Rotate a runner token
 
@@ -424,7 +503,7 @@ An image like this is not part of the default path, and this repository does not
 
 ## Recycle a class
 
-A forced update replaces every replica of a service, one at a time, each with a runner drain. Use it to pick up a new runner binary on the host, or to reset a persistent class.
+A forced update replaces every replica of a service, one at a time, each with a runner drain. Use it to move a persistent class to a new runner version, or to reset it.
 
 ```console
 $ docker service update --force runners_linux-persistent
@@ -463,12 +542,14 @@ On a node that runs a docker-build class, jobs also leave images, volumes, and b
 
    The volume of the Windows persistent class is `runners_windows-persistent-cache`.
 
-3. Remove the nodes from the Swarm. Run `docker swarm leave` on each worker, then `docker swarm leave --force` on the last manager.
-4. Remove the host files:
+   On Linux, the volume `runners_runner-bin` holds the runner and stays on every node after `docker stack rm`. Remove it on every Linux node:
 
    ```console
-   $ sudo rm -rf /opt/machine-runner-swarm
+   $ docker volume rm runners_runner-bin
    ```
+
+3. Remove the nodes from the Swarm. Run `docker swarm leave` on each worker, then `docker swarm leave --force` on the last manager.
+4. On Windows, remove the host files. Linux nodes have none:
 
    ```powershell
    cmd /c rmdir C:\machine-runner-swarm\current

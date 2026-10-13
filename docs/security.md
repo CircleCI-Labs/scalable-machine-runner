@@ -134,7 +134,7 @@ Read the table this way:
 | Shutdown | `init: true`, and `stop_grace_period: 5h5m` so that a running job finishes |
 | Capabilities | Default classes drop `NET_RAW` and `MKNOD`. The hardened class drops all and adds back `CHOWN` and `FOWNER` (the entrypoint sets the owner of directories), `SETUID` and `SETGID` (the step-down), `KILL` (the init process signals the runner, which has another uid), and `AUDIT_WRITE` (sudo audit messages) |
 | Limits | `pids: 4096`, `nofile` 65536, no core dumps, and reservations that equal the limits |
-| Network | One overlay network for each class, and no published ports, so SSH rerun is off |
+| Network | One overlay network for each class, and no published ports, so SSH rerun is off unless you deploy the SSH add-on stack file |
 | Runner version | 3.1.12 or later |
 
 Swarm ignores `security_opt`, `privileged`, `userns_mode`, and the short `tmpfs` form, and its tmpfs mounts are not executable. The stack therefore sets no `no-new-privileges` and no `read_only` filesystem. The default seccomp and AppArmor profiles of Docker apply.
@@ -164,7 +164,7 @@ Do not set the variable to `true` on Linux. Refer to [Error: failed to remove wo
 | Logs | Text format. The `json-file` log driver with rotation |
 | Shutdown | `stop_grace_period: 5h5m`. A stop from outside kills a busy container after about 5 seconds, so change a service while its class is idle. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container) |
 | Limits | CPU and memory limits. The Windows engine rejects `pids` and `ulimits` |
-| Network | No published ports, so SSH rerun is off |
+| Network | No published ports, so SSH rerun is off unless you deploy the SSH add-on stack file |
 
 `init`, `cap_drop`, `read_only`, and `tmpfs` have no effect on Windows.
 
@@ -208,7 +208,7 @@ The stack cannot decide which projects may use a class. Apply these controls in 
 
 3. **Context restrictions.** Project restrictions, security groups, and expression restrictions combine with logical AND. Restrict every context that jobs on a runner class use. For deploy contexts, add an expression such as `pipeline.git.branch == "main" and not job.ssh.enabled`.
 4. **No fork builds on public projects.** CircleCI does not make self-hosted runners available to public projects that have **Build forked pull requests** enabled.
-5. **SSH rerun stays off.** Leave `CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR` unset. The stack publishes no ports, so it cannot serve SSH anyway.
+5. **SSH rerun stays off unless a class needs it.** The shipped classes leave `CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR` unset and publish no ports, so they cannot serve SSH. If you deploy the SSH add-on stack file, keep its class for named projects and restrict inbound port 54782. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh).
 6. **Monitoring.** Watch the runner inventory for names you do not know, and the logs for `401` and for exit code 80.
 
 Runner classes are usable only by jobs of the organization that owns them.

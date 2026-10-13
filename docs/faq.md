@@ -119,11 +119,15 @@ A replica needs about 10 seconds for the restart delay, plus the start-up time o
 
 ## Do I need to open inbound ports?
 
-No. Runners connect outbound over HTTPS, and the stack publishes no ports. Multi-node clusters need the Swarm ports between the nodes. Refer to [Inter-node ports](multi-node.md#inter-node-ports).
+No. Runners connect outbound over HTTPS, and the shipped classes publish no ports. Only the optional SSH add-on publishes port 54782, for [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh). Multi-node clusters need the Swarm ports between the nodes. Refer to [Inter-node ports](multi-node.md#inter-node-ports).
 
 ## Can I run a long-lived runner with warm caches?
 
 Yes, with a persistent class. It gives up the clean environment, so use it only for trusted projects. Refer to [Persistent mode](resource-classes.md#persistent-mode).
+
+## Can I use Rerun job with SSH?
+
+Yes, with the add-on stack file `ssh-rerun.yaml`. It defines the class `linux-default-ssh` (`windows-default-ssh` on Windows), which sets `CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR`, publishes port 54782 in host mode, and runs at most one replica on each node. A rerun uses the class of the original job, so the job that you debug must run on that class. The Swarm side was proven by hand with a real runner. No CI test logs in over SSH, and the Windows file is untested. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh).
 
 ## Can a job read the runner token?
 

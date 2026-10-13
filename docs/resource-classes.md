@@ -1,12 +1,12 @@
 ---
 page-title: Resource classes
 page-audience: admin
-page-description: Define resource classes as Swarm services, size their limits, choose replica counts, run persistent classes, and look up every setting the stack files use.
+page-description: Define resource classes as Swarm services, size their limits, choose replica counts, run persistent classes, enable Rerun job with SSH, and look up every setting the stack files use.
 ---
 
 # Resource classes
 
-Each Swarm service in a stack file is one CircleCI resource class. This page describes how to define a class, size it, choose its replica count, and run a persistent class. It ends with a reference of every environment variable that the stack files and the entrypoint use.
+Each Swarm service in a stack file is one CircleCI resource class. This page describes how to define a class, size it, choose its replica count, run a persistent class, and enable Rerun job with SSH. It ends with a reference of every environment variable that the stack files and the entrypoint use.
 
 ## Define a class
 
@@ -160,6 +160,31 @@ docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.ya
 ```
 
 Swarm still replaces the container when the runner exits. Only the volume survives the replacement. On Windows, the runner and the jobs use the same account, so the runner cleans the working directory, and `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` stays `"true"`.
+
+## Rerun job with SSH
+
+The add-on stack files `linux/stack/ssh-rerun.yaml` and `windows\stack\ssh-rerun.yaml` define the classes `linux-default-ssh` and `windows-default-ssh`. Their runners support **Rerun job with SSH**, which opens a shell in a running job so that a user can debug it. Deploy them only if you need this. The default classes publish no port and cannot serve SSH.
+
+A runner turns the feature on when `CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR` is set. The task agent then starts an SSH server on port 54782, which is fixed, and the **Enable SSH** and **Wait for SSH** steps show the advertised address. CircleCI only displays that address, so it can be any name or IP address that your users can reach. The add-on files set it to `{{.Node.Hostname}}:54782`, and Swarm fills in the node name for each task. If your DNS does not resolve the node hostnames, write a name or an address that it does, for example `{{.Node.Hostname}}.example.com:54782`.
+
+The file publishes port 54782 in host mode, so it opens on the node that runs the task. The default ingress mode would send a connection to any replica of the class, which can be another user's job. A node has one port 54782, so the service sets `max_replicas_per_node: 1`, and replicas beyond the number of eligible nodes stay pending.
+
+A rerun uses the resource class of the original job. To debug a job, run it on the SSH class by setting its `resource_class` to `<namespace>/linux-default-ssh`. To give an existing class SSH instead, copy three settings from the add-on file into that service in your copy of the stack file: the environment variable, the host-mode port, and `max_replicas_per_node: 1`. Every replica of that class then needs its own node.
+
+```console
+$ printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create linux-default-ssh-token -
+$ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/ssh-rerun.yaml runners
+```
+
+Before you use it:
+
+- **Firewall.** Open inbound TCP 54782 on the nodes that run the class, only from the networks where your users connect, such as a VPN. Runners need no other inbound port.
+- **SSH key.** A user adds a public key in their CircleCI user settings. Without a key, the **Enable SSH** step does not appear.
+- **Concurrency.** A rerun with SSH holds the runner for up to 2 hours after a user connects, or 10 minutes if nobody does. The job counts against the concurrency limit of your organization, and the replica takes no other job. With one replica for each node, a forgotten session blocks the node, so size the class for it.
+- **Cancel.** Cancel the rerun in the web app or with the CLI when you finish. The container then exits, and Swarm starts a new one.
+- **Security.** The SSH user gets the privileges of the job user, and can reach what the job reached. Anyone who can start a job on the class can rerun it with SSH, and only the user who reruns gets their keys added. In `linux-default-ssh` the job user keeps sudo, as in `linux-default`, so the SSH user can read the runner token. Set `MACHINE_RUNNER_SWARM_JOB_SUDO` to `"false"` to prevent this. Keep the class for named projects, and keep deploy contexts away from SSH reruns. Refer to [CircleCI-side controls](security.md#circleci-side-controls).
+
+On Windows, the SSH user must name the shell: `ssh -p 54782 <host> -- powershell.exe`. Open the port in Windows Defender Firewall as well. The Windows file is not tested.
 
 ## Configuration reference
 

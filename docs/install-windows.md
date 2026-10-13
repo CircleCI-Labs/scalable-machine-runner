@@ -102,7 +102,7 @@ Create a namespace if your organization has none.
 $ circleci namespace create <namespace> --org <org>
 ```
 
-Create one resource class for each service in the stack files. The class name must equal the service name. The shipped file `windows\stack\runners.yaml` has the service `windows-default` and deploys on its own. The optional add-on stack files in the same directory add `windows-custom` (`custom-image.yaml`), `windows-persistent` (`persistent.yaml`), and `windows-docker-build` (`docker-build.yaml`). Create the classes you plan to use.
+Create one resource class for each service in the stack files. The class name must equal the service name. The shipped file `windows\stack\runners.yaml` has the service `windows-default` and deploys on its own. The optional add-on stack files in the same directory add `windows-custom` (`custom-image.yaml`), `windows-persistent` (`persistent.yaml`), `windows-docker-build` (`docker-build.yaml`), and `windows-default-ssh` (`ssh-rerun.yaml`, untested). Create the classes you plan to use.
 
 ```console
 $ circleci runner resource-class create <namespace>/windows-default --org <org> --generate-token
@@ -285,6 +285,7 @@ The stack files use absolute host paths, so they work from any directory. Copy e
 | `windows-custom` | `custom-image.yaml` | Your own image on top of stock Server Core. Refer to [Images](images.md#windows-bring-your-own-image) |
 | `windows-persistent` | `persistent.yaml` | A long-lived runner with a named volume. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
 | `windows-docker-build` | `docker-build.yaml` | Builds Windows images with the host engine. Refer to [Docker Builds](docker-builds.md) |
+| `windows-default-ssh` | `ssh-rerun.yaml` | Supports Rerun job with SSH and publishes port 54782. Untested on Windows. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh) |
 
 - `runners.yaml` needs only the secret `windows-default-token`. Each add-on stack file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
 - A Server 2025 node runs the shipped `ltsc2022` services. For a class on the `ltsc2025` image, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-ltsc2025 == true`.

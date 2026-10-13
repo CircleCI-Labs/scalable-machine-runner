@@ -267,6 +267,7 @@ The optional classes are separate add-on stack files. Add each with another `-c`
 |---|---|---|
 | `linux/stack/docker-build.yaml` (copy to `deploy/`) | `linux-docker-build` | Builds images with the host Docker engine. Needs a labeled worker node. Refer to [Docker Builds](docker-builds.md) |
 | `linux/stack/persistent.yaml` (copy to `deploy/`) | `linux-persistent` | A long-lived runner with a named volume. Needs the node name edited in the file. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
+| `linux/stack/ssh-rerun.yaml` (copy to `deploy/`) | `linux-default-ssh` | A class that supports Rerun job with SSH. Publishes port 54782 on the node. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh) |
 
 An add-on stack file repeats the common service settings of `runners.yaml`, because YAML anchors do not cross files. When you change a common setting, such as `stop_grace_period` or the logging options, change it in every file that you use.
 

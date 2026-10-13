@@ -49,6 +49,7 @@ This section is the short answer for users and reviewers. The pipeline sections 
 | The docker-build add-on stack file with a real job | The Windows named pipe is never used by a test |
 | Real jobs on arm64 | `linux-arm64` is a smoke test: the install and the start of the stack |
 | RHEL and SELinux | The steps follow Docker's documentation |
+| Rerun job with SSH (`ssh-rerun.yaml`) | CI checks that the files parse and merge and keep the contract, including the host-mode port 54782, `max_replicas_per_node: 1` and the advertise address. The Swarm side was proven by hand on a Linux Swarm with a real runner: the **Enable SSH** step runs, and the task agent answers on port 54782 of the node. No test logs in over SSH, and the Windows file is untested |
 | Windows Server 2019, Hyper-V isolation, group managed service accounts, proxies, and `add_ssh_keys` | Not exercised, and the docs say so |
 | `publish()` of the release job | It stops before publishing without `GITHUB_TOKEN`, so the first release is its first real run |
 

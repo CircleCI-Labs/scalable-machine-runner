@@ -25,6 +25,7 @@ The `ERROR` column of `docker service ps --no-trunc runners_<service>` shows `no
 
 - `scheduling constraints not satisfied on N nodes`: no node matches the constraints. A label is missing, the OS or architecture differs, or the service needs a worker and the label sits on a manager.
 - `insufficient resources on N nodes`: the reservations of the replicas exceed what the matching nodes have free. Reservations equal the limits, so extra replicas wait on purpose.
+- An error that mentions `max replicas per node`: the SSH add-on runs one replica on each node, because a node has one host-mode port 54782. Add nodes, or lower `replicas`.
 
 **Fix.** Compare the constraints of the service with the labels of the nodes.
 
@@ -60,7 +61,7 @@ The restart delay is a pause between starts, not a back-off. Swarm creates the r
 
 **Cause.** A service references an external secret that does not exist. Every service in the file needs its `<service>-token` secret.
 
-**Fix.** Create the secret, or delete the service from your copy of the stack file together with its entries under `secrets:` and `networks:`. On Windows, `runners.yaml` needs only `windows-default-token`, and each add-on stack file (`custom-image.yaml`, `persistent.yaml`, `docker-build.yaml`) needs its own `<service>-token` secret when you deploy it.
+**Fix.** Create the secret, or delete the service from your copy of the stack file together with its entries under `secrets:` and `networks:`. On Windows, `runners.yaml` needs only `windows-default-token`, and each add-on stack file (`custom-image.yaml`, `persistent.yaml`, `docker-build.yaml`, `ssh-rerun.yaml`) needs its own `<service>-token` secret when you deploy it.
 
 ### The runner log shows 401
 

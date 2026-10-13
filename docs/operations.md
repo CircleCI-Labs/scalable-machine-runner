@@ -172,6 +172,9 @@ Swarm replaces containers one at a time. The stack files set `update_config` to 
 
 ### Upgrade the runner on Linux
 
+> [!NOTE]
+> Draft of a new default: with the [runner distributor](runner-distributor.md) there is no install on the host, and an upgrade is a change of three pins and `docker stack deploy`. The steps below stay valid until it replaces them.
+
 The runner lives on the host in `/opt/machine-runner-swarm/<version>/bin`, not in the images. The stack mounts the link `/opt/machine-runner-swarm/current` at `/opt/machine-runner-swarm`. An upgrade installs the new version next to the old one and moves the link. Docker follows the link when it creates a container, so every new container, which is the next job of every replica, runs the new version. A job that runs now finishes on the old version, because its container keeps the directory that it started with. Nothing stops, so no job is interrupted.
 
 1. Pick the new version. Use the latest `3.1.x` or later, and never a version below 3.1.12. The [runner changelog](https://circleci.com/changelog/runner/) lists releases.

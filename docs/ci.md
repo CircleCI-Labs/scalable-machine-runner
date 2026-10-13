@@ -1,0 +1,347 @@
+# CI/CD for this repository
+
+The pipeline lints everything, tests the Linux and Windows Swarm stacks, and proves with real
+CircleCI jobs that every job runs in a fresh container, whether the runner is hosted by a
+Swarm service on Linux or on Windows. It never publishes images. Scan reports and logs are kept
+as job artifacts.
+
+- Setup config: [`.circleci/config.yml`](../.circleci/config.yml)
+- Pipeline: [`.circleci/continue.yml`](../.circleci/continue.yml)
+- E2E helpers and their simulation: [`ci/`](../ci)
+- Lint settings: `.hadolint.yaml`, `.yamllint.yaml`, `.shellcheckrc`,
+  `PSScriptAnalyzerSettings.psd1`, `.trivyignore`, `lychee.toml` (repository root)
+
+## Pipeline shape
+
+There is one workflow, `ci`. Every job of it is listed in `.circleci/continue.yml`. The `setup` job passes four boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled.
+
+```mermaid
+flowchart TD
+  setup["setup (1 small job)<br/>decides what runs, then continues with continue.yml"]
+  setup --> ci["workflow ci"]
+  ci --> base["every pipeline: lint, Linux jobs, Windows 2022 jobs"]
+  ci --> full["full-suite: Windows 2025 jobs"]
+  ci --> e2el["e2e-linux: Linux e2e group"]
+  ci --> e2ew["e2e-windows: Windows e2e groups, 2022 then 2025"]
+  base --> release
+  full --> release
+  e2el --> release
+  e2ew --> release
+  release["release: main with both e2e tokens, after every job above"]
+```
+
+| Runs when | Job | Executor | What it does |
+|---|---|---|---|
+| every pipeline | `lint-shell` | `koalaman/shellcheck-alpine:v0.11.0` | `shellcheck -S warning` on every `*.sh` file and every sh/bash shebang script |
+| every pipeline | `lint-dockerfiles` | `hadolint/hadolint:v2.15.1-debian` | Linux and Windows Dockerfiles. Warnings fail; only `docker.io`, `registry.access.redhat.com` and `mcr.microsoft.com` are allowed in `FROM` |
+| every pipeline | `lint-yaml` | `cimg/python:3.14.8` + yamllint 1.38.0 | `yamllint --strict .` |
+| every pipeline | `lint-stack` | `docker:29.9.0-cli` | `docker stack config -c` on every file in `linux/stack` and `windows/stack` alone, on all files of each OS together (the optional files are overlays), and on `windows/tests/stack.e2e.yaml`: the stack files must parse, merge and interpolate. No daemon or Swarm needed |
+| every pipeline | `lint-powershell` | `mcr.microsoft.com/powershell:7.5-ubuntu-24.04`, medium (the 5.1-compatibility analysis needs about 2.7 GB) | PSScriptAnalyzer 1.25.0 over `windows/` and `ci/` (errors and warnings fail), then `windows/tests/Invoke-UnitTests.ps1` on PowerShell 7: an ASCII check and the Pester 5.7.1 suites, including `Stack.Tests.ps1`, which keeps the stack files' invariants (no entrypoint script, the runner as the entrypoint, the secret target, Git's mount path, PATH, and that every named volume and secret is declared: `docker stack config` does not catch an undeclared volume, `docker stack deploy` fails with `undefined volume`). Pester runs without a terminal (it hangs under CircleCI's pseudo-terminal) |
+| every pipeline | `lint-circleci` | `cimg/base:2026.10` + CircleCI CLI 1.4.0 | `circleci config validate` on both config files, `circleci config process` with every parameter on (`validate` alone does not compile the filtered jobs), and a check that the `release` job requires every other job (below) |
+| every pipeline | `lint-markdown` | `davidanson/markdownlint-cli2:v0.18.1` | `.markdownlint-cli2.yaml` on every Markdown file; `docs/ci.md` with the same rules (the repository config ignores it) |
+| every pipeline | `lint-docs-links` | `lycheeverse/lychee:0.24.2` | Relative links and `#heading` anchors in every Markdown file, offline (external URLs are not fetched: the job is fast and never flaky) |
+| every pipeline | `lint-docs-mermaid` | `minlag/mermaid-cli:12.0.1`, medium | Renders every `mermaid` block in every Markdown file; a syntax error fails the job |
+| every pipeline | `e2e-simulation` | `ubuntu-2604:current` | `ci/tests/e2e-sim.sh`: the Linux e2e host and probe scripts against a fake runner in `docker:dind` (below) |
+| every pipeline | `linux-swarm` | `ubuntu-2604:current`, xlarge (two test nodes share the VM) | `linux/tests/run-all.sh`: stack validation, the installer, ephemerality with a negative control, exit 80, token readability, real runner tasks through the step-down (`task.sh`), placement, persistent mode, draining, network isolation, limits and the entrypoint unit tests. Everything runs in a single-node and a two-node Swarm inside privileged `docker:dind` containers: the CI VM's own engine never becomes a Swarm node for these |
+| every pipeline | `linux-image-example` | `ubuntu-2604:current` | Builds `linux/images/example` (default and `baked` targets), runs the runner from the baked image, checks the entrypoint's exit 80, then Trivy (below) |
+| every pipeline | `linux-setup` | `ubuntu-2604:current` | `ci/linux-smoke.sh`: `linux/setup.sh` end to end on a fresh VM with no real token (below) |
+| every pipeline | `linux-arm64` | `ubuntu-2604:current`, `arm.medium` | The same script on an Arm VM: the arm64 runner installed by `setup.sh` runs unmodified in a stock `cimg/base` through the mount, and the shipped stack starts |
+| every pipeline | `windows-swarm-ltsc2022` | `windows-server-2022-gui:current`, windows.medium | The stock-image path on Windows (below) |
+| every pipeline | `windows-baked-ltsc2022` | `windows-server-2022-gui:current`, windows.medium | The baked-image fallback, and the example image built on it (below) |
+| `full-suite` | `windows-swarm-ltsc2025`, `windows-baked-ltsc2025` | `windows-server-2025-gui:current` | The same on Server 2025 |
+| `e2e-linux` | `e2e-linux-host`, `e2e-linux-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`; probes: `cci-labs/scalable-machine-runner-e2e-linux` | Real runner e2e (below) |
+| `e2e-windows` | `e2e-windows-2022-host` and `-b1`, `-b2`, `-b3`; then the same for 2025 | host: `windows-server-2022-gui:current` / `windows-server-2025-gui:current`; probes: `cci-labs/scalable-machine-runner-e2e-windows` | Real runner e2e (below) |
+| `release` | `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release` | The release (below). It requires every job above |
+
+**Executor images.** These were checked against the CircleCI docs on 2026-10-12:
+
+- `ubuntu-2604:current` is the newest Linux machine image and also the one that the Arm resource classes (`arm.medium`) offer.
+- Windows containers run on the Windows machine images through Docker Engine.
+- `windows-server-2025-gui` is the newest Windows image.
+
+Process isolation needs the container's OS build to match the host. That is why the 2022 jobs use `ltsc2022` images and the 2025 jobs `ltsc2025`.
+
+## Facts about the CI machines that the design depends on
+
+These were measured on 2026-10-12 and shaped the scripts. Check them first when something Swarm-related breaks in CI.
+
+| Fact | Consequence |
+|---|---|
+| Linux machine image `ubuntu-2604:current`: Docker 29.4.2 with the containerd image store (`overlayfs` snapshotter), on x86_64 and on arm64 | The writable layer is `upperdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/N/fs`; the probes hash it |
+| A service with `hostname: "{{.Node.Hostname}}-<service>-{{.Task.Slot}}"` (the shipped Linux stack) gives every container of a slot the same hostname | Probes cannot use the hostname. They read the full container ID from `/proc/self/mountinfo` (Docker bind-mounts `/etc/hostname` from `/var/lib/docker/containers/<ID>/`) and compare the writable-layer hash. The host maps the container ID to the Nth `start` event of the service |
+| `docker events` prints an empty `exitCode` for `start` events | The event format uses `{{or (index .Actor.Attributes "exitCode") "-"}}`, or the columns shift |
+| Windows machine images (Server 2022 build 20348, Server 2025 build 26100): Docker 29.4.0, default isolation `process` | Containers share the host kernel; the node must carry `windows.build=<tag>` for the stack's placement constraint |
+| `docker swarm init` on a Windows machine image fails with `could not find the system's IP address - specify one with --advertise-addr` | Pass `--advertise-addr` with the IPv4 address of the `Ethernet` adapter (the `vEthernet (nat)` adapter has a 172.x address). The Windows jobs and the documentation do this |
+| For a few seconds after `docker swarm init` on a Windows VM, outbound connections and DNS fail (`Unable to connect to the remote server`, `lookup mcr.microsoft.com: no such host`) | Every Windows job downloads and pulls first, and runs `docker swarm init` last |
+| The CircleCI Windows image has `PsExec64.exe` on the host's PATH | The task agent would use a desktop wrapper if it were on the container's PATH. The host's PATH never reaches the containers: the stack sets theirs in full, `windows\Setup.ps1` ignores the host's PsExec, and an image build checks only the image's own PATH |
+| In Windows PowerShell 5.1, piping a string to a native command appends CR LF | The Windows host writes the runner config with `[IO.File]::WriteAllText` into a file that exists only while `docker secret create` reads it |
+| On Windows a Swarm secret is a file under `C:\ProgramData\Docker\secrets`, readable by `Administrators` and `SYSTEM` only; jobs run as `ContainerAdministrator` | A job can read the runner config, so the token, on Windows. The probe records this instead of asserting a protection. The token is not in the job environment: the runner reads it from the config file |
+| `docker stop` and `docker service update` end a stock Server Core container about 5 seconds after the shutdown event (HCS waits only `WaitToKillServiceTimeout`; exit code `3221225786`, `0xC000013A`), whatever it is running | The stock image kills a running job on every stop or rolling update. `windows/images/stop-timeout` is stock Server Core plus one registry value (`WaitToKillServiceTimeout`, 18300 s), the image of the stock-image services under test; the baked image sets the same value. `Test-StopHandling.ps1` keeps the stock image as the control (the job must be killed) and proves a graceful stop on the new one, and the e2e proves it with a real job |
+| Pulling `mcr.microsoft.com/windows/servercore:ltsc2022` (about 2.2 GB compressed) onto a fresh Windows VM takes about 10 minutes | Every Windows job pays it, in a step of its own with `no_output_timeout: 30m`; it is most of the cost (below) |
+| A Windows host runs images of its own release and older ones: a 2025 host also runs `ltsc2022` images, a 2022 host cannot run `ltsc2025` images (`0xc0370101`), and nested virtualisation is not available, so only process isolation works | The Windows jobs pick the image tag from the host's build number (20348: `ltsc2022`, 26100: `ltsc2025`) |
+| A CircleCI step shell starts with SIGHUP ignored | Nothing here relies on SIGHUP |
+
+## When things run, and the setup gate
+
+| Branch or trigger | Parameters set by `setup` | Jobs |
+|---|---|---|
+| any branch | none | the `every pipeline` rows |
+| `main`, `smr-swarm/*` | `full-suite` | adds the Server 2025 jobs |
+| the same, with `E2E_RUNNER_TOKEN_LINUX` present | adds `e2e-linux` | adds the Linux e2e group |
+| the same, with `E2E_RUNNER_TOKEN_WINDOWS` present | adds `e2e-windows` | adds the Windows e2e groups |
+| `main` with both tokens | adds `release` | adds the `release` job |
+| pipeline parameter `full: true` (API call), any branch | as for `main` | as for `main`, except `release` |
+| a tag | nothing | nothing: the setup job has no tag filter, so CircleCI shows "no workflow" |
+
+There is no nightly schedule. The e2e jobs are added to the pipeline only when the `setup` job, which runs with the `scalable-machine-runner-e2e` context attached, sees a non-empty `E2E_RUNNER_TOKEN_LINUX` or `E2E_RUNNER_TOKEN_WINDOWS`. Without the context or its secrets the pipeline still runs lint and the local tests, and stays green.
+
+**Why the gate is in the setup phase.** A guard job that runs `circleci-agent step halt` is not enough on its own.
+
+- The probe jobs target a self-hosted runner class. Once a pipeline schedules them, they queue until a runner claims them, and CircleCI keeps runner jobs queued for days.
+- Halting a guard job ends only that job, so the probes would still be scheduled.
+
+The decision therefore has to happen before the e2e jobs are compiled into the workflow. The setup job also calls the continuation API itself, rather than through the `circleci/continuation` orb, because the orb prints the request body, and with it the continuation key, into a public log.
+
+## Linux jobs without a token
+
+`linux-swarm` runs L's suite and needs no secret. `linux-setup` and `linux-arm64` run [`ci/linux-smoke.sh`](../ci/linux-smoke.sh) on a fresh VM:
+
+1. `linux/setup.sh --check`, then `--swarm-init --install` twice (the second run must be a no-op).
+2. The layout is root-owned and not writable by others; the runner reports its version unmodified inside a stock `cimg/base` through `-v /opt/smr:/opt/smr:ro`, the container's architecture equals the host's, the runner binary is built for it (`file`), and `smr-entrypoint` with a config file but no runner name exits 80.
+3. The shipped stack is deployed by `setup.sh --deploy` with a made-up token (the runner gets 401 from CircleCI, which does not matter here). Inside the running `linux-default` and `linux-hardened` containers:
+   - the runner runs as `smr-runner`;
+   - the job user cannot read `/run/secrets/circleci_runner_config.yaml`, nor any other user's process environment;
+   - `linux-default` keeps sudo, and sudo can read the token (the documented outcome);
+   - `linux-hardened` has no sudo at all.
+
+`linux-image-example` builds both targets of the bring-your-own-image example and scans them. **Trivy policy:**
+
+- SBOMs (CycloneDX) and HIGH/CRITICAL reports of both images are artifacts: `reports/sbom-example*.cdx.json`, `reports/trivy-example*.{json,txt}`.
+- The gate fails on a fixable CRITICAL finding that the image **adds on top of `cimg/base`** (the same scan of the base image is subtracted). The base is upstream: it bundles Docker, Compose and yq with their own findings, and those stay visible in the reports. What this repository owns is what it puts on top, the runner and the example's packages.
+- Exceptions go in `.trivyignore`, one CVE per line, with a reason, an owner and an `exp:` date. Trivy stops honouring an entry after that date. An exception is only for findings that this repository cannot fix.
+
+## Windows jobs
+
+`windows-swarm` runs on the stock Server Core image. There is no entrypoint script: the runner (`circleci-runner.exe machine --config C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`) is the container's main process, and the runner and portable Git come from the read-only mounts `C:\smr` and `C:\Program Files\Git`. The steps are:
+
+1. Engine check: `docker info` must report `OSType windows`.
+2. Windows PowerShell 5.1 unit tests (`Invoke-UnitTests.ps1`, Pester 5.7.1; the image registers both a `Nuget` and a `PSGallery` repository, so modules are installed with `-Repository PSGallery`).
+3. `windows\Setup.ps1 -StageOnly` (runner, portable Git, ACLs), then `docker pull` of the stock image, then `windows\Setup.ps1 -InitSwarm -AdvertiseAddr <ip>` (docker swarm init and the `windows.build` node label). Staging and pulling come first because the network is down for a few seconds after the swarm is created.
+4. The Windows tests, each printing `CHECK` lines and a `RESULT` line: `Test-Injection.ps1 -Online`, `Test-Ephemerality.ps1`, `Test-Exit80.ps1`, `Test-Placement.ps1`, `Test-StopHandling.ps1 -Online` (stock Server Core is killed 5 s after a stop, the control; the stop-timeout image lets the running job finish), `Test-Persistent.ps1`. `ci\Invoke-Test.ps1` runs each in a child PowerShell and keeps its complete output as an ASCII report under `reports/` (artifacts). `Tee-Object` would write UTF-16 and would miss what a script writes with `[Console]::Out`.
+
+`windows-baked` is the fallback: it builds `windows/images/servercore` with `WINDOWS_TAG` and runs `Test-Injection.ps1 -Baked -Online` and `Test-Exit80.ps1 -Baked` without any mount, then `Test-StopHandling.ps1 -Baked -Online` (the baked image sets the stop timeout itself). It finishes with the bring-your-own-image example `windows/images/example` (the baked image plus Node.js, pinned with a SHA-256) on top, running `node`, `npm` and `git` in it.
+
+### What a Windows pass looks like
+
+Every Windows test prints `CHECK <name> PASS|FAIL <detail>` lines and one `RESULT ...` line, and exits 0 only on a pass. A CircleCI PowerShell step does not stop on a failed native command by itself, so `ci\Invoke-Test.ps1` checks the exit code of each test. The `CHECK` details in the reports are the evidence.
+
+| Test | Final line (shape) | What it proves |
+|---|---|---|
+| `Test-Injection.ps1` | `RESULT injection mode=<injected or baked> ... verdict=PASS` | OS build, the runner and Git mounts (read-only), toolchain (`bash`, GNU `tar`, administrator, symlink privilege), `tar-agent-style` (the flags and forward-slash operands of the task agent), long paths, the default PATH, exit 80, the config file, and with `-Online` a real start of the runner with a bogus token. `NOTE` lines record the exit code of a missing config file (1) |
+| `Test-Ephemerality.ps1` | `RESULT mode=restart-policy jobs=3 distinct_containers=1 jobs_with_residue=2`, then `RESULT mode=swarm jobs=3 distinct_containers=3 jobs_with_residue=0` | The negative control (a plain `docker --restart` reuses the container and sees residue) and a stack with `restart_policy: any` (a new container each time) |
+| `Test-Exit80.ps1` | `RESULT exit80 ... swarm_exits=<2..8> window=60s delay=10s verdict=PASS` | Exit 80 for a missing name, token or an invalid name, and no hot loop under Swarm (about 70 s) |
+| `Test-Placement.ps1` | `RESULT placement ... host_tag=ltsc2022 verdict=PASS` | Constrained services stay pending until the node has the label (about 2 to 4 min) |
+| `Test-StopHandling.ps1 -Online` | `RESULT stop ... job_seconds=40 verdict=PASS` | A stop lets the job finish on the stop-timeout image (`stop-docker`, whose detail names the console event), the real runner drains on `docker stop`, a Swarm secret is read as the runner config, and `docker service update` stops gracefully. A `NOTE control` line shows that the unmodified image is KILLED (`job_finished=False`, exit 3221225786, about 6 s) |
+| `Test-Persistent.ps1` | `RESULT persistent ... verdict=PASS` | Continuous mode: one long-lived container, and a named volume that survives its replacement (about 2 min) |
+
+### Windows tests: where to look first
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| `Setup.ps1 -StageOnly` fails extracting Git, or `post-install` warns | `7zr.exe` could not open the PortableGit archive, or Git's post-install scripts failed | Read the output of the `7zr.exe x` and `bash.exe --norc -c` lines |
+| `runner-mount` fails with access denied | The container identity cannot read `C:\smr` | `icacls C:\smr` must show `*S-1-5-11` (Authenticated Users) with `(RX)`; `Setup.ps1 -StageOnly` sets it |
+| `docker run` fails creating the Git mount (`invalid mount config`) | The engine refuses a bind destination under `C:\Program Files` | The task agent needs Git at exactly that path, so the fallback is the baked image (`Test-Injection -Baked`) |
+| `toolchain` fails: `bash` or `git` not found | The stack's `PATH` is wrong for this image | The detail prints the container's `PATH`; compare it with `path-default`, and fix the PATH string in `runners.yaml` and `stack.e2e.yaml` |
+| `toolchain` fails: no `SeCreateSymbolicLinkPrivilege`, or `symlink_made=False` | The container user is not an administrator | The stock Server Core default is `ContainerAdministrator`; check that no `user:` is set |
+| `path-default` lists lost entries | The image's own PATH has directories that the stack's string lacks (for example on Server 2025) | Add them to the `PATH` strings in `runners.yaml` and `stack.e2e.yaml` |
+| `online` hangs and times out | The task-agent download failed (egress to `circleci-binary-releases.s3.amazonaws.com`), or the symlink was refused | Container logs (printed): look for `A required privilege is not held by the client` |
+| `stop-real-runner` fails: not drained, exit not 0 | The shutdown event does not reach the Go runtime | Compare with `stop-docker`'s console event |
+| `Test-Placement` `*-pending` fails with `state='Running'` | The label or OS constraint was not evaluated as expected | `docker node inspect self --format '{{json .Spec.Labels}}'` |
+| `swarm` deploy fails creating a network | HNS or overlay problems on a single-NIC VM | `docker network ls`, delete a leftover `transparent` network, retry |
+
+## E2E: a runner hosted inside a CircleCI job
+
+Both e2e groups follow one pattern. Job A (the host, a cloud VM with the context attached) installs the stack and hosts the runner as a Swarm service for the resource class `cci-labs/scalable-machine-runner-e2e-<os>`. The probe jobs (B) are ordinary jobs on that class, without the context. B1 leaves residue, B2 is scheduled after B1 and must find a different container and none of the residue. A verifies independently of the probes, from `docker events`, and prints the verdict.
+
+### Linux
+
+```text
+e2e-linux (job group, serial-group <project slug>/e2e-linux)
+  e2e-linux-host (A)  ci/e2e-host.sh prepare | run | cleanup | sweep
+  e2e-linux-b1 (B1)   service linux-default
+  e2e-linux-b2 (B2)   service linux-default, requires B1
+  e2e-linux-b3 (B3)   service linux-hardened, requires B2
+```
+
+**Host.**
+
+1. `prepare` is `sudo linux/setup.sh --swarm-init --install`, the documented path.
+2. `run` creates the two secrets `linux-default-token` and `linux-hardened-token` from `E2E_RUNNER_TOKEN_LINUX` through `setup.sh --secret`. Each secret is a runner config file (`api.auth_token`), the target is `circleci_runner_config.yaml`, owned by uid 2000 with mode 0400. The token travels on stdin, never in a file or on a command line. The stack's other secret gets a placeholder.
+3. It deploys the **shipped** `linux/stack/runners.yaml` (the optional classes live in `docker-build.yaml` and `persistent.yaml` and are not deployed) with a generated override that gives the active service one replica of a digest-pinned stock `cimg/base`, a 5 minute idle timeout, and a bind mount for the evidence directory; every other service gets zero replicas. The runner binary and entrypoint come from the stack's own read-only `/opt/smr` mount.
+4. Phase 1 is `linux-default` (the job user keeps sudo) for B1 and B2. When B2 reports, the host removes the stack at once, so that its replacement container cannot claim the next probe. Phase 2 is `linux-hardened` (`SMR_JOB_SUDO=false`) for B3. Both services use the same class token, so only one is deployed at a time.
+
+**Probes** (`ci/e2e-probe.sh`):
+
+- The first step checks that `/e2e-evidence/host` names this workflow: a probe claimed by a stray runner fails there.
+- Residue: B1 plants files in `$HOME`, `/tmp`, `/var/tmp` and (with sudo) `/etc`; every probe fails if it finds an earlier probe's files.
+- Identity: the container ID (from `/proc/self/mountinfo`) and the writable layer hash must differ from the previous probe's. The step-down is checked too: the job runs as `circleci` (the image's user), the runner as `smr-runner`, the entrypoint logged `stepdown=sudo`, and `sudo -n true` works in the default service. This is the first real check of jobs through the `sudo -niHu circleci --` prefix.
+- Token readability, recorded in the evidence and printed in the verdict. As the job user, without and with sudo, it tries to read `/run/secrets/circleci_runner_config.yaml` (only byte counts are kept, never the content), it counts other users' `/proc/PID/environ` that it can read, and it checks the job environment, every process's command line and, through sudo, the runner's environment for the token's variable and key names (names only, never values). The token must be in none of them. A read without sudo must fail in both services. In the hardened service sudo must be unusable and the token unreadable with it; in the default service the sudo outcome is recorded and not asserted, because root can read the token.
+- Each probe's last step writes `passed` or `failed` to `/e2e-evidence/<probe>.<workflow>.status`, so the host stops at once on a failed probe.
+
+**Verdict** (`ci/e2e-host.sh`). It requires:
+
+- three containers with distinct IDs and exit code 0, each the one that Swarm started for its probe (the container ID in the evidence equals the Nth `start` event of that service);
+- distinct writable layers, and `residue=[]` for every probe;
+- the entrypoint's `stepdown=sudo` in the runner log, job user `circleci` and runner user `smr-runner` in every probe;
+- B3 without working sudo, and no probe able to read the token without sudo.
+
+It prints, for example (a real run, 2026-10-13):
+
+```text
+RESULT e2e=linux probes=3 distinct_containers=3 b2_residue=[] job_user=circleci runner_user=smr-runner stepdown=sudo token_in_job_env=absent token_on_command_line=absent token_default_nosudo=denied token_default_sudo=readable runner_env_via_sudo_default=no token_hardened_nosudo=denied token_hardened_sudo=no-sudo hardened_sudo_works=no verdict=PASS
+```
+
+### Windows
+
+```text
+e2e-windows-2022 (job group, serial-group <project slug>/e2e-windows)
+  e2e-windows-2022-host (A), -b1, -b2, -b3
+e2e-windows-2025 (the same group on Server 2025, requires e2e-windows-2022)
+```
+
+The host (`ci/E2E-Host.ps1`) follows the same shape, with one service and three probes:
+
+1. `Prepare` stages `C:\smr` with `windows\Setup.ps1 -StageOnly`, pulls the stock image, builds `windows/images/stop-timeout` from it for the host's tag (`smr-e2e/servercore-stop:<tag>`), and only then runs `windows\Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the node label). See the facts above for the order.
+2. `Run` takes the shipped `windows/stack/runners.yaml` as text, replaces `ltsc2022` with the host's tag (`ltsc2025` on Server 2025), layers an override on it (one replica of `windows-default` running the stop-timeout image, an idle timeout, the evidence mount). `runners.yaml` holds only `windows-default`: the optional classes are the overlays `persistent.yaml`, `custom-image.yaml` and `docker-build.yaml`, and the e2e deploys none of them, and deploys it with `--resolve-image never` (the image is local).
+3. The Swarm secret `windows-default-token` is the runner's config file (`api:` with `auth_token: <token>` under it), built from `E2E_RUNNER_TOKEN_WINDOWS`.
+4. Each probe's `SMR_INSTANCE_ID` must equal the Swarm task ID of the container that Swarm started for it (the stack sets the variable to `{{.Task.ID}}`), and the computer name must be that container's ID. The host stops its `docker events` and `docker service logs` followers before it exits: a child started with `-NoNewWindow` keeps the step's console open, and the step would hang until its `no_output_timeout`.
+5. The probes plant residue in the user profile, `%TEMP%`, `C:\ProgramData`, `C:\Users\Public`, the registry (`HKLM:\SOFTWARE\SmrE2E`) and the machine environment (`SMR_E2E`). Windows has no step-down: the runner and the jobs are the same account, so the probe records, and does not assert, whether the job can read the token.
+6. **Graceful stop, with a real job.** Probe b3 runs a 45 second step. When it announces itself (`b3.<workflow>.started`) the host runs `docker service update --force` on the service, which stops the container the way an operator or a rolling update does. The verdict requires that b3's job finishes and reports, that its container exits **0** (not `3221225786`, the kill that follows 5 seconds after a stop on stock Server Core), and that the container's exit comes after the job's end. The printed `stopped_container_exit` and `container_outlived_job_by_s` are the evidence.
+7. **Workspace and cache, with real jobs** (`ci/E2E-Storage.ps1`). B1 creates a file tree (a text file, directories `tmp` and `test-results`, `t.txt`, a symbolic link) and a cache file, records their SHA-256 sums outside the workspace, and runs `persist_to_workspace` and `save_cache`. B2 runs `attach_workspace` and `restore_cache` and compares every sum; the link must arrive as a link or a copy with the same content. The host prints `workspace=ok cache=ok symlink=...` and which tar the agent used (`use_go_tar`: when `false`, the workspace goes through Git's `tar.exe` and `gzip` in the container, the path that the stack's Git mount exists for).
+
+**Not covered by the e2e.** The persistent (continuous) class runs only in `Test-Persistent.ps1` and `linux/tests`, without real jobs. The e2e stack leaves `hostname:` unset on Windows: a fixed hostname would make `COMPUTERNAME` identical across the containers of a slot and defeat the probes (and a Windows computer name is limited to 15 characters).
+
+### Stray claims, timeouts and cleanup
+
+- **Dedicated resource classes.** Nothing else targets the two e2e classes.
+- **Serial groups.** Host and probes form one job group with a `serial-group` per project, so two pipelines never run e2e runners at the same time. Both Windows groups share one key, because they share a resource class and token. A group that the filter removes takes its lock jobs with it, and its host and probes are skipped too: they depend only on the lock, and CircleCI does not run a job whose requirements are all filtered out.
+- **Evidence and identity.** A probe that was not claimed by this workflow's host fails at its first step. A host whose container exits without the expected probe's evidence fails at once (the runner idled out, or ran a job that is not ours).
+- **Timeouts.** Each runner has `idle_timeout` 5m (every claim happens within seconds, so waiting longer only delays a failure) and `max_run_time` 10m on Linux and 15m on Windows. The host fails after 40 minutes. Steps have `no_output_timeout`. A 401 from the runner API fails the host within seconds; the fix is to rotate the token.
+- **Cleanup** always runs: the stack and secrets are removed and the VM leaves the swarm.
+- **Sweep after a failure.** If the host fails while a probe may still be queued, it runs a throwaway runner (the pinned official `circleci/runner-agent` image on Linux; the SHA-256-verified `circleci-runner.exe` on Windows) for up to 2 minutes so that the probe is claimed and fails fast instead of holding the serial-group lock. If that cannot help (the token was rejected), cancel the workflow in the UI; no API token is kept in the context, so CI cannot cancel workflows itself.
+
+### Secrets and public logs
+
+The project is public, so job logs and artifacts are public.
+
+- The runner tokens live only in the `scalable-machine-runner-e2e` context. Its restrictions: this project only, plus the expression `not (pipeline.git.branch starts-with "pull/") and not job.ssh.enabled`. Forked-PR builds are off.
+- On Linux the token goes to `docker secret create` on stdin and is never on disk. On Windows it is in a file for the instant `docker secret create` reads it, outside the artifact directory. It is never printed.
+- The probes never print their environment, and read the token only to count bytes.
+- The context is attached only to `setup` and the host jobs. The probes are ordinary runner jobs.
+
+## The e2e simulation
+
+`ci/tests/e2e-sim.sh` runs `ci/e2e-host.sh` and `ci/e2e-probe.sh` in a privileged `docker:dind` container with a fake runner that runs the next queued probe as an unprivileged user and exits 0, as a single-task runner does. Swarm, the stack deploy, the restart policy, `docker events`, the secrets and the evidence handling are real. Three scenarios: pass, no job queued (the host must fail with "exited without evidence"), and a probe failure (the host must fail). It also checks that the token never reaches the output. The `e2e-simulation` job runs it in about 2 minutes; run it before changing the e2e scripts, so that a real e2e run is not spent on a typo.
+
+## Running the checks locally
+
+```sh
+shellcheck -S warning ci/*.sh ci/tests/*.sh linux/setup.sh linux/entrypoint/smr-entrypoint
+hadolint --config .hadolint.yaml linux/images/example/Dockerfile windows/images/servercore/Dockerfile
+yamllint --strict .
+docker stack config -c linux/stack/runners.yaml > /dev/null
+docker stack config -c windows/stack/runners.yaml > /dev/null
+docker stack config -c windows/stack/custom-image.yaml > /dev/null
+circleci config validate .circleci/config.yml && circleci config validate .circleci/continue.yml
+circleci config process .circleci/continue.yml --pipeline-parameters '{full-suite: true, e2e-linux: true, e2e-windows: true, release: true}' > /dev/null
+
+ci/tests/e2e-sim.sh                  # the Linux e2e scripts against a fake runner (needs privileged Docker)
+linux/tests/run-all.sh               # the Linux suite
+```
+
+PowerShell (in a container, if `pwsh` is not installed):
+
+```sh
+docker run --rm -v "$PWD:/w" -w /w mcr.microsoft.com/powershell:7.5-ubuntu-24.04 pwsh -c '
+  Set-PSResourceRepository PSGallery -Trusted; Install-PSResource PSScriptAnalyzer -Version 1.25.0
+  Invoke-ScriptAnalyzer -Path ci, windows -Recurse -Settings ./PSScriptAnalyzerSettings.psd1'
+```
+
+## Release
+
+The `release` job is part of the `ci` workflow. On `main`, when both e2e tokens are present, the setup phase passes `release: true` together with `full-suite`, `e2e-linux` and `e2e-windows`, so every job that the release requires really runs. The job requires every other job of the workflow, and the release waits for every test. Pipelines of other branches never run it, and neither do tag pipelines (the release creates the tag; CircleCI schedules no job for a tag).
+
+| Job | Executor | What it does |
+|---|---|---|
+| `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release`, `serial-group` | `ci/release.sh`: version, notes, bundles, `SHA256SUMS`, keyless signature, GitHub release. Without `GITHUB_TOKEN` it stops before publishing |
+
+**Add a new job to `requires` of the release job.** `lint-circleci` fails when a job of the workflow is missing from it: it compiles the workflow and checks that every job that no other job requires is a requirement of the release (in the compiled workflow the release waits for one lock job, which requires them).
+Refer to [Releasing](releasing.md) for the rules, the setup of the token, and how to recover from a failed release.
+
+## Pinned versions
+
+Every tool image is pinned by tag and digest in `.circleci/continue.yml`. There is no Renovate. To bump a version:
+
+1. Resolve the new digest with `docker buildx imagetools inspect <image>:<tag>`.
+2. Update the tag and digest together.
+3. Run `circleci config validate`.
+
+| What | Version | Where |
+|---|---|---|
+| shellcheck | 0.11.0 | `lint-shell` |
+| hadolint | 2.15.1 | `lint-dockerfiles` |
+| yamllint | 1.38.0 | `lint-yaml` |
+| Docker CLI (`docker stack config`) | 29.9.0 | `lint-stack` |
+| PowerShell / PSScriptAnalyzer / Pester | 7.5 / 1.25.0 / 5.7.1 | `lint-powershell`, `windows-swarm` |
+| CircleCI CLI | 1.4.0 (SHA-256 checked) | `lint-circleci` |
+| lychee | 0.24.2 | `lint-docs-links` |
+| markdownlint-cli2 | 0.18.1 | `lint-markdown` |
+| Trivy | 0.75.0 | `trivy` command |
+| git-cliff, cosign, gh (the release job) | 2.14.2, 3.1.3, 2.102.0, each SHA-256 checked | `ci/release.sh install-tools` |
+| Stock Linux image of the e2e | `cimg/base:2026.10` by digest | `ci/e2e-host.sh`, `ci/linux-smoke.sh` |
+| Docker-in-Docker for the simulation | `docker:29.9.0-dind` by digest | `ci/tests/e2e-sim.sh` |
+| e2e sweeper | `circleci/runner-agent:machine-3.1.12-9831-dca4a16`, `circleci-runner.exe` 3.1.12 | `ci/e2e-host.sh`, `ci/E2E-Host.ps1` |
+
+## Cost and duration
+
+Measured on 2026-10-13 (pipeline `9aed4106`, a full run on `smr-swarm/ci`). Credits use the published per-minute rates (Windows medium 40, Linux xlarge 40, Linux medium and Arm medium 10, Docker small 5 and medium 10); the e2e probes run on the self-hosted classes and cost no compute credits.
+
+| Job | Executor | Duration |
+|---|---|---|
+| `setup` and the small lint jobs | Docker small | 5 to 15 s each |
+| `lint-powershell`, `lint-docs-mermaid` | Docker medium | 56 s, 50 s |
+| `e2e-simulation` | Linux VM medium | 100 s |
+| `linux-setup`, `linux-arm64` | Linux VM medium, Arm medium | 31 s, 29 s |
+| `linux-image-example` | Linux VM medium | 96 s |
+| `linux-swarm` (L's whole suite) | Linux VM xlarge | 7 min 14 s |
+| `windows-swarm-ltsc2022` | Windows | 12 min 31 s |
+| `windows-baked-ltsc2022` | Windows | 17 min |
+| `windows-swarm-ltsc2025`, `windows-baked-ltsc2025` | Windows | about 17 and 22 min |
+| `e2e-linux-host` (B1, B2, B3: 2 s each on the runner) | Linux VM medium | about 1.5 min |
+| `e2e-windows-2022-host`, `-2025-host` (B1, B2: 22 s each) | Windows | 7 min 30 s, 8 min |
+
+| Pipeline | Credits (about) | Wall clock |
+|---|---|---|
+| Feature branch (the jobs of every pipeline) | 1,500, of which the two Windows jobs are 1,200 | 18 min (the baked Windows job is the critical path) |
+| `main` or `smr-swarm/*` (every job except `release`) | 3,800 | 25 min |
+
+Windows dominates the cost: every Windows job pulls the 2 GB Server Core image onto a fresh VM (about 5 to 10 minutes). There is no nightly schedule.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `e2e-*-b1` stays queued and the host job failed | The sweep could not claim it (the token was rejected, or Docker Hub was unreachable). Cancel the workflow in the UI; the serial-group lock is then released |
+| Host fails with "token was rejected (401)" | Rotate the token: `circleci runner token create <class> --nickname ci-YYYYMM`, update the context secret, delete the old token |
+| Host fails with "container for probe bN exited without evidence" | The runner idled out without claiming the probe, or claimed someone else's job on the e2e class. Check the probe job's status and `e2e/logs/service.log` (the runner output) in the artifacts |
+| Probe fails "not claimed by the e2e host of workflow …" | A runner outside this workflow holds the e2e token, or the host's sweeper claimed the probe on purpose after a failure. A third cause: **cancelling** an e2e workflow releases the serial-group lock at once, but the cancelled host VM's idle Swarm service can live on for a few minutes and claim the next pipeline's B1, which fails here by design. Rerun the workflow |
+| The job fails and the runner log says `failed to remove working directory` or `could not clean up task`, with `permission denied` | Only if `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` is `true` on a Linux service; the entrypoint and the stack files default it to `false`. See [Error: failed to remove working directory](troubleshooting.md#error-failed-to-remove-working-directory-permission-denied) |
+| `Test-StopHandling.ps1` or the e2e's b3 fails with a container exit code of `3221225786` | The container that ran the job was ended about 5 seconds after the stop: it does not run the stop-timeout image (stock Server Core, or an image built without `WaitToKillServiceTimeout`). Check `docker image inspect` of the service's image and `reports/stop-*.txt` |
+| `Test-Injection.ps1` fails `tar-agent-style` | GNU tar from the mounted Git failed on the operands the task agent passes (forward slashes, `--force-local`, `MSYS=winsymlinks:nativestrict`). Read the check's detail in `reports/injection-*.txt`; the e2e's workspace round trip is the end-to-end proof |
+| `setup` says an e2e group is skipped | The context is missing, restricted for this pipeline (a `pull/*` branch or an SSH rerun), or lacks the secret |
+| A Windows step fails right after `docker swarm init` with `Unable to connect to the remote server` or `no such host` | The network drops for a few seconds after the swarm is created. Download and pull first |
+| `Access is denied` running `C:\smr\bin\circleci-runner.exe` in a container, or reading `C:\smr\VERSION` on the host | The files under `C:\smr` have an empty ACL. `windows\Setup.ps1` sets the ACL on `C:\smr` and then resets the children to inherit it; if this happens again, print `icacls C:\smr C:\smr\VERSION C:\smr\bin\circleci-runner.exe` |
+| A Windows host step hangs instead of failing | A child process started with `-NoNewWindow` (`docker events`, `docker service logs`) keeps the step's console open. `E2E-Host.ps1` kills the child process trees on every failure path; keep that if it changes |
+| A Windows step dies with `NativeCommandError` on a harmless warning | In Windows PowerShell 5.1 a native command's stderr redirected with `2>&1` under `$ErrorActionPreference = 'Stop'` is a terminating error. Run docker through `Invoke-Docker` in `E2E-Host.ps1` |
+| Trivy fails with "no space left on device" | `/tmp` on the machine image is too small for a large image tarball plus Trivy's Java DB. The `trivy` command keeps both under `$HOME/trivy` |
+| `lint-shell` fails with SC2154 on an uppercase variable | `.shellcheckrc` enables `check-unassigned-uppercase`. Assign the variable (`${NAME:-}`) or add a `# shellcheck disable=SC2154` with the reason |

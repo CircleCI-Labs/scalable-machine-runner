@@ -1,0 +1,254 @@
+---
+page-title: Resource classes
+page-audience: admin
+page-description: Define resource classes as Swarm services, size their limits, choose replica counts, run persistent classes, and look up every setting the stack files use.
+---
+
+# Resource classes
+
+Each Swarm service in a stack file is one CircleCI resource class. This page describes how to define a class, size it, choose its replica count, and run a persistent class. It ends with a reference of every environment variable that the stack files and the entrypoint use.
+
+## Define a class
+
+To add a class:
+
+1. Create the resource class and a token in CircleCI. The class name must equal the service name.
+
+   ```console
+   $ circleci runner resource-class create <namespace>/linux-python --generate-token
+   ```
+
+2. Copy an existing service in your stack file and change the values in the table below.
+3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#5-create-the-secrets) or [Create the secrets on Windows](install-windows.md#6-create-the-secrets).
+4. Deploy the stack again, with the same set of `-c` files as before. Swarm creates the new service and leaves unchanged services alone.
+
+   ```console
+   $ docker stack deploy -c linux/stack/runners.yaml smr
+   ```
+
+Each service needs its own values for these keys:
+
+| Key | Value for a class named `linux-python` |
+|---|---|
+| Service name | `linux-python` |
+| `hostname` and `CIRCLECI_RUNNER_NAME` (Linux) | `"{{.Node.Hostname}}-linux-python-{{.Task.Slot}}"` |
+| `CIRCLECI_RUNNER_NAME` (Windows) | `"{{.Node.Hostname}}-windows-<class>-{{.Task.Slot}}"`. The Windows files set no `hostname` |
+| `secrets.source` | `linux-python-token`, declared under the top-level `secrets:` with `external: true` |
+| `networks` (Linux) | `[linux-python]`, declared under the top-level `networks:` with `driver: overlay` |
+
+The runner name must be unique across all runners of your organization. It has at most 64 characters and contains only letters, numbers, `.`, `(`, `)`, `_`, `-`, and spaces. A long hostname plus a long class name can exceed the limit, and the runner then exits with code 80.
+
+A complete Linux example, which reuses the anchors of `linux/stack/runners.yaml`:
+
+```yaml
+services:
+  linux-python:
+    <<: *runner
+    image: cimg/python:3.14
+    hostname: "{{.Node.Hostname}}-linux-python-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-python-{{.Task.Slot}}"
+      SMR_JOB_SUDO: "true"
+    secrets:
+      - source: linux-python-token
+        target: circleci_runner_config.yaml
+        uid: "2000"
+        gid: "2000"
+        mode: 0400
+    networks: [linux-python]
+    cap_drop: [NET_RAW, MKNOD]
+    deploy:
+      replicas: 2
+      restart_policy: *restart
+      update_config: *update
+      resources:
+        limits: {cpus: "2", memory: 4G, pids: 4096}
+        reservations: {cpus: "2", memory: 4G}
+      placement: *placement
+
+networks:
+  linux-python: {driver: overlay}
+
+secrets:
+  linux-python-token: {external: true}
+```
+
+Use `SMR_JOB_SUDO: "false"` with the capability settings of `linux-hardened` for a hardened class. Refer to [Concepts](concepts.md#users-and-the-runner-token-on-linux).
+
+On Windows, copy a service such as `windows-default`, and keep its `image` on your stop-timeout build. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks.
+
+## Size the limits
+
+The stack sets the same values for limits and reservations. The limit caps what a runner can use. The reservation tells the scheduler how much room a replica needs.
+
+| Setting | Linux | Windows |
+|---|---|---|
+| `limits.cpus` | Caps CPU for the container | Caps CPU. A value above the CPU count of the host is rejected |
+| `limits.memory` | Caps memory. The kernel kills a job that exceeds it | Caps memory |
+| `limits.pids` | Caps processes. The files set `4096` | Rejected by the Windows engine, so absent |
+| `reservations` | Scheduler only. Equal to the limits, so extra replicas stay pending instead of overcommitting | Scheduler only. The engine never receives it |
+| `ulimits` | `nofile` 65536, `core` 0 | Rejected by the Windows engine, so absent |
+
+Size one runner for the largest job of the class, not for the average job. A job cannot choose a different size, because the resource class defines it. Create a second class for jobs that need more, for example `linux-large`.
+
+Plan the node capacity from the reservations:
+
+- The sum of the reservations of all replicas on a node must fit in the node. Leave room for the operating system and Docker, for example one CPU and 2 GB of memory.
+- The shipped Linux file reserves 10 CPUs and 20 GB of memory in total. A node with fewer resources runs fewer replicas, and the others stay `Pending`.
+- Swarm cannot limit disk for a container. Jobs share the Docker data disk of the node, so size it for the replicas plus the stopped containers that Swarm keeps. Refer to [Start Swarm](install-linux.md#4-start-swarm).
+
+## Choose replica counts
+
+`deploy.replicas` is the number of jobs that the class runs at the same time. Choose it as follows:
+
+1. Estimate the peak number of parallel jobs for the class from your workflows.
+2. Check that nodes with enough room exist. A replica needs its full reservation on one node.
+3. Add headroom for short jobs. A replica needs about 10 seconds between jobs, so a class that receives many very short jobs benefits from one extra replica.
+4. Set the value in the stack file and deploy again. The file stays the source of truth.
+
+For a quick change, scale the service directly. The next `docker stack deploy` resets the count to the value in the file.
+
+```console
+$ docker service scale smr_linux-default=4
+```
+
+Swarm has no autoscaling. An idle replica holds its reservation, so a class with more replicas than demand wastes node capacity. Set `replicas: 0` to switch a class off without deleting it.
+
+## Persistent mode
+
+A persistent class runs the runner in `continuous` mode. One long-lived container claims job after job, and a named volume keeps data between jobs. Use it only for trusted projects that gain a lot from warm caches.
+
+> [!WARNING]
+> Continuous mode removes the guarantee of a clean environment. A job can leave files, processes, or settings that later jobs see, and a job can change what later jobs run. CircleCI describes untrusted jobs on a runner that keeps its environment as the highest risk.
+
+To limit the risk:
+
+- Create a separate resource class for it, and restrict the class to named projects with a config policy. Refer to [CircleCI-side controls](security.md#circleci-side-controls).
+- Keep production contexts away from the class.
+- Put cleanup steps at the start of its jobs. The runner does not clean the working directory on Linux.
+- Recycle the runner on a schedule.
+
+### Linux
+
+The file `linux/stack/persistent.yaml` defines `linux-persistent`. It sets `CIRCLECI_RUNNER_MODE: continuous` and sets no idle timeout. It mounts the named volume `smr-persistent-home` at `/home/circleci`. Swarm copies the image content of that directory into the new volume on first use.
+
+A volume lives on one node, so the service pins itself with the constraint `node.hostname == CHANGE-ME`. Edit that value before you deploy.
+
+The service sets `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` to `"false"`. The runner user cannot remove files that the job user created, so the runner does not clean the working directory, and each job must clean up what an earlier job left. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
+
+```console
+$ printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create linux-persistent-token -
+$ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml smr
+```
+
+Recycle the runner with a forced update. The runner drains first, so a running job finishes. The volume survives.
+
+```console
+$ docker service update --force smr_linux-persistent
+```
+
+### Windows
+
+The overlay file `windows\stack\persistent.yaml` defines `windows-persistent`. It sets `CIRCLECI_RUNNER_MODE: continuous` and sets no idle timeout. It declares and mounts the named volume `windows-persistent-cache` at `C:\cache`. Point NuGet, npm, and similar caches there with an environment variable in the job.
+
+The service is pinned to the nodes that carry the label `smr.class.windows-persistent=true`. Create the secret `windows-persistent-token` first, then label the node and deploy the file with the main file:
+
+```powershell
+docker node update --label-add smr.class.windows-persistent=true <node name>
+docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.yaml smr
+```
+
+Swarm still replaces the container when the runner exits. Only the volume survives the replacement. On Windows, the runner and the jobs use the same account, so the runner cleans the working directory, and `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` stays `"true"`.
+
+## Configuration reference
+
+### Variables in the stack files
+
+| Variable | Value in the files | Applies to | Notes |
+|---|---|---|---|
+| `CIRCLECI_RUNNER_NAME` | `"{{.Node.Hostname}}-<service>-{{.Task.Slot}}"` | Every service | Required. Unique per replica |
+| `CIRCLECI_RUNNER_MODE` | `single-task`, or `continuous` for persistent classes | Every service | `single-task` gives a new container for every job |
+| `CIRCLECI_RUNNER_IDLE_TIMEOUT` | `1h` | Single-task services | An idle replica exits and Swarm replaces it. Do not set it in continuous mode |
+| `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` | `"false"` on Linux, `"true"` on Windows | Every service | On Windows, the runner removes the working directory before and after each task. On Linux it stays off, because the runner user cannot remove files that the job user owns. Refer to [Working directory cleanup](security.md#working-directory-cleanup) |
+| `CIRCLECI_RUNNER_LOGGING_FORMAT` | `text` | Every service | No color codes in logs |
+| `CIRCLECI_RUNNER_MAX_RUN_TIME` | Commented out, default `5h` | Every service | If you lower it, lower `stop_grace_period` to the same value plus 5 minutes. On Windows, also rebuild the stop-timeout image with a matching `SHUTDOWN_TIMEOUT_SECONDS` |
+| `HTTPS_PROXY`, `NO_PROXY` | Commented out | Every service | Jobs inherit variables that you set here |
+| `SMR_JOB_SUDO` | `"true"` or `"false"` | Linux | `"false"` makes the class hardened |
+| `CIRCLECI_RUNNER_WORK_DIR` | `C:\cci\w` | Windows | The working directory of jobs. The task agent creates it |
+| `CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY` | `C:\cci\agent` | Windows | The task agent directory. The runner creates it |
+| `SMR_INSTANCE_ID` | `{{.Task.ID}}` | Windows | Lets a job tell which container it ran in |
+| `GIT_TERMINAL_PROMPT`, `GCM_INTERACTIVE`, `GIT_CONFIG_*` | `0`, `never`, and `core.longpaths=true` | Windows | Stop Git prompts, and allow long paths. The system Git config is read-only |
+| `PATH` | The full Server Core path, then Git | Windows stock services | Replaces the image `PATH`, so the file spells it out |
+
+Refer to the [machine runner 3 configuration reference](https://circleci.com/docs/guides/execution-runner/machine-runner-3-configuration-reference/) for every other `CIRCLECI_RUNNER_*` variable. Environment variables override the config file.
+
+### Variables read by the Linux entrypoint
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SMR_JOB_USER` | `circleci` | The account that runs jobs. The entrypoint creates it with uid 2001 when the image has none |
+| `SMR_JOB_SUDO` | `true` | `false` removes every sudo right of the job user in that container. Any other value exits with code 80 |
+
+The runner user is `smr-runner` with uid 2000. It owns the secret file and has no sudo rights.
+
+The entrypoint sets these variables for the runner. It always sets the command prefix, and it keeps a value that you set for the other three:
+
+| Variable | Value |
+|---|---|
+| `CIRCLECI_RUNNER_COMMAND_PREFIX` | `["sudo","-niHu","<job user>","--"]`, or a `setpriv` command when the image has no sudo |
+| `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` | `false`. Do not set it to `true` on Linux |
+| `CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY` | `/var/lib/smr/agent`, owned by the runner user |
+| `CIRCLECI_RUNNER_WORK_DIR` | `/var/opt/circleci/workdir`, owned by the job user. Keep a custom directory under `/var/opt/circleci` |
+
+Arguments that you pass to the entrypoint replace the default command, which is `machine --config /run/secrets/circleci_runner_config.yaml`.
+
+### Variables read by the helpers
+
+| Variable | Used by | Effect |
+|---|---|---|
+| `SMR_DOWNLOAD_BASE_URL` | `linux/setup.sh` | HTTPS mirror of the runner downloads |
+| `SMR_DIR` | The Windows stack file | Host directory of the runner mounts. The default is `C:\smr` |
+
+### Stack keys on Windows
+
+Not every key of a stack file reaches a Windows container. `docker stack deploy` and the Windows engine treat the keys as follows.
+
+| Effect | Keys |
+|---|---|
+| Used | `isolation`, bind mounts of directories, `npipe` mounts, named volumes, secrets without `uid`, `gid`, and `mode`, `stop_grace_period`, `logging`, `entrypoint`, `environment` with Swarm placeholders, `labels`, `deploy.placement`, `deploy.restart_policy`, `deploy.update_config`, `deploy.endpoint_mode`, and `deploy.resources.limits` for `cpus` and `memory` |
+| Scheduler only | `deploy.resources.reservations`. The engine rejects a memory reservation, so Swarm never sends it |
+| Rejected by the Windows engine | `deploy.resources.limits.pids` and `ulimits`, so the files do not set them. A `limits.cpus` above the CPU count of the host is rejected too |
+| No effect | `init`, `cap_drop`, `cap_add`, `read_only`, `tmpfs`, and `sysctls` |
+| Ignored by `docker stack deploy` on every platform | `security_opt`, `privileged`, `userns_mode`, `restart`, and `build` |
+
+Three choices in the Windows files follow from this:
+
+- **No `hostname`.** A Windows computer name has at most 15 characters, and a templated hostname would give every container of a slot the same `COMPUTERNAME`. Without it, `COMPUTERNAME` is the container ID, which tells the containers apart.
+- **`endpoint_mode: dnsrr`.** Nothing connects to a runner, so no virtual IP is needed.
+- **Settings repeated per service.** YAML merge keys do not merge deeply. The idle timeout is set for each service, because the persistent class must not have one, and `windows-docker-build` repeats the `PATH` with `C:\docker` appended.
+
+The log driver is `json-file` with rotation. The `local` driver also works on Windows.
+
+### The secret
+
+| | Linux | Windows |
+|---|---|---|
+| Name | `<service>-token` | `<service>-token` |
+| Target | `circleci_runner_config.yaml` | `circleci_runner_config.yaml` |
+| Path in the container | `/run/secrets/circleci_runner_config.yaml` | `C:\ProgramData\Docker\secrets\circleci_runner_config.yaml` |
+| Owner and mode | uid 2000, gid 2000, `0400` | Not supported. Administrators and `SYSTEM` only |
+| Content | `api:` and `auth_token: <token>` | The same |
+
+The runner does not look for a config file on its own. The entrypoint arguments pass `--config <path>`, and environment variables override the values in the file.
+
+### Exit codes
+
+| Code | Source | Meaning |
+|---|---|---|
+| 0 | Runner | A normal exit after a job or after a drain. Swarm starts a new container |
+| 80 | Entrypoint | A prerequisite is missing: `/opt/smr` is not root-owned or is writable, the image has neither sudo nor `setpriv`, `SMR_JOB_SUDO` is invalid, or the entrypoint cannot remove every sudo right of the job user |
+| 80 | Runner | A configuration error: a missing or invalid name, an empty token, an unknown log level, or an invalid mode |
+| 1 | Runner | The config file is missing because the secret is not attached, the YAML does not parse, or a duration is malformed |
+
+Swarm restarts a container that exits with any code after the restart delay of 10 seconds. It never gives up and never backs off, so a configuration error repeats until you fix it. Refer to [Troubleshooting](troubleshooting.md#the-container-restarts-every-10-seconds).

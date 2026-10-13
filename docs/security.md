@@ -1,7 +1,7 @@
 ---
 page-title: Security
 page-audience: admin
-page-description: The threat model, how the runner token is stored on Linux and Windows, the hardening defaults, CircleCI-side controls, egress hosts, and BitLocker.
+page-description: The threat model, how the runner token is stored on Linux and Windows, a comparison with the official runner installs, the hardening defaults, CircleCI-side controls, egress hosts, and BitLocker.
 ---
 
 # Security
@@ -100,6 +100,24 @@ Treat each Windows resource class as a trust boundary. Use one token for each cl
 - Optionally lock the managers with `docker swarm update --autolock=true`. It protects the secrets at rest, but each manager then needs `docker swarm unlock` after every Docker daemon restart.
 - Keep join tokens private, and rotate them with `docker swarm join-token --rotate`.
 - A user in the `docker` group on a manager can read every token. Limit administrator access to the managers.
+
+## Compared with the official runner installs
+
+This table puts the Linux classes of this repository next to the installs that CircleCI documents. The first three columns come from the public CircleCI documentation only, and the last two from the tests of this repository. Where the public documentation says nothing, the cell says so.
+
+| | Machine runner 3 package | Container runner | Machine runner orchestrator | This repository, default class | This repository, hardened class |
+|---|---|---|---|---|---|
+| Can a job read the resource class token? | Yes in effect. The job gains the privileges of the task agent, and the runner runs as the same user (`circleci`) | Not stated in the public documentation. The agent holds the tokens in a Kubernetes secret | No. A sidecar keeps the token out of the VM, and `grantSudo` is refused without it | Only a job that uses sudo | No, unless a kernel or container-runtime bug gives the job root |
+| Can jobs use sudo? | Whatever you grant the `circleci` user | Set by the job image and the pod `securityContext` that you configure | No by default (`grantSudo: false`), and jobs run as the unprivileged `circleci` user. Optional with `grantSudo: true` | Yes, passwordless, as in the Docker executor | No. A setuid binary cannot lift a job to root, because the step-down uses `setpriv --no-new-privs` |
+| The boundary between jobs | None: each job runs on the machine where the runner is installed | An ephemeral pod, which Kubernetes tears down after the job. Pods share the node kernel | A virtual machine for each job, provisioned on demand and shut down after the job | A new container for each job, on a kernel that all containers on the node share | The same: a new container for each job, with a shared kernel |
+
+Sources: [Self-hosted runner concepts](https://circleci.com/docs/guides/execution-runner/runner-concepts/), [Self-hosted runner overview](https://circleci.com/docs/guides/execution-runner/runner-overview/#choosing-a-runner-execution-environment), [Container runner reference](https://circleci.com/docs/guides/execution-runner/container-runner/), and the [Machine runner orchestrator](https://circleci.com/docs/guides/execution-runner/machine-runner-orchestrator/) reference, including [its sidecar](https://circleci.com/docs/guides/execution-runner/machine-runner-orchestrator/#sidecar) and [`grantSudo`](https://circleci.com/docs/guides/execution-runner/machine-runner-orchestrator/#granting-sudo).
+
+Read the table this way:
+
+- **A clean container is not a virtual machine.** The orchestrator is the only column with a hardware-level boundary between jobs. If jobs must not share a kernel, use the orchestrator, or dedicate nodes to one trust group. Refer to [Why Swarm and not container runner or another runner?](faq.md#why-swarm-and-not-container-runner-or-another-runner)
+- **The token.** In the orchestrator the token never reaches the VM, so even a root job cannot read it. In the hardened class the token is a file in the container, and the protection is that the job user cannot become root. In the default class a job that uses sudo reads it.
+- **Windows is at parity with the official Windows runner.** The job runs as an administrator, the same account as the runner, and can read the token. The Windows class has no hardened variant. Treat each Windows class as a trust boundary, and refer to [Windows](#windows).
 
 ## Hardening defaults
 

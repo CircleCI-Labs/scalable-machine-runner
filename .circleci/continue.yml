@@ -11,6 +11,9 @@ version: 2.1
 #   e2e-windows     the same on Windows (2022, then 2025)
 #   release         the release job, which requires every job above
 #
+# A second workflow, `docs-site`, publishes the docs site to GitHub Pages on main only. It is not a job
+# of `ci`, so that the release never waits for the publication (docs/ci.md, "Docs site").
+#
 # Nothing here publishes an image. Scan reports and logs are stored as job artifacts.
 
 parameters:
@@ -116,6 +119,41 @@ commands:
             fi
             echo "no fixable CRITICAL finding is added on top of << parameters.base >>"
             rm -f "${HOME}/trivy/image.tar" "${HOME}/trivy/base.tar"
+
+  docs-site:
+    description: >
+      Build and check the docs site (site/, docs/ci.md "Docs site"): Hugo and lychee (pinned, SHA-256 verified),
+      the staged Markdown, hugo --minify and the offline link and anchor check. The site is in site/public afterwards.
+      The Hextra theme comes from the Go module that site/go.mod and site/go.sum pin (GOFLAGS=-mod=readonly keeps
+      Go from changing them), and the Mermaid script from the version that site/hugo.yaml pins.
+    steps:
+      - run:
+          name: Install Hugo 0.168.0 (extended) and lychee 0.24.2 (SHA-256 verified)
+          command: |
+            mkdir -p "${HOME}/.local/bin"
+            curl -fsSLo /tmp/hugo.tgz \
+              https://github.com/gohugoio/hugo/releases/download/v0.168.0/hugo_extended_0.168.0_linux-amd64.tar.gz
+            echo "787f100057328824f38c6ad7c87ff10d6451ae0a7bc39cedaad0dd2bcde17e53  /tmp/hugo.tgz" | sha256sum -c -
+            tar -xzf /tmp/hugo.tgz -C "${HOME}/.local/bin" hugo
+            curl -fsSLo /tmp/lychee.tgz \
+              https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-musl.tar.gz
+            echo "73657a111819a30c47c08352896796f23d64e4eb2b3ed39b6d32149241566fc5  /tmp/lychee.tgz" | sha256sum -c -
+            tar -xzf /tmp/lychee.tgz -C "${HOME}/.local/bin" --strip-components=1 lychee-x86_64-unknown-linux-musl/lychee
+            echo 'export PATH="${HOME}/.local/bin:${PATH}"' >> "${BASH_ENV}"
+            "${HOME}/.local/bin/hugo" version
+            "${HOME}/.local/bin/lychee" --version
+      - run:
+          name: Stage the Markdown as Hugo content (site/stage.sh)
+          command: site/stage.sh
+      - run:
+          name: hugo --minify (warnings fail the build)
+          working_directory: site
+          environment:
+            GOFLAGS: -mod=readonly
+          command: hugo --minify --panicOnWarning
+      - run:
+          name: lychee --offline on the built site (links and heading anchors, site/check.sh)
+          command: site/check.sh
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -932,6 +970,40 @@ jobs:
               | if length > 0 then "release does not require: " + join(", ") | halt_error(1) else empty end'
             echo "every job of the ci workflow is a requirement of the release"
 
+  docs-site-build:
+    description: >
+      The docs site builds and its links work: site/stage.sh, hugo --minify and site/check.sh. The release requires it.
+      The site is stored as one artifact, docs-site.tgz. The publication is the job docs-site-publish, of its own workflow.
+    docker:
+      - image: cimg/go:1.27.2@sha256:d370371192063607c1237351759d8ab0c49f5e37ab7c3bd7553b09c8b62247d5
+    resource_class: small
+    steps:
+      - checkout
+      - docs-site
+      - run:
+          name: Pack the site
+          command: |
+            mkdir -p /tmp/docs-site
+            tar -czf /tmp/docs-site/docs-site.tgz -C site/public .
+      - store_artifacts:
+          path: /tmp/docs-site
+          destination: docs-site
+
+  docs-site-publish:
+    description: >
+      Builds the site again, with the same steps, and pushes it to the gh-pages branch (site/publish.sh). Runs on main only,
+      in the workflow docs-site, so that the release does not wait for it. The context holds GITHUB_TOKEN. Without it the job
+      builds and checks the site and publishes nothing.
+    docker:
+      - image: cimg/go:1.27.2@sha256:d370371192063607c1237351759d8ab0c49f5e37ab7c3bd7553b09c8b62247d5
+    resource_class: small
+    steps:
+      - checkout
+      - docs-site
+      - run:
+          name: Publish to gh-pages (nothing is published without GITHUB_TOKEN)
+          command: site/publish.sh
+
   # ---------------------------------------------------------------------------
   # Release (docs/releasing.md): after every other job of the `ci` workflow has passed
   # ---------------------------------------------------------------------------
@@ -1070,6 +1142,7 @@ workflows:
       - lint-docs-links
       - lint-docs-mermaid
       - lint-circleci
+      - docs-site-build
       - e2e-simulation
       - proxy-test
       - linux-swarm
@@ -1123,6 +1196,7 @@ workflows:
             - lint-docs-links
             - lint-docs-mermaid
             - lint-circleci
+            - docs-site-build
             - e2e-simulation
             - proxy-test
             - linux-swarm
@@ -1135,3 +1209,15 @@ workflows:
             - e2e-linux-arm64
             - e2e-windows-2022
             - e2e-windows-2025
+
+  # The docs site (docs/ci.md, "Docs site"): main only, in a workflow of its own. A job of the `ci` workflow that
+  # nothing requires would have to be a requirement of the release (lint-circleci checks it), and the release must
+  # not wait for the publication. One publication at a time, so that two quick merges cannot push to gh-pages together.
+  docs-site:
+    jobs:
+      - docs-site-publish:
+          context: [scalable-machine-runner-docs]
+          serial-group: << pipeline.project.slug >>/docs-site-publish
+          filters:
+            branches:
+              only: main

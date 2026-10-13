@@ -3,6 +3,10 @@
 # unprivileged job user. Installed as bin/circleci-runner-entrypoint in a versioned directory of /opt/machine-runner-swarm,
 # mounted read-only at /opt/machine-runner-swarm, with the
 # runner, into a stock image (cimg/*, Alpine, UBI). The service starts it as root (user: "0").
+# DRAFT, distributed mode: with MACHINE_RUNNER_SWARM_RUNNER_VERSION set, the runner comes from the per-node volume that the
+# runner-distributor service fills (stack/distributor.yaml), and this file is a Swarm config. The entrypoint waits up to
+# MACHINE_RUNNER_SWARM_RUNNER_WAIT seconds (default 120) until the link current points to versions/<version>, resolves it once, and
+# exits 80 unless the runner binary has the SHA-256 in MACHINE_RUNNER_SWARM_RUNNER_SHA256_AMD64/_ARM64.
 #
 # The token never passes through here. The Swarm secret is a runner config file holding only
 # api.auth_token, owned by the runner user (uid 2000, mode 0400); the runner reads it with --config.
@@ -26,17 +30,44 @@ setpriv_ok() { has setpriv && setpriv --reuid=0 --regid=0 --init-groups --inh-ca
 # sudo needs passwd and shadow entries for the invoking user, so use the image's own tools.
 add_user() { useradd -u "$2" -U -d "$3" -M -s "$4" "$1" 2>/dev/null || adduser -D -u "$2" -h "$3" -H -s "$4" "$1"; }
 
-bin=/opt/machine-runner-swarm/bin/circleci-runner
+root=/opt/machine-runner-swarm
+bin=$root/bin/circleci-runner
 job=${MACHINE_RUNNER_SWARM_JOB_USER:-circleci}
 sudo_ok=${MACHINE_RUNNER_SWARM_JOB_SUDO:-true}
 umask 022
 case $sudo_ok in true | false) ;; *) die "MACHINE_RUNNER_SWARM_JOB_SUDO must be true or false, got '$sudo_ok'" ;; esac
 
-# The runner and the entrypoint must not be writable by the users they run as.
-for p in /opt/machine-runner-swarm /opt/machine-runner-swarm/bin "$bin"; do
-  [ -e "$p" ] || die "$p is missing: install it on the host (linux/setup.sh) and mount /opt/machine-runner-swarm/current at /opt/machine-runner-swarm read-only"
+# Distributed mode: wait for the runner-distributor of this node, then pin this container to the version directory it resolves now,
+# so a later flip of current changes the next container only, and check the binary against the pin from the stack.
+if [ -n "${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-}" ]; then
+  want=$MACHINE_RUNNER_SWARM_RUNNER_VERSION
+  case $(uname -m) in
+    x86_64) pin=${MACHINE_RUNNER_SWARM_RUNNER_SHA256_AMD64:-} ;;
+    aarch64) pin=${MACHINE_RUNNER_SWARM_RUNNER_SHA256_ARM64:-} ;;
+    *) pin= ;;
+  esac
+  [ -n "$pin" ] || die "MACHINE_RUNNER_SWARM_RUNNER_SHA256_AMD64 and _ARM64 must hold the SHA-256 of the pinned circleci-runner binary ($(uname -m) has none)"
+  left=${MACHINE_RUNNER_SWARM_RUNNER_WAIT:-120}
+  while [ "$(readlink "$root/current" 2>/dev/null)" != "versions/$want" ] && [ "$left" -gt 0 ]; do
+    [ "$left" != "${MACHINE_RUNNER_SWARM_RUNNER_WAIT:-120}" ] || echo "circleci-runner-entrypoint: waiting for the runner-distributor of this node to install $want" >&2
+    sleep 1
+    left=$((left - 1))
+  done
+  [ "$(readlink "$root/current" 2>/dev/null)" = "versions/$want" ] ||
+    die "$root/current is '$(readlink "$root/current" 2>/dev/null || echo missing)', not versions/$want: the runner-distributor of this node has not installed it (docker service logs <stack>_runner-distributor)"
+  root=$root/versions/$want
+  bin=$root/bin/circleci-runner
+  [ -x "$bin" ] && [ "$(sha256sum "$bin" | cut -d' ' -f1)" = "$pin" ] || die "$bin does not match the pinned SHA-256: refusing to start (the volume was changed, or the pin of the stack is wrong)"
+fi
+
+# The runner and the entrypoint must not be writable by the users they run as: every directory from the runner up to the mount.
+p=$bin
+while :; do
+  [ -e "$p" ] || die "$p is missing: mount /opt/machine-runner-swarm read-only from the runner-distributor volume (stack/distributor.yaml), or install it on the host (linux/setup.sh)"
   s=$(stat -L -c '%u %a' "$p")
   [ "${s% *}" = 0 ] && [ $((0${s#* } & 022)) -eq 0 ] || die "$p must be owned by root and not group/world writable"
+  [ "$p" != /opt/machine-runner-swarm ] || break
+  p=${p%/*}
 done
 
 # Tools: sudo or setpriv steps jobs down; setpriv or su starts the runner as its user. The hardened class (JOB_SUDO=false) always

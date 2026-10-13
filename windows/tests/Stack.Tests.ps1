@@ -108,7 +108,9 @@ Describe 'the stack files' {
 
     It 'place classes on the matching Windows build, and the optional ones only on labelled nodes' {
         foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Match 'node\.platform\.os == windows' }
-        foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Match 'node\.labels\.machine-runner-swarm\.windows-build == ltsc2022' }
+        # The capability label of the image's tag: a 2022 and a 2025 host both carry windows-ltsc2022, so ltsc2022 images run on both.
+        foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Match 'node\.labels\.machine-runner-swarm\.windows-ltsc2022 == true' }
+        $script:allText | Should -Not -Match 'windows-build'
         $script:blocks['windows-docker-build'] | Should -Match 'node\.labels\.machine-runner-swarm\.docker-build == true'
         $script:blocks['windows-docker-build'] | Should -Not -Match 'docker-build !='
         $script:blocks['windows-persistent'] | Should -Match 'node\.labels\.machine-runner-swarm\.class\.windows-persistent == true'

@@ -1,7 +1,7 @@
 ---
 page-title: Install on Windows Server with Docker Swarm
 page-audience: admin
-page-description: Deploy CircleCI machine runner 3 as a Docker Swarm stack on Windows Server 2019, 2022, or 2025, with one clean container for every job.
+page-description: Deploy CircleCI machine runner 3 as a Docker Swarm stack on Windows Server 2022 or 2025, with one clean container for every job.
 ---
 
 # Install on Windows Server with Docker Swarm
@@ -26,7 +26,7 @@ The manual steps come first. The optional [setup helper](#optional-use-the-setup
   |---|---|---|
   | 2025 | Compatible | Tested in CI, image tag `ltsc2025` |
   | 2022 | Compatible | Tested in CI, image tag `ltsc2022` |
-  | 2019 | Compatible | Supported by machine runner 3, not tested in this repo's CI |
+  | 2019 | Compatible | Untested here: the stack files have no label or placement for it, so this page does not cover it |
   | 2016 and older | Not compatible | Not supported |
 
   The host cannot be a domain controller.
@@ -39,14 +39,14 @@ The manual steps come first. The optional [setup helper](#optional-use-the-setup
 
 ### Image tags and host builds
 
-With process isolation, the image build must match the host build. Label every node with its build, and the stack places each service on a matching node.
+With process isolation, the image build must be the host build or an older one. Label every node with the image tags it can run, and the stack places each service on a node that carries the label of the service's image tag.
 
-| Host | Images it can run | Node label |
+| Host | Images it can run | Node labels |
 |---|---|---|
-| Windows Server 2022 | `ltsc2022` only | `machine-runner-swarm.windows-build=ltsc2022` |
-| Windows Server 2025 | `ltsc2025` and `ltsc2022` | `machine-runner-swarm.windows-build=ltsc2025` |
+| Windows Server 2022 | `ltsc2022` only | `machine-runner-swarm.windows-ltsc2022=true` |
+| Windows Server 2025 | `ltsc2025` and `ltsc2022` | `machine-runner-swarm.windows-ltsc2022=true` and `machine-runner-swarm.windows-ltsc2025=true` |
 
-A mismatch fails with the error `0xc0370101`. The shipped file targets `ltsc2022`.
+A service requires the label that names its image tag. The shipped services use `ltsc2022` images, so they run on 2022 and 2025 nodes alike. A service on an `ltsc2025` image requires `machine-runner-swarm.windows-ltsc2025 == true`, so it runs on 2025 nodes only. A mismatch that the labels do not catch fails with the error `0xc0370101`. Server 2019 is untested and has no label.
 
 ### Self-hosted runner terms agreement
 
@@ -228,10 +228,11 @@ docker swarm init --advertise-addr <host IPv4 address>
 
 The network of the host drops for a few seconds after this command, so run it after steps 2 to 4. For more than one node, refer to [Multi-Node Clusters](multi-node.md).
 
-Label the node with its Windows build. Use `ltsc2025` on Server 2025.
+Label the node with the image tags it can run. A Server 2022 node gets one label, and a Server 2025 node gets both.
 
 ```powershell
-docker node update --label-add machine-runner-swarm.windows-build=ltsc2022 <node name>
+docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <node name>
+docker node update --label-add machine-runner-swarm.windows-ltsc2025=true <node name>   # Server 2025 only
 ```
 
 The optional classes need one more label each. Add it to the nodes that run them:
@@ -279,7 +280,7 @@ Copy `windows\stack\runners.yaml`, and keep the copy under version control. Revi
 | `windows-docker-build` | `docker-build.yaml` | Builds Windows images with the host engine. Refer to [Docker Builds](docker-builds.md) |
 
 - `runners.yaml` needs only the secret `windows-default-token`. Each overlay file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
-- For Server 2025 nodes, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-build == ltsc2025`.
+- A Server 2025 node runs the shipped `ltsc2022` services. For a class on the `ltsc2025` image, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-ltsc2025 == true`.
 
 The optional classes are overlay files. Add each with another `-c` flag, and pass the same set of files on every deploy. Each overlay repeats the anchors of `runners.yaml`, because an anchor does not reach into another file. When you change a common setting, change it in every file that you use.
 
@@ -366,7 +367,7 @@ The helper always stages before it starts Swarm. It does not add the labels of t
 | `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, default `windows\stack\runners.yaml`) and `-StackName` (default `runners`) |
 | `-Force` | Stages again even when the same versions are present |
 
-The helper labels the node `machine-runner-swarm.windows-build=ltsc2022` or `ltsc2025` from the host build. It supports Server 2022 and 2025 only, so on Server 2019 use the manual steps.
+The helper labels the node from the host build: `machine-runner-swarm.windows-ltsc2022=true` on Server 2022, and both `windows-ltsc2022=true` and `windows-ltsc2025=true` on Server 2025. It supports Server 2022 and 2025 only. Server 2019 is untested and gets no label.
 
 The example uses your copy of the stack file.
 
@@ -384,7 +385,7 @@ Refer to [Uninstall](operations.md#uninstall). Every stop of a service, includin
 
 ## Troubleshooting
 
-Refer to [Troubleshooting](troubleshooting.md#windows). The most common problems are an image tag that does not match the host build, missing access rights on `C:\machine-runner-swarm`, and a job that ends about 5 seconds after a stop. A task also stays pending when no node carries the `machine-runner-swarm.windows-build` label.
+Refer to [Troubleshooting](troubleshooting.md#windows). The most common problems are an image tag that does not match the host build, missing access rights on `C:\machine-runner-swarm`, and a job that ends about 5 seconds after a stop. A task also stays pending when no node carries the `machine-runner-swarm.windows-ltsc2022` label (or `windows-ltsc2025`, for a service on an `ltsc2025` image).
 
 ## Additional resources
 

@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     -Mode Prepare  Stage C:\machine-runner-swarm with windows\Setup.ps1 -StageOnly, pull the stock image, then
-                   `Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the machine-runner-swarm.windows-build
-                   node label). The order matters: the network is down for a few seconds after
+                   `Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the machine-runner-swarm.windows-ltsc*
+                   node labels). The order matters: the network is down for a few seconds after
                    the swarm is created.
     -Mode Run      Deploy the stack on the stock Server Core image and host three single-task jobs:
                    the first container must claim probe b1, the second (Swarm replaces a
@@ -184,7 +184,7 @@ function Invoke-Prepare {
     Write-E2ELog "docker pull $base"
     Invoke-Docker pull $base | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure "docker pull $base failed" }
-    # The shipped helper: docker swarm init and the machine-runner-swarm.windows-build node label (it stages first and
+    # The shipped helper: docker swarm init and the machine-runner-swarm.windows-ltsc* node labels (it stages first and
     # finds C:\machine-runner-swarm staged).
     $ip = Get-AdvertiseAddress
     Write-E2ELog "windows\Setup.ps1 -InitSwarm -AdvertiseAddr $ip"

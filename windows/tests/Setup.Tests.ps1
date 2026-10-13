@@ -32,6 +32,34 @@ Describe 'Get-BuildLabel' {
     }
 }
 
+Describe 'Get-CapabilityLabel' {
+    It 'gives a Server 2022 host windows-ltsc2022, a Server 2025 host both (it also runs ltsc2022 images), and anything else nothing' {
+        @(Get-CapabilityLabel -Build 20348) | Should -Be @('windows-ltsc2022')
+        @(Get-CapabilityLabel -Build 26100) | Should -Be @('windows-ltsc2022', 'windows-ltsc2025')
+        @(Get-CapabilityLabel -Build 17763).Count | Should -Be 0
+    }
+
+    It 'covers the label every stack file requires, on every supported build' {
+        foreach ($build in 20348, 26100) { @(Get-CapabilityLabel -Build $build) | Should -Contain 'windows-ltsc2022' }
+    }
+}
+
+Describe 'Install-CapabilityLabel' {
+    It 'adds machine-runner-swarm.<name>=true for each capability' {
+        $script:calls = @()
+        Mock Invoke-Docker { $script:calls += , ($ArgumentList -join ' '); return @{ ExitCode = 0; Output = @() } }
+        Install-CapabilityLabel -NodeId 'node1' -Build 26100 | Out-Null
+        $script:calls | Should -Be @(
+            'node update --label-add machine-runner-swarm.windows-ltsc2022=true node1',
+            'node update --label-add machine-runner-swarm.windows-ltsc2025=true node1')
+    }
+
+    It 'stops when docker refuses the label, because every replica would stay Pending' {
+        Mock Invoke-Docker { return @{ ExitCode = 1; Output = @('not a swarm manager') } }
+        { Install-CapabilityLabel -NodeId 'node1' -Build 20348 | Out-Null } | Should -Throw '*not a swarm manager*'
+    }
+}
+
 Describe 'Get-DockerInfo' {
     It 'parses docker info' {
         Mock Invoke-Docker { return @{ ExitCode = 0; Output = @('windows|active|true|abc123') } }

@@ -17,7 +17,7 @@ flowchart LR
     B["linux-b<br/>linux, aarch64<br/>machine-runner-swarm.zone=build"]
     C["linux-c<br/>linux, x86_64<br/>machine-runner-swarm.zone=deploy"]
     D["linux-d (worker)<br/>linux, x86_64<br/>machine-runner-swarm.docker-build=true"]
-    W["win-a<br/>windows<br/>machine-runner-swarm.windows-build=ltsc2022"]
+    W["win-a<br/>windows<br/>machine-runner-swarm.windows-ltsc2022=true"]
   end
 
   subgraph services["Services and their constraints"]
@@ -25,7 +25,7 @@ flowchart LR
     S2["linux-arm64<br/>arch == aarch64"]
     S3["linux-deploy<br/>zone == deploy"]
     S4["linux-docker-build<br/>role == worker<br/>docker-build == true"]
-    S5["windows-default<br/>os == windows<br/>machine-runner-swarm.windows-build == ltsc2022"]
+    S5["windows-default<br/>os == windows<br/>machine-runner-swarm.windows-ltsc2022 == true"]
   end
 
   S1 -.-> A
@@ -44,7 +44,7 @@ A dotted line means that the node satisfies every constraint of the service, so 
 |---|---|---|
 | Manager | Holds the cluster state and every secret. Schedules tasks | Docker Engine. Linux managers can manage Windows workers |
 | Linux worker | Runs Linux services | Docker Engine, `/opt/machine-runner-swarm/current` with the build for its architecture |
-| Windows worker | Runs Windows services | Docker Engine in Windows-container mode, `C:\machine-runner-swarm`, the `machine-runner-swarm.windows-build` label |
+| Windows worker | Runs Windows services | Docker Engine in Windows-container mode, `C:\machine-runner-swarm`, the `machine-runner-swarm.windows-ltsc*` labels |
 
 ### Managers and quorum
 
@@ -115,9 +115,9 @@ On each node:
 2. Stage `C:\machine-runner-swarm` and pull the images. Refer to [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git). Do this before the join.
 3. Open the ports in [Inter-node ports](#inter-node-ports).
 4. Run the join command.
-5. Label the node from a manager with its build: `docker node update --label-add machine-runner-swarm.windows-build=ltsc2022 <node name>`. Use `ltsc2025` on Server 2025.
+5. Label the node from a manager with the image tags it can run: `docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <node name>`. On Server 2025, add `machine-runner-swarm.windows-ltsc2025=true` as well, because a 2025 node runs `ltsc2022` images too.
 
-The labels are required, because the image build must match the host build. Refer to [Image tags and host builds](install-windows.md#image-tags-and-host-builds).
+The labels are required, because the image build must be the host build or an older one. Refer to [Image tags and host builds](install-windows.md#image-tags-and-host-builds).
 
 Deploy the Linux and Windows files into the same stack name. The service names differ, so they do not collide. Do not use `docker stack deploy --prune` there, because it removes the services of the other file.
 
@@ -153,7 +153,8 @@ Set a label with `docker node update --label-add <key>=<value> <node name>`. Rem
 
 | Label | Value | Used by |
 |---|---|---|
-| `machine-runner-swarm.windows-build` | `ltsc2022` or `ltsc2025` | Every Windows service. Matches the image to the host build |
+| `machine-runner-swarm.windows-ltsc2022` | `true` | Every shipped Windows service, which uses `ltsc2022` images. Set on Server 2022 and on Server 2025 nodes |
+| `machine-runner-swarm.windows-ltsc2025` | `true` | Services on an `ltsc2025` image. Set on Server 2025 nodes only |
 | `machine-runner-swarm.zone` | The name of a network zone | Services that must run in one zone. A commented example sits in the Linux placement block |
 | `machine-runner-swarm.docker-build` | `true` | The docker-build services (pattern A). Refer to [Docker Builds](docker-builds.md) |
 | `machine-runner-swarm.class.<service>` | `true` | Pins a service to the labeled nodes. `windows-persistent` uses `machine-runner-swarm.class.windows-persistent`. `linux-persistent` pins itself with `node.hostname` instead |

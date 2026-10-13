@@ -201,9 +201,9 @@ Every `sudo` call in a job prints `unable to send audit message`.
 
 A task is rejected with `The container operating system does not match the host operating system`.
 
-**Cause.** The image build does not match the host build. A Server 2022 host runs only `ltsc2022` images.
+**Cause.** The image build is newer than the host build. A Server 2022 host runs only `ltsc2022` images, and a Server 2025 host runs `ltsc2025` and `ltsc2022` images. The placement labels normally keep a service off a node that cannot run its image, so look for a node that carries a label it should not.
 
-**Fix.** Use an image tag that the host can run, and label the node with the matching `machine-runner-swarm.windows-build` value. Refer to [Image tags and host builds](install-windows.md#image-tags-and-host-builds).
+**Fix.** Use an image tag that the host can run, and label the node with the matching `machine-runner-swarm.windows-ltsc2022` and `windows-ltsc2025` capabilities. Refer to [Image tags and host builds](install-windows.md#image-tags-and-host-builds).
 
 ### The runner never claims a job
 
@@ -285,7 +285,7 @@ You run `C:\Program Files\Git\usr\bin\tar.exe` in a container with a backslash p
 
 **Cause.** The helper supports Windows Server 2022 (build 20348) and 2025 (build 26100), and the host is another version or a client edition.
 
-**Fix.** On Server 2019, use the manual steps and the `ltsc2019` image tag. This repository does not test Server 2019.
+**Fix.** Use a Server 2022 or 2025 host. Server 2019 is untested: the stack files have no label or placement for it, so a 2019 node needs your own image tag, label, and constraint.
 
 ## Collect information for a bug report
 

@@ -152,7 +152,7 @@ Windows works the same way with `windows/stack/runners.yaml`. Two things differ.
 | Linux | RHEL 8 and later | amd64, arm64 | Steps documented, not tested in CI |
 | Windows Server | 2025 | amd64 | Tested in CI |
 | Windows Server | 2022 | amd64 | Tested in CI |
-| Windows Server | 2019 | amd64 | Supported by machine runner 3, not tested in this repo's CI |
+| Windows Server | 2019 | amd64 | Supported by machine runner 3. Untested here, and the stack files have no label for it |
 | Windows Server | 2016 and older | | Not compatible with machine runner 3 |
 | macOS | | | Out of scope. Refer to the [FAQ](docs/faq.md#does-it-support-macos) |
 
@@ -181,7 +181,7 @@ Refer to [Security](docs/security.md) for the threat model and the controls, and
 |---|---|
 | [Concepts](docs/concepts.md) | Services as resource classes, replicas, job lifecycle, clean environments, sudo and the hardened class |
 | [Install on Linux with Docker Swarm](docs/install-linux.md) | Ubuntu and RHEL, manual steps first, with the optional `setup.sh` |
-| [Install on Windows Server with Docker Swarm](docs/install-windows.md) | Server 2019, 2022, and 2025, manual steps first, with the optional `Setup.ps1` |
+| [Install on Windows Server with Docker Swarm](docs/install-windows.md) | Server 2022 and 2025, manual steps first, with the optional `Setup.ps1` |
 | [Multi-Node Clusters](docs/multi-node.md) | Linux, Windows, and Arm nodes, labels, network zones, registries, ports, and quorum |
 | [Resource Classes](docs/resource-classes.md) | Define classes, size them, choose replica counts, persistent mode, and the configuration reference |
 | [Images](docs/images.md) | Stock images with the mounted runner, and your own images on each OS |

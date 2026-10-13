@@ -29,10 +29,11 @@
 #
 # Host prerequisites: Windows Server 2022 or 2025, Docker engine in Windows-container mode, C:\machine-runner-swarm\current staged
 # (stage it BEFORE "docker swarm init": the network drops for a few seconds after it), Swarm initialised
-# with "docker swarm init --advertise-addr <host IPv4 address>". Label every node with the OS build its
-# containers need, because process isolation requires the image build to match the host:
-#       docker node update --label-add machine-runner-swarm.windows-build=ltsc2022 <node>     # Server 2022
-#       docker node update --label-add machine-runner-swarm.windows-build=ltsc2025 <node>     # Server 2025
+# with "docker swarm init --advertise-addr <host IPv4 address>". Label every node with the image tags it can run, because
+# process isolation requires the image build to be the host's or an older one. A service's constraint names the tag of its image:
+#       docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <node>     # Server 2022 AND Server 2025
+#       docker node update --label-add machine-runner-swarm.windows-ltsc2025=true <node>     # Server 2025 only
+#   (Setup.ps1 sets them from the host build.) Server 2019 is untested and has no label.
 # Optional classes are separate files, deployed with extra -c flags (see the comment at the top of each):
 #   custom-image.yaml   your own image on top of stock Server Core (a class you build yourself)
 #   persistent.yaml     a long-lived continuous-mode runner with a named volume
@@ -99,7 +100,7 @@ x-runner-deploy: &runner-deploy
     failure_action: pause
 
 x-runner: &runner
-  isolation: process                        # the image build must match the host (machine-runner-swarm.windows-build label)
+  isolation: process                        # the image build must match the host (the node label windows-<image tag>)
   stop_grace_period: 5h5m                   # runner max_run_time (5h) plus 5 minutes to drain
   logging:
     driver: json-file                       # rotation; "local" also works on Windows
@@ -126,8 +127,8 @@ x-git-mount: &git-mount                     # portable Git, where the task agent
   read_only: true
 
 services:
-  # Default class on the stock Server Core image. For Server 2025 nodes, copy the service under another
-  # name (and resource class), use :ltsc2025 and the constraint machine-runner-swarm.windows-build == ltsc2025.
+  # Default class on the stock Server Core image. A Server 2025 node runs it too. For a class on the ltsc2025 image, copy the
+  # service under another name (and resource class), use :ltsc2025 and the constraint machine-runner-swarm.windows-ltsc2025 == true.
   windows-default:
     <<: [*runner, *stock]
     image: mcr.microsoft.com/windows/servercore:ltsc2022
@@ -151,7 +152,7 @@ services:
         constraints:
           - node.platform.os == windows
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: a job there can read other classes' tokens
-          - node.labels.machine-runner-swarm.windows-build == ltsc2022
+          - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
         preferences:
           - spread: node.id
 

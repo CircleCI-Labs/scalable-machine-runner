@@ -170,7 +170,7 @@ Treat each Windows resource class as a trust boundary: use one token for each cl
 
 ## Placement
 
-Services carry constraints and nodes advertise capabilities. The built-in properties are `node.platform.os` and `node.platform.arch`. This repository adds the node labels `machine-runner-swarm.zone`, `machine-runner-swarm.docker-build`, `machine-runner-swarm.windows-build`, and `machine-runner-swarm.class.<service>`. Refer to [Multi-Node Clusters](multi-node.md).
+Services carry constraints and nodes advertise capabilities. The built-in properties are `node.platform.os` and `node.platform.arch`. This repository adds the node labels `machine-runner-swarm.zone`, `machine-runner-swarm.docker-build`, `machine-runner-swarm.windows-ltsc2022`, `machine-runner-swarm.windows-ltsc2025`, and `machine-runner-swarm.class.<service>`. Refer to [Multi-Node Clusters](multi-node.md).
 
 ## Why Swarm and not plain Compose
 

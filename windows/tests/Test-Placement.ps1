@@ -10,8 +10,9 @@
 
       node.platform.os == windows                     matches
       node.platform.os == linux                       pending (wrong OS)
-      node.labels.machine-runner-swarm.windows-build == <this build>       pending until the node carries the label
-      node.labels.machine-runner-swarm.windows-build == <other build>      pending even with the right label on the node
+      node.labels.machine-runner-swarm.windows-<this tag> == true          pending until the node carries the label (a Server 2025
+                                                                           node also carries windows-ltsc2022; this test labels one tag)
+      node.labels.machine-runner-swarm.windows-<other tag> == true         pending while the node lacks that label
       node.labels.machine-runner-swarm.docker-build == true            pending until the node carries the label
       node.labels.machine-runner-swarm.docker-build != true            starts on a node WITHOUT the label (the other classes), and stays
                                                                        pending once the node carries it
@@ -88,8 +89,8 @@ try {
     $node = Get-SwarmNodeId -DockerCommand $DockerCommand
     $null = Invoke-Docker @('pull', $Image)
 
-    # Start from a clean node: no machine-runner-swarm.windows-build or machine-runner-swarm.docker-build label.
-    foreach ($l in @('machine-runner-swarm.windows-build', 'machine-runner-swarm.docker-build')) { $null = Invoke-Docker @('node', 'update', '--label-rm', $l, $node) }
+    # Start from a clean node: no machine-runner-swarm.windows-ltsc* or machine-runner-swarm.docker-build label.
+    foreach ($l in @('machine-runner-swarm.windows-ltsc2022', 'machine-runner-swarm.windows-ltsc2025', 'machine-runner-swarm.docker-build')) { $null = Invoke-Docker @('node', 'update', '--label-rm', $l, $node) }
 
     # 1. Constraints that cannot match.
     $svc = Add-PlacementService -Suffix 'linux' -Constraint @('node.platform.os == linux') -IsolationMode $Isolation
@@ -97,7 +98,7 @@ try {
     $p = Test-StaysPending -Service $svc -Seconds $PendingSeconds
     Write-SwarmCheck 'wrong-os-pending' $p.Ok $p.Detail
 
-    $svc = Add-PlacementService -Suffix 'nolabel' -Constraint @('node.platform.os == windows', "node.labels.machine-runner-swarm.windows-build == $tag") -IsolationMode $Isolation
+    $svc = Add-PlacementService -Suffix 'nolabel' -Constraint @('node.platform.os == windows', "node.labels.machine-runner-swarm.windows-$tag == true") -IsolationMode $Isolation
     $services += $svc
     $p = Test-StaysPending -Service $svc -Seconds $PendingSeconds
     Write-SwarmCheck 'missing-build-label-pending' $p.Ok $p.Detail
@@ -114,11 +115,11 @@ try {
     Write-SwarmCheck 'unlabelled-node-matches-not-docker-build' $startedPlain "state='$((Get-PlacementState -Service $svcPlain).State)'"
 
     # 2. The label arrives: the pending task is scheduled and starts.
-    $r = Invoke-Docker @('node', 'update', '--label-add', "machine-runner-swarm.windows-build=$tag", $node)
-    $labelsAdded += 'machine-runner-swarm.windows-build'
+    $r = Invoke-Docker @('node', 'update', '--label-add', "machine-runner-swarm.windows-$tag=true", $node)
+    $labelsAdded += "machine-runner-swarm.windows-$tag"
     $started = Wait-SwarmCondition -TimeoutSeconds $StartTimeoutSeconds -IntervalSeconds 5 -Condition { (Get-PlacementState -Service $svc).State -match '^Running' }
     $s = Get-PlacementState -Service $svc
-    Write-SwarmCheck 'build-label-starts' $started "label=machine-runner-swarm.windows-build=$tag label_exit=$($r.ExitCode) state='$($s.State)' error='$($s.Error)'"
+    Write-SwarmCheck 'build-label-starts' $started "label=machine-runner-swarm.windows-$tag=true label_exit=$($r.ExitCode) state='$($s.State)' error='$($s.Error)'"
 
     # 3. The docker-build service is still pending: only its own label unlocks it.
     $s2 = Get-PlacementState -Service $svc2
@@ -134,8 +135,8 @@ try {
     $p = Test-StaysPending -Service $svcPlain2 -Seconds $PendingSeconds
     Write-SwarmCheck 'docker-build-node-refuses-other-classes' $p.Ok $p.Detail
 
-    # 4. A service for the OTHER build stays pending although the node carries a machine-runner-swarm.windows-build label.
-    $svc3 = Add-PlacementService -Suffix 'otherbuild' -Constraint @('node.platform.os == windows', "node.labels.machine-runner-swarm.windows-build == $otherTag") -IsolationMode $Isolation
+    # 4. A service for the OTHER tag stays pending: the node carries machine-runner-swarm.windows-$tag, not windows-$otherTag.
+    $svc3 = Add-PlacementService -Suffix 'otherbuild' -Constraint @('node.platform.os == windows', "node.labels.machine-runner-swarm.windows-$otherTag == true") -IsolationMode $Isolation
     $services += $svc3
     $p = Test-StaysPending -Service $svc3 -Seconds $PendingSeconds
     Write-SwarmCheck 'other-build-pending' $p.Ok "$($p.Detail) (node build $tag, service wants $otherTag)"

@@ -15,7 +15,10 @@
        next job) gets the new version and running jobs keep the old one. Run it again with another -RunnerVersion
        to install side by side and flip, or with an installed one to roll back. Done BEFORE any swarm init, because
        the network drops for a few seconds after it.
-    3. Labels the node machine-runner-swarm.windows-build=ltsc2022|ltsc2025 (the stack file's placement uses it).
+    3. Labels the node with the image tags it can run (the stack files' placement uses them): Server 2022
+       gets machine-runner-swarm.windows-ltsc2022=true, Server 2025 gets machine-runner-swarm.windows-ltsc2022=true
+       AND machine-runner-swarm.windows-ltsc2025=true, because a 2025 host also runs ltsc2022 images. Server 2019
+       is untested and gets no label.
     4. -Class <name>,...: asks for each class's runner token (hidden input) and creates the Swarm secret
        <name>-token. The secret is a minimal runner config file ("api: auth_token: ..."); everything
        else the runner needs is an environment variable in the stack file. Existing secrets are kept.
@@ -69,6 +72,26 @@ function Get-BuildLabel {
     if ($Build -eq 20348) { return 'ltsc2022' }
     if ($Build -eq 26100) { return 'ltsc2025' }
     return $null
+}
+
+function Get-CapabilityLabel {
+    # The image tags a host can run, as node label names: process isolation needs the image build to be the host's or an older
+    # one, so a Server 2025 host runs ltsc2022 images too, and a Server 2022 host cannot run ltsc2025 images (0xc0370101).
+    param([int] $Build)
+    if ($Build -eq 20348) { return @('windows-ltsc2022') }
+    if ($Build -eq 26100) { return @('windows-ltsc2022', 'windows-ltsc2025') }
+    return @()
+}
+
+function Install-CapabilityLabel {
+    # docker node update --label-add machine-runner-swarm.<name>=true for every capability of the host. A failure stops the
+    # script: without the label every replica stays Pending and nothing says why.
+    param([string] $NodeId, [int] $Build)
+    foreach ($name in @(Get-CapabilityLabel -Build $Build)) {
+        $r = Invoke-Docker @('node', 'update', '--label-add', "machine-runner-swarm.$name=true", $NodeId)
+        if ($r.ExitCode -ne 0) { throw "docker node update --label-add machine-runner-swarm.$name=true failed: $($r.Output -join ' ')" }
+        [Console]::Out.WriteLine("node $NodeId labelled machine-runner-swarm.$name=true")
+    }
 }
 
 function Invoke-Docker {
@@ -181,8 +204,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         if ($r.ExitCode -ne 0) { throw "docker swarm init failed: $($r.Output -join ' ')" }
         for ($i = 0; $i -lt 15 -and -not (Get-DockerInfo).Manager; $i++) { Start-Sleep -Seconds 2 }   # the network blips after init
     }
-    $label = Get-BuildLabel -Build ([int](Get-CimInstance -ClassName Win32_OperatingSystem).BuildNumber)
-    $null = Invoke-Docker @('node', 'update', '--label-add', "machine-runner-swarm.windows-build=$label", (Get-DockerInfo).NodeId)
+    Install-CapabilityLabel -NodeId (Get-DockerInfo).NodeId -Build ([int](Get-CimInstance -ClassName Win32_OperatingSystem).BuildNumber)
     foreach ($c in $Class) { Install-ClassSecret -Name $c }
     if ($Deploy) {
         $r = Invoke-Docker (@('stack', 'deploy') + @($StackFile | ForEach-Object { '-c'; $_ }) + @($StackName))

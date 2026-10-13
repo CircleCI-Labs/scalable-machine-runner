@@ -35,7 +35,7 @@ x-runner-deploy: &runner-deploy
     failure_action: pause
 
 x-runner: &runner
-  isolation: process                        # the image build must match the host (machine-runner-swarm.windows-build label)
+  isolation: process                        # the image build must match the host (the node label windows-<image tag>)
   stop_grace_period: 5h5m                   # runner max_run_time (5h) plus 5 minutes to drain
   logging:
     driver: json-file                       # rotation; "local" also works on Windows
@@ -90,7 +90,7 @@ services:
         constraints:
           - node.platform.os == windows
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: a job there can read other classes' tokens
-          - node.labels.machine-runner-swarm.windows-build == ltsc2022
+          - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
         preferences:
           - spread: node.id
 

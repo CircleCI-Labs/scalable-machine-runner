@@ -237,4 +237,4 @@ Docker keeps a Swarm secret in clear text on the container root disk until the c
 Get-BitLockerVolume
 ```
 
-The status of the volume must show that protection is on. Refer to the Microsoft documentation for BitLocker on Windows Server for the setup steps, including the recovery key.
+The status of the volume must show that protection is on. BitLocker protects the token when someone steals the disk, or a snapshot or backup of it. It does not protect against a job, or an administrator who is logged in to the live host, because both read the decrypted file. Limit the local administrators of the host, use one token for each class and host, and rotate tokens. Refer to the Microsoft documentation for BitLocker on Windows Server for the setup steps, including the recovery key.

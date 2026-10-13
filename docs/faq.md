@@ -1,7 +1,7 @@
 ---
 page-title: FAQ
 page-audience: admin
-page-description: Answers to common questions about the Docker Swarm runner stack, including Compose, container runner, macOS, Windows versions, and support.
+page-description: Answers to common questions about the Docker Swarm runner stack, including what to build, how it compares with the official runners, scaling, unsupported jobs, and node loss.
 ---
 
 # FAQ
@@ -14,13 +14,50 @@ It is a set of Docker Swarm stack files, a small Linux entrypoint, optional setu
 
 No. This repository is part of CircleCI Labs. CircleCI field engineers created it and real customers use it, but CircleCI support does not cover it. Field engineering handles issues on a best-effort basis. The runner itself, the CircleCI platform, and your resource classes are covered by your normal CircleCI support.
 
-## Why not container runner?
+## What must I build?
 
-Container runner is the recommended method for containerized jobs, and CircleCI supports it. It needs a Kubernetes cluster. This stack is for teams that do not run Kubernetes, that run Windows jobs, or that already operate Docker hosts. CircleCI lists its own options in the [runner overview](https://circleci.com/docs/guides/execution-runner/runner-overview/). Choose container runner when you have Kubernetes.
+Nothing, with one optional exception on Windows.
 
-## How is this different from machine runner 3 on Docker?
+| | You build | Optional |
+|---|---|---|
+| Linux | Nothing. The stack mounts the runner and the entrypoint from the host into a stock image such as `cimg/base`. You install them with a few commands or with `linux/setup.sh` | A custom image when jobs need tools, because the hardened class cannot install packages at run time. It needs util-linux `setpriv`. Refer to [Images](images.md) |
+| Windows | Nothing. The stack mounts the runner and portable Git from `C:\machine-runner-swarm` into the stock Server Core image. `windows\Setup.ps1` stages them | A custom image for your tools, and a DIY image that lets a job finish after a stop. Refer to [Windows images](images.md#windows-bring-your-own-image) and [the stop-timeout image](operations.md#optional-an-image-that-lets-a-job-finish-after-a-stop-diy) |
 
-The CircleCI page for [machine runner 3 on Docker](https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-docker/) runs a container with `docker run`. That container is reused for more jobs until you stop it, so it does not give a clean environment. This stack runs the runner in single-task mode and lets Swarm create a new container for every job. It adds replicas, placement, secrets, and rolling updates.
+This repository publishes no images. The Linux and Windows hosts need the files from the install pages and a Docker engine, and that is all.
+
+## What do `sudo -niHu` and `setpriv` mean?
+
+They are the two forms of the runner's `command_prefix`, the setting that wraps the task agent so that a job runs as another user. CircleCI documents the setting in the [machine runner 3 configuration reference](https://circleci.com/docs/guides/execution-runner/machine-runner-3-configuration-reference/#runner-command-prefix). The entrypoint sets it in every Linux container, and a value in the service environment does not override it.
+
+- `sudo -niHu circleci --` is the default class. The flags are `-n` (never prompt: fail instead), `-i` (run a login shell), `-H` (set `HOME` to the home directory of the target user), and `-u circleci` (the target user). `--` ends the options, and the task agent follows. The file `/etc/sudoers.d/90-circleci-runner` allows only the runner user (uid 2000) to do this, and only to the job user.
+- `setpriv` is the form without sudo. It comes from util-linux, switches to the job user, and clears every capability before it starts the task agent. The hardened class always uses it with `--no-new-privs`, which makes the job and everything it starts ignore the setuid bit, so `sudo`, `su`, or a vulnerable setuid binary cannot lift a job to root. An image that has no sudo uses `setpriv` too, whatever the setting.
+
+The setting `MACHINE_RUNNER_SWARM_JOB_SUDO` chooses between the default and the hardened class. It is not the prefix itself. Refer to [Users and the runner token on Linux](concepts.md#users-and-the-runner-token-on-linux).
+
+## Should I use the setup helper or the manual steps?
+
+Both give the same result. The manual steps are about 18 commands, and the helper runs the common ones in 3 invocations. The helper is optional, and every step of it is on the install pages.
+
+| | `setup.sh` or `Setup.ps1` does | It does not |
+|---|---|---|
+| Linux | Checks the node, creates a single-node Swarm on the loopback address, downloads and verifies the runner, installs it with the entrypoint, creates secrets from hidden prompts, and deploys the stack files you name | Install Docker, create resource classes or tokens, edit or copy the stack file, label or join nodes, build images, or run `--install` on the other nodes |
+| Windows | Stages the runner and Git with the access rights and the `current` junction, creates the Swarm, labels the node with the image tags it can run, creates secrets, and deploys | Install Docker or Windows features, create classes or tokens, edit or copy the stack file, add the labels of the optional classes, join other nodes, or build images |
+
+The steps run in a fixed order, and a rerun is safe. The helpers pin a runner version and its checksum, and do not look up the latest. Refer to [Optional: use the setup helper](install-linux.md#optional-use-the-setup-helper) and [the Windows helper](install-windows.md#optional-use-the-setup-helper).
+
+## Why Swarm and not container runner or another runner?
+
+Choose by what you already run and by the isolation that you need.
+
+| You have or need | Use | Why |
+|---|---|---|
+| Kubernetes, and jobs that fit a `docker:` executor | [Container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/) | CircleCI documents it, it scales pods, and it uses convenience images. Choose it when you have Kubernetes |
+| A boundary stronger than a container, privileged or KVM jobs, a full OS, or autoscaling | [Machine runner orchestrator](https://circleci.com/docs/guides/execution-runner/machine-runner-orchestrator/) | A virtual machine for each job on Kubernetes with KubeVirt, and the token stays out of the VM. Refer to [Compared with the official runner installs](security.md#compared-with-the-official-runner-installs) |
+| One host or a few, jobs that need the whole machine, or no containers at all | [Machine runner 3 on a host](https://circleci.com/docs/guides/execution-runner/runner-overview/#choosing-a-runner-execution-environment) | The simplest setup. Jobs share the host, and nothing separates one job from the next |
+| The same, but in a container | [Machine runner 3 on Docker](https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-docker/) | It runs the runner with `docker run`. The container is reused for more jobs until you stop it, so the environment is not clean |
+| Docker hosts or Windows containers, no Kubernetes, and a clean container for every job | This repository | Swarm creates a new container for every job, and adds replicas, placement, secrets, and rolling updates. It has no support from CircleCI and no autoscaling, and the containers share the host kernel |
+
+Swarm mode is part of Docker Engine, and the stack files use only its core features: services, secrets, constraints, and rolling updates. To move to the orchestrator or to a plain machine runner later, keep the resource class names, and the jobs with `machine: true` stay as they are. Container runner needs the jobs to change to a `docker:` executor. CircleCI lists its own options in the [runner overview](https://circleci.com/docs/guides/execution-runner/runner-overview/).
 
 ## Why not plain Docker Compose?
 
@@ -57,17 +94,24 @@ No. Docker has no macOS containers, so Swarm cannot schedule macOS jobs. Apple's
 
 The stack is tested against CircleCI cloud. It does not set `CIRCLECI_RUNNER_API_URL`, which CircleCI server needs. CircleCI server is not tested. Config policies, which restrict classes to projects, need the Scale plan on cloud.
 
-## Can I use a Docker executor job on these runners?
+## How do I scale up or down, and see how many jobs wait?
 
-No. Jobs use `machine: true` with `resource_class: <namespace>/<class>`. The runner runs inside the image of the service, so the image is the environment of the job. Machine runner does not run `docker:` executor jobs.
+Swarm has no autoscaling, so you choose the number of replicas.
 
-## Can jobs build Docker images?
+- **Permanent change.** Edit `deploy.replicas` in your stack file and deploy again with the same list of files. Refer to [Choose replica counts](resource-classes.md#choose-replica-counts). To add capacity beyond one node, add nodes. Refer to [Multi-Node Clusters](multi-node.md).
+- **Quick change.** `docker service scale runners_linux-default=4`. The next `docker stack deploy` resets the count to the value in the file. A scale-down stops containers: on Linux a running job finishes first, and on Windows it is killed ([why](operations.md#stop-a-busy-windows-container)).
+- **Queue depth.** The runner API reports the tasks that wait for a runner of a class. Use a personal API token, not a resource class token.
 
-Not by default. Docker builds are opt-in, through a dedicated class that mounts the host engine. That class is root-equivalent on its node. Refer to [Docker Builds](docker-builds.md).
+  ```console
+  $ curl -s -H "Circle-Token: $CIRCLECI_API_TOKEN" \
+      "https://runner.circleci.com/api/v3/runner/tasks?resource-class=<namespace>/linux-default"
+  {"unclaimed_task_count": 3}
+  $ curl -s -H "Circle-Token: $CIRCLECI_API_TOKEN" \
+      "https://runner.circleci.com/api/v3/runner/tasks/running?resource-class=<namespace>/linux-default"
+  {"running_runner_tasks": 2}
+  ```
 
-## How do I add capacity?
-
-Raise `deploy.replicas` of a service, or add nodes. Refer to [Choose replica counts](resource-classes.md#choose-replica-counts).
+  Jobs wait while `unclaimed_task_count` stays above 0 and every replica is busy. Raise the replicas by that number, if the nodes have room. Refer to [Monitor the cluster](operations.md#monitor-the-cluster).
 
 ## Is there a delay between jobs?
 
@@ -83,11 +127,11 @@ Yes, with a persistent class. It gives up the clean environment, so use it only 
 
 ## Can a job read the runner token?
 
-In the default Linux class, a job that uses sudo can. In the hardened class, it cannot. On Windows, a job can, and Swarm also stores the secret in clear text on the container disk. Refer to [Security](security.md#token-model-on-each-os).
+In the default Linux class, a job that uses sudo can. In the hardened class, it cannot. On Windows, a job can, and Swarm also stores the secret in clear text on the container disk, so use BitLocker and one token for each class and host. Refer to [Token model on each OS](security.md#token-model-on-each-os) and to the [comparison with the official installs](security.md#compared-with-the-official-runner-installs). A holder of a token can run a rogue runner on that class and claim its jobs, so rotate tokens ([how](operations.md#rotate-a-runner-token)).
 
 ## Why does a Windows job end when I update or stop a service?
 
-Stopping a busy stock Server Core container from outside kills its job after about 5 seconds, whatever `stop_grace_period` says. The exit code is 3221225786. The normal flow is not affected: a job that finishes ends the runner and the container cleanly. Only a deploy or update, a scale-down, a drain, `docker stack rm`, and a restart of Docker stop a busy container. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
+Stopping a busy stock Server Core container from outside kills its job after about 5 seconds, whatever `stop_grace_period` says, and a finished job ends its container cleanly. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ## Does the setup helper install the latest runner?
 
@@ -96,6 +140,49 @@ No. `linux/setup.sh` and `windows\Setup.ps1` install a pinned version and verify
 ## How do I verify a release?
 
 Each release has a `SHA256SUMS` file and a keyless cosign signature that was made with the CircleCI OIDC token. Refer to [Verify a release](install-linux.md#verify-a-release), or [Verify a release](install-windows.md#verify-a-release) on Windows.
+
+## Can a fork pull request use these runners?
+
+No. CircleCI does not make self-hosted runners available to a public project that has **Build forked pull requests** enabled, because untrusted code on your machines is a significant risk. Keep that setting off for any project that uses these classes. For a private project, a collaborator's branch runs your code on the node, so restrict each class to the projects that need it. Refer to [CircleCI-side controls](security.md#circleci-side-controls).
+
+## Which jobs cannot run here?
+
+The jobs run in unprivileged containers on a shared kernel, so some jobs belong on another runner.
+
+| Job needs | Here | Use instead |
+|---|---|---|
+| A privileged container, `/dev/kvm`, or other host devices | No. Swarm ignores `privileged` and `devices` | The machine runner orchestrator, or a machine runner on a host |
+| Docker-in-Docker | No, because it needs a privileged container | The opt-in [docker-build class](docker-builds.md), or a daemonless builder |
+| `setup_remote_docker` | No. It belongs to the Docker executor | The docker-build class, or a daemonless builder |
+| Docker commands in a job | Only in the docker-build class, which is root-equivalent on its node | [Docker Builds](docker-builds.md) |
+| A GPU | Not supported or tested. The stack files declare no generic resources | A machine runner on a GPU host |
+| Service containers (`docker:` secondary images) | No. Jobs use `machine: true` | Install the service in the image, or use container runner |
+| Desktop or UI automation on Windows | No. Windows jobs are headless | A machine runner on a host |
+| A `docker:` executor job | No. Jobs use `machine: true`, and the image of the service is the environment of the job | Container runner |
+
+## Do proxies and custom certificate authorities work?
+
+The stack sets nothing for them, and this repository does not test them.
+
+- **Proxy.** Set `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` under `environment` of the service. The runner is a Go program that reads them, and jobs inherit them. Test a checkout through the proxy before you roll out a class. Refer to [Egress hosts](security.md#egress-hosts).
+- **Certificate authority.** Add your CA to a custom image and run `update-ca-certificates`, or mount a CA bundle read-only and point `SSL_CERT_FILE` at it. Windows images need the CA in the image too. Refer to [Images](images.md).
+
+## Does it work on hosts without internet access?
+
+Not without a route to CircleCI. Every runner needs outbound HTTPS to `runner.circleci.com`, and every new container downloads the task agent from `circleci-binary-releases.s3.amazonaws.com`. A host that reaches those names through an allow list or a proxy works. The variable `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` points only the `setup.sh` download of the runner at an HTTPS mirror, so it does not replace the task agent download. Pull the images from a registry that the nodes can reach. Refer to [Registry needs](multi-node.md#registry-needs).
+
+## Does it work with rootless Docker, user namespaces, or Podman?
+
+- **Podman** cannot run Swarm, so it cannot run this stack.
+- **Rootless Docker** and **`userns-remap`** are not tested. The stack assumes a root daemon: the entrypoint checks that the mounted runner directory belongs to root, and the secret belongs to uid 2000. With a remap, root-owned host files appear under another owner, and the entrypoint is likely to exit with code 80. Swarm also ignores `userns_mode` in stack files.
+
+## Does it work with SELinux on RHEL?
+
+The RHEL steps are documented and not tested in CI. Keep SELinux enforcing, and label `/opt/machine-runner-swarm` for containers if it denies access. Refer to [Permission denied on /opt/machine-runner-swarm with SELinux](troubleshooting.md#permission-denied-on-optmachine-runner-swarm-with-selinux).
+
+## What happens to a job when a node dies?
+
+The job is lost. CircleCI reports it as failed because of an infrastructure problem, and self-hosted runners do not retry a job automatically, so rerun it. Swarm detects the lost node, and starts replacement runners on other nodes that match the constraints, which restores the capacity. A single manager that dies stops all replacements, and the quorum rules of [Managers and quorum](multi-node.md#managers-and-quorum) apply. Refer to [Node death](operations.md#node-death).
 
 ## How do I report a bug or a vulnerability?
 

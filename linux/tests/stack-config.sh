@@ -118,6 +118,21 @@ if ! diff_out=$(diff <(service_block linux-default | without_ssh) <(service_bloc
   problems=$((problems + 1))
 fi
 
+
+# DRAFT distributor.yaml: no host bind, the runner volume is read-only, the entrypoint is a config, and the distributor is global from a pinned stock image
+cfg=$(docker stack config -c "$dir/runners.yaml" -c "$dir/distributor.yaml") || { echo "FAIL: docker stack config rejected: runners.yaml distributor.yaml"; exit 1; }
+for s in linux-default linux-java linux-hardened; do
+  block=$(service_block "$s")
+  check "$s (distributor.yaml)" 'the read-only runner-bin volume' '^        source: runner-bin$'
+  check "$s (distributor.yaml)" 'the config entrypoint' '^      - /circleci-runner-entrypoint$'
+  check "$s (distributor.yaml)" 'the pinned version' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: '
+  if grep -q 'source: /opt/machine-runner-swarm/current' <<< "$block"; then echo "  $s (distributor.yaml): still binds the host directory"; problems=$((problems + 1)); fi
+done
+block=$(service_block runner-distributor)
+check runner-distributor 'a global service' '^      mode: global$'
+check runner-distributor 'an image pinned by digest' '^    image: alpine:3@sha256:[0-9a-f]{64}$'
+check runner-distributor 'a writable runner-bin volume' '^        source: runner-bin$'
+
 echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml services=${#services[@]} problems=$problems"
 if [[ $problems -eq 0 ]]; then
   echo "PASS (docker stack config accepts every file combination; every service meets the contract)"

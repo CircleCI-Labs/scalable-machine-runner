@@ -5,7 +5,8 @@ Serves what the real circleci-runner needs to start, idle and run tasks: the tas
 small shell script, see AGENT), "no task" (204) for a claim, or, for the first TASKS claims, a task
 whose job config is empty. The runner starts the agent through its command_prefix, as for a real job;
 the agent prints what it can see (its user, sudo, the token file, the working directory) to
-stderr, which the runner passes on to its own output (stdout goes to the API). No token is checked. Usage: fake-api.py [PORT [TASKS]]
+stderr, which the runner passes on to its own output (stdout goes to the API). No token is checked. Usage: fake-api.py [PORT [TASKS [SLEEP]]]
+SLEEP: seconds the agent runs (a long job), then it prints TASKEND to stderr. GET /_arm/N hands out N more tasks.
 """
 import hashlib
 import http.server
@@ -14,6 +15,7 @@ import sys
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8099
 TASKS = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+SLEEP = int(sys.argv[3]) if len(sys.argv) > 3 else 0
 AGENT = b"""#!/bin/sh
 w=${*#*--workDir=}; w=${w%% *}
 case $1 in _internal) ;; *) exit 0 ;; esac   # the runner also runs "version" and the like
@@ -22,9 +24,9 @@ echo "TASK uid=$(id -u) user=$(id -un) home=$HOME workdir=$w residue=$(ls -A "$w
   "config=$(cat /run/secrets/circleci_runner_config.yaml >/dev/null 2>&1 && echo READABLE || echo denied)" \\
   "token_env=$(env | grep -c API_AUTH_TOKEN)" "no_new_privs=$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' /proc/self/status)" >&2
 mkdir -p "$w/project/.git/objects" "$w/project/sub" && echo data > "$w/project/.git/objects/pack" && echo x > "$w/project/sub/file"
-exit 0
+""" + (b'sleep %d; echo TASKEND >&2\n' % SLEEP if SLEEP else b"") + b"""exit 0
 """
-state = {"claims": 0}
+state = {"claims": 0, "limit": TASKS}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -57,6 +59,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._reply(200, json.dumps(doc).encode())
         elif self.path == "/agent":
             self._reply(200, AGENT, "application/octet-stream")
+        elif self.path.startswith("/_arm/"):
+            state["claims"], state["limit"] = 0, int(self.path.rsplit("/", 1)[1])
+            self._reply(200, b"{}")
         elif self.path.startswith("/api/v2/task/config"):
             self._reply(200, b'{"job":{"config":{}}}')
         else:
@@ -64,7 +69,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._drain_request_body()
-        if self.path.startswith("/api/v3/runner/claim") and state["claims"] < TASKS:
+        if self.path.startswith("/api/v3/runner/claim") and state["claims"] < state["limit"]:
             state["claims"] += 1
             self._reply(200, b'{"allocation":"a%d"}' % state["claims"])
         elif self.path.startswith("/api/v3/runner/claim"):

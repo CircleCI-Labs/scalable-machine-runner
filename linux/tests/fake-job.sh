@@ -10,12 +10,14 @@ for f in "$HOME/.job-marker" /tmp/.job-marker /var/opt/circleci/workdir/.job-mar
 done
 layer=$(grep ' / / ' /proc/self/mountinfo | grep -oE 'upperdir=[^,]+' | md5sum | cut -c1-12)
 if sudo -n true 2>/dev/null; then sudo=yes; else sudo=no; fi
-echo "FAKEJOB layer=$layer name=${CIRCLECI_RUNNER_NAME:-none} uid=$(id -u) user=$(id -un) sudo=$sudo residue=[${seen# }]"
+# The runner version of the host directory mounted at /opt/machine-runner-swarm: it is chosen when the container is created.
+version() { cat /opt/machine-runner-swarm/VERSION 2>/dev/null || echo none; }
+echo "FAKEJOB layer=$layer name=${CIRCLECI_RUNNER_NAME:-none} uid=$(id -u) user=$(id -un) sudo=$sudo version=$(version) residue=[${seen# }]"
 touch "$HOME/.job-marker" /tmp/.job-marker /var/opt/circleci/workdir/.job-marker 2>/dev/null
 sudo -n touch /etc/job-marker 2>/dev/null || true
 # A long job, to see that SIGTERM lets it finish (FAKE_JOB_SLEEP seconds).
 if [ -n "${FAKE_JOB_SLEEP:-}" ]; then
   sleep "$FAKE_JOB_SLEEP"
-  echo "JOBEND layer=$layer"
+  echo "JOBEND layer=$layer version=$(version)"
 fi
 exit 0

@@ -48,7 +48,7 @@ services:
       options: {max-size: 20m, max-file: "3"}
     volumes:
       - type: bind
-        source: /opt/machine-runner-swarm
+        source: /opt/machine-runner-swarm/current   # a link to the installed version (see runners.yaml)
         target: /opt/machine-runner-swarm
         read_only: true
       - type: bind

@@ -50,7 +50,7 @@ echo "RESULT test=ephemerality phase=swarm jobs=$total distinct_containers=$ids 
 # --- phase 2: negative control ----------------------------------------------------------------
 idocker "$SWARM_TEST_MGR" service scale "${STACK}_linux-default=0" >/dev/null 2>&1 || true
 idocker "$SWARM_TEST_MGR" run -d --name eph-control --restart always --user 0 --entrypoint /opt/machine-runner-swarm/bin/circleci-runner-entrypoint \
-  -v /opt/machine-runner-swarm:/opt/machine-runner-swarm:ro -e CIRCLECI_RUNNER_NAME=eph-control "$CIMG_IMAGE" >/dev/null
+  -v /opt/machine-runner-swarm/current:/opt/machine-runner-swarm:ro -e CIRCLECI_RUNNER_NAME=eph-control "$CIMG_IMAGE" >/dev/null
 wait_for 60 bash -c "[ \$(docker exec $SWARM_TEST_MGR docker logs eph-control 2>&1 | grep -c FAKEJOB) -ge 3 ]" ||
   fail "the negative control did not run 3 jobs"
 lines=$(idocker "$SWARM_TEST_MGR" logs eph-control 2>&1 | grep FAKEJOB | head -n 3)

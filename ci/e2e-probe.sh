@@ -164,7 +164,8 @@ if [ "${sudo_works}" = yes ]; then
     fi
   done
 fi
-runner_user=$(ps -o user= -C circleci-runner 2>/dev/null | head -n 1 | tr -d ' ')
+# The entrypoint script is called circleci-runner-entrypoint, which the kernel shortens to "circleci-runner" (15 characters): skip it.
+runner_user=$(ps -eo user:32=,comm=,args= 2>/dev/null | awk '$2 == "circleci-runner" && $0 !~ /entrypoint/ { print $1; exit }')
 # The token must not be on any command line either (ps shows every process's arguments).
 token_ps=absent
 ps_args=$(ps -eo args= 2>/dev/null || true)

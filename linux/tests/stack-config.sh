@@ -52,6 +52,7 @@ for s in "${services[@]}"; do
   check "$s" 'secret gid 2000' '^        gid: "2000"$'
   check "$s" 'secret mode 0400' '^        mode: 256$'
   check "$s" 'the read-only /opt/machine-runner-swarm bind' '^        read_only: true$'
+  check "$s" 'the bind source /opt/machine-runner-swarm/current (a link to the installed version)' '^        source: /opt/machine-runner-swarm/current$'
   check "$s" 'its own network' "^      $s: null$"
   if grep -q 'privileged\|security_opt' <<< "$block"; then
     echo "  $s: uses a key Swarm ignores"

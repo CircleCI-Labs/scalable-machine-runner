@@ -21,14 +21,16 @@ Usage: setup.sh [STEPS] [OPTIONS]    (no steps: --check --install; every step is
 Steps, run in this order:
   --check            preflight only: Linux, amd64/arm64, Docker running and 24+, Swarm state, clock
   --swarm-init       docker swarm init for one node (listens on 127.0.0.1 only) unless Swarm is active
-  --install          download, verify and install the runner and circleci-runner-entrypoint into --prefix (root)
+  --install          download, verify and install the runner and circleci-runner-entrypoint into --prefix/VERSION, then
+                     point --prefix/current at it (root). Versions sit side by side: a version that is installed already
+                     is only switched to, so the same command is the rollback
   --secret SERVICE   create the Swarm secret SERVICE-token (a runner config holding the token); the token
                      comes from stdin (hidden prompt, or one line from a pipe), never printed
   --deploy           docker stack deploy of the --stack-file files
 Options:
   --version X.Y.Z    runner version (default 3.1.12, SHA-256 pinned here; others need --sha256)
   --sha256 HEX       expected SHA-256 of the tarball, from that release's checksums.txt
-  --prefix DIR       install directory (default /opt/machine-runner-swarm)
+  --prefix DIR       directory of the versions and of the current link (default /opt/machine-runner-swarm)
   --stack-file FILE  stack file for --deploy, repeatable (default: stack/runners.yaml)
   --stack-name NAME  default: runners
 EOF
@@ -59,19 +61,22 @@ preflight() { # NEEDS_DOCKER
 }
 
 # swarm_install_runner [VERSION [PREFIX [SHA256]]]: download circleci-runner for this architecture, verify the
-# SHA-256 and --version, and install it with circleci-runner-entrypoint into PREFIX/bin, root-owned and not writable by
-# anyone else. Skips the download when PREFIX already holds that version. Runs in a subshell, so a failure
-# returns non-zero instead of exiting a shell that sourced this file.
+# SHA-256 and --version, and install it with circleci-runner-entrypoint into PREFIX/VERSION/bin, root-owned and not
+# writable by anyone else. Then point PREFIX/current at VERSION: the stack mounts that link, and Docker resolves it
+# whenever it creates a container, so running jobs finish on the old version and every next container gets the new one.
+# A version that is installed already is not downloaded again, only switched to (a rollback). Runs in a subshell, so a
+# failure returns non-zero instead of exiting a shell that sourced this file.
 swarm_install_runner() (
   set -euo pipefail
-  local version=${1:-$MACHINE_RUNNER_SWARM_VERSION} prefix=${2:-/opt/machine-runner-swarm} sha=${3:-} arch tarball tmp
+  local version=${1:-$MACHINE_RUNNER_SWARM_VERSION} prefix=${2:-/opt/machine-runner-swarm} sha=${3:-} arch tarball tmp dir
   put() { install -m 0755 -o root -g root "$1" "$2.new" && mv -f "$2.new" "$2"; }
   [[ $(id -u) -eq 0 ]] || die "installing into $prefix needs root: run with sudo"
+  [[ $version =~ ^[0-9][0-9A-Za-z._-]*$ ]] || die "invalid version '$version'"
   [[ -f $swarm_dir/entrypoint/circleci-runner-entrypoint ]] || die "run setup.sh from a checkout: entrypoint/circleci-runner-entrypoint not found"
   arch=$(swarm_arch) || die "unsupported architecture $(uname -m)"
   tarball=circleci-runner_linux_$arch.tar.gz
-  install -d -m 0755 -o root -g root "$prefix" "$prefix/bin"
-  if ! "$prefix/bin/circleci-runner" --version 2>&1 | grep -qF "version $version"; then
+  dir=$prefix/$version
+  if ! "$dir/bin/circleci-runner" --version 2>&1 | grep -qF "version $version"; then
     if [[ -z $sha ]]; then
       [[ $version == "$MACHINE_RUNNER_SWARM_VERSION" ]] || die "no pinned SHA-256 for $version: pass --sha256 (see $MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL/$version/checksums.txt)"
       if [[ $arch == amd64 ]]; then sha=$MACHINE_RUNNER_SWARM_SHA256_AMD64; else sha=$MACHINE_RUNNER_SWARM_SHA256_ARM64; fi
@@ -83,12 +88,15 @@ swarm_install_runner() (
     (cd "$tmp" && echo "$sha  $tarball" | sha256sum -c - >/dev/null 2>&1) || die "SHA-256 mismatch for $tarball: refusing to install"
     tar -xzf "$tmp/$tarball" -C "$tmp" --no-same-owner circleci-runner
     "$tmp/circleci-runner" --version 2>&1 | grep -qF "version $version" || die "the downloaded binary does not report version $version"
-    put "$tmp/circleci-runner" "$prefix/bin/circleci-runner"
+    install -d -m 0755 -o root -g root "$prefix" "$dir" "$dir/bin"
+    put "$tmp/circleci-runner" "$dir/bin/circleci-runner"
   fi
-  put "$swarm_dir/entrypoint/circleci-runner-entrypoint" "$prefix/bin/circleci-runner-entrypoint"
-  echo "$version" > "$prefix/VERSION"
-  [[ -z $(find "$prefix" ! -user root -o -perm /022) ]] || die "$prefix has files that are not root-owned or are group/world-writable"
-  info "[ ok ] $prefix/bin: $("$prefix/bin/circleci-runner" --version | head -n 1), and circleci-runner-entrypoint"
+  put "$swarm_dir/entrypoint/circleci-runner-entrypoint" "$dir/bin/circleci-runner-entrypoint"
+  echo "$version" > "$dir/VERSION"
+  [[ -z $(find "$prefix" ! -type l \( ! -user root -o -perm /022 \)) ]] || die "$prefix has files that are not root-owned or are group/world-writable"
+  ln -s "$version" "$prefix/.current.$$"   # a new link, then an atomic rename over the old one
+  mv -T "$prefix/.current.$$" "$prefix/current"
+  info "[ ok ] $prefix/current -> $version: $("$dir/bin/circleci-runner" --version | head -n 1), and circleci-runner-entrypoint"
 )
 
 swarm_init() {

@@ -98,6 +98,8 @@ dind_stop_all() {
 inner_reset() {
   local n=$1 i
   idocker "$n" stack rm "$STACK" >/dev/null 2>&1 || true
+  idocker "$n" service ls -q | xargs -r docker exec -i "$n" docker service rm >/dev/null 2>&1 || true   # jobs created by a test
+  idocker "$n" config ls -q | xargs -r docker exec -i "$n" docker config rm >/dev/null 2>&1 || true
   for i in $(seq 1 60); do
     if [[ -z $(idocker "$n" network ls --format '{{.Name}}' | grep "^${STACK}_" || true) ]] &&
       [[ -z $(idocker "$n" ps -aq --filter "label=com.docker.swarm.service.name" || true) ]]; then break; fi
@@ -168,28 +170,38 @@ real_runner() {
     docker rm -f "$cid" >/dev/null
     fail "setup.sh --install failed"
   }
-  docker cp "$cid:/opt/machine-runner-swarm/bin/circleci-runner" "$bin"
+  docker cp "$cid:/opt/machine-runner-swarm/current/bin/circleci-runner" "$bin"
   docker rm -f "$cid" >/dev/null
   echo "$bin"
 }
 
-# install_swarm NODE real|fake: lay out /opt/machine-runner-swarm in the DinD container NODE like linux/setup.sh does.
-# "fake" puts tests/fake-runner.sh where the runner goes; both modes add fake-job.
+# install_swarm NODE real|fake [VERSION]: lay out /opt/machine-runner-swarm/<VERSION> in the DinD container NODE
+# like linux/setup.sh does, and point /opt/machine-runner-swarm/current at it (the stack mounts that link).
+# "fake" puts tests/fake-runner.sh where the runner goes; both modes add fake-job. VERSION (default 1.0.0) is
+# what the version directory is called and what its VERSION file says; another call with another VERSION
+# installs side by side and flips the link.
 install_swarm() {
-  local node=$1 kind=$2 stage
+  local node=$1 kind=$2 version=${3:-1.0.0} stage
   stage=$(mktemp -d)
   mkdir -p "$stage/bin"
   cp "$repo_dir/linux/entrypoint/circleci-runner-entrypoint" "$stage/bin/circleci-runner-entrypoint"
   cp "$tests_dir/fake-job.sh" "$stage/bin/fake-job"
+  echo "$version" > "$stage/VERSION"
   case $kind in
     real) cp "$(real_runner)" "$stage/bin/circleci-runner" ;;
     fake) cp "$tests_dir/fake-runner.sh" "$stage/bin/circleci-runner" ;;
     *) fail "install_swarm: unknown kind $kind" ;;
   esac
-  docker exec "$node" sh -c 'rm -rf /opt/machine-runner-swarm && mkdir -p /opt' >/dev/null
-  tar -C "$stage" --owner=0 --group=0 --mode='u=rwx,go=rx' -cf - . | docker exec -i "$node" sh -c 'mkdir -p /opt/machine-runner-swarm && tar -C /opt/machine-runner-swarm -xf -'
-  docker exec "$node" chmod 0755 /opt/machine-runner-swarm /opt/machine-runner-swarm/bin
+  docker exec "$node" sh -c "rm -rf /opt/machine-runner-swarm/$version && mkdir -p /opt/machine-runner-swarm/$version" >/dev/null
+  tar -C "$stage" --owner=0 --group=0 --mode='u=rwx,go=rx' -cf - . | docker exec -i "$node" tar -C "/opt/machine-runner-swarm/$version" -xf -
+  docker exec "$node" chmod 0755 /opt/machine-runner-swarm "/opt/machine-runner-swarm/$version" "/opt/machine-runner-swarm/$version/bin"
+  flip_current "$node" "$version"
   rm -rf "$stage"
+}
+
+# flip_current NODE VERSION: the atomic flip that linux/setup.sh does (a new link, then a rename over the old one).
+flip_current() {
+  docker exec "$1" sh -c "cd /opt/machine-runner-swarm && ln -s $2 .current.new && mv -T .current.new current"
 }
 
 # ---------------------------------------------------------------------------------------------

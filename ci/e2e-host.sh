@@ -82,8 +82,8 @@ prepare() {
   log "sudo $(rel "${setup}") --swarm-init --install"
   sudo "${setup}" --swarm-init --install
   docker node ls
-  ls -l /opt/machine-runner-swarm /opt/machine-runner-swarm/bin
-  /opt/machine-runner-swarm/bin/circleci-runner --version
+  ls -l /opt/machine-runner-swarm /opt/machine-runner-swarm/current/bin
+  /opt/machine-runner-swarm/current/bin/circleci-runner --version
 }
 
 # ---------------------------------------------------------------------------

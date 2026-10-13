@@ -36,7 +36,7 @@ x-runner: &runner
   entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]
   user: "0:0"
   volumes:
-    - {type: bind, source: /opt/machine-runner-swarm, target: /opt/machine-runner-swarm, read_only: true}
+    - {type: bind, source: /opt/machine-runner-swarm/current, target: /opt/machine-runner-swarm, read_only: true}
     - {type: bind, source: /repo/ci, target: /ci, read_only: true}
   deploy:
     replicas: 1
@@ -131,7 +131,7 @@ for _ in $(seq 1 60); do in_vm docker info > /dev/null 2>&1 && break; sleep 1; d
 in_vm docker info > /dev/null || { log "the Docker daemon in the simulation did not start"; exit 1; }
 in_vm apk add --no-cache bash coreutils gawk sudo > /dev/null
 in_vm docker pull -q "${stock}" > /dev/null
-in_vm sh -c 'mkdir -p /opt/machine-runner-swarm/bin && cp /sim/circleci-runner-entrypoint /sim/circleci-runner /opt/machine-runner-swarm/bin/ && chmod 0755 /opt/machine-runner-swarm/bin/* && echo sim > /opt/machine-runner-swarm/VERSION'
+in_vm sh -c 'cd /opt && mkdir -p machine-runner-swarm/sim/bin && cp /sim/circleci-runner-entrypoint /sim/circleci-runner machine-runner-swarm/sim/bin/ && chmod 0755 machine-runner-swarm/sim/bin/* && echo sim > machine-runner-swarm/sim/VERSION && ln -s sim machine-runner-swarm/current'
 
 # scenario NAME EXPECTED_EXIT PATTERN [QUEUE_FILE=ARGS ...]
 scenario() {

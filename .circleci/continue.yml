@@ -294,7 +294,8 @@ jobs:
       and a two-node Swarm inside privileged docker:dind containers, with the real stack file,
       the real entrypoint and the real runner binary, but no token. Covers stack validation,
       the installer, ephemerality (with a negative control), exit 80, token readability, placement,
-      persistent mode, draining, network isolation and the entrypoint unit tests.
+      runner upgrades (a flip of current under load and a global-job install), persistent mode,
+      draining, network isolation and the entrypoint unit tests.
     # The stack reserves 2 to 4 CPUs and 4 to 8 GB per replica, and the test Swarm has two nodes on this one VM:
     # on medium and large VMs the placement and network tests find no room for their replicas.
     executor: linux-vm-xlarge

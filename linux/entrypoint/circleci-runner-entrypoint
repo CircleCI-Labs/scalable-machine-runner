@@ -31,7 +31,7 @@ case $sudo_ok in true | false) ;; *) die "MACHINE_RUNNER_SWARM_JOB_SUDO must be 
 
 # The runner and the entrypoint must not be writable by the users they run as.
 for p in /opt/machine-runner-swarm /opt/machine-runner-swarm/bin "$bin"; do
-  [ -e "$p" ] || die "$p is missing: install it on the host (linux/setup.sh) and mount /opt/machine-runner-swarm read-only"
+  [ -e "$p" ] || die "$p is missing: install it on the host (linux/setup.sh) and mount /opt/machine-runner-swarm/current at /opt/machine-runner-swarm read-only"
   s=$(stat -L -c '%u %a' "$p")
   [ "${s% *}" = 0 ] && [ $((0${s#* } & 022)) -eq 0 ] || die "$p must be owned by root and not group/world writable"
 done

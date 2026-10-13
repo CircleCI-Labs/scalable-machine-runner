@@ -1,12 +1,12 @@
 # machine-runner-swarm: Linux runners as a Docker Swarm stack (one service per resource class).
 #
-#   sudo linux/setup.sh --install                      # runner + entrypoint into /opt/machine-runner-swarm, on every runner node
+#   sudo linux/setup.sh --install                      # runner + entrypoint into /opt/machine-runner-swarm/<version>, on every runner node
 #   printf %s "$TOKEN" | linux/setup.sh --secret linux-default      # one secret per class, see below
 #   docker stack deploy -c linux/stack/runners.yaml runners
 #
 # Each service is one CircleCI resource class (linux-default is <namespace>/linux-default) and
 # deploy.replicas is the number of runners. The statically linked runner and circleci-runner-entrypoint are mounted
-# read-only from /opt/machine-runner-swarm on the host into a STOCK image (cimg/*, Alpine, UBI). The runner runs in
+# read-only from /opt/machine-runner-swarm/current on the host into a STOCK image (cimg/*, Alpine, UBI). The runner runs in
 # single-task mode, so each container runs one job and exits; restart_policy "any" starts a NEW container
 # for the next job, and a job never sees files from an earlier one.
 #
@@ -65,7 +65,10 @@ x-runner: &runner
     options: {max-size: 20m, max-file: "3"}
   volumes:
     - type: bind
-      source: /opt/machine-runner-swarm   # must exist on every node that can run the service: sudo linux/setup.sh --install
+      # A link to the installed version (/opt/machine-runner-swarm/<version>), on every node that can run the service:
+      # sudo linux/setup.sh --install. Docker resolves the link when it creates a container, so a new runner version
+      # reaches the next container (the next job) only, and running jobs finish on the old one. docs/operations.md
+      source: /opt/machine-runner-swarm/current
       target: /opt/machine-runner-swarm
       read_only: true
 

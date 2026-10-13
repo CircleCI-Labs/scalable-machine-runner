@@ -1,0 +1,9 @@
+# lychee link checker configuration. CI runs: lychee --config lychee.toml './**/*.md'
+#
+# Offline on purpose: the job checks relative links and #heading anchors in every
+# Markdown file, so it is fast and never fails because a third-party site is down.
+# Check external URLs by hand, or with `lychee --offline=false` on a workstation.
+offline = true
+include_fragments = "anchor-only"
+no_progress = true
+exclude_path = [".git"]

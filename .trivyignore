@@ -1,0 +1,16 @@
+# Trivy ignore list. CI fails on any fixable CRITICAL vulnerability
+# (trivy image --severity CRITICAL --ignore-unfixed --exit-code 1); HIGH and
+# above are reported as artifacts only.
+#
+# Policy for adding an entry:
+#   1. Only for a finding that cannot be fixed in this repo (for example, a CVE
+#      in the upstream circleci-runner binary or a base image that has no fixed
+#      build yet). Fix it instead if a newer pinned version exists.
+#   2. One CVE per line, with a comment giving the reason, the owner and an
+#      expiry date, for example:
+#        # circleci-runner 3.1.12 Go stdlib; fixed upstream in 3.1.13. Owner: @handle. Expires 2026-12-31
+#        CVE-2026-00000 exp:2026-12-31
+#   3. Remove the entry as soon as the fix ships. Trivy stops honouring an
+#      entry after its exp: date, so CI fails again if nobody acts.
+#
+# The list is intentionally empty.

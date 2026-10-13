@@ -8,7 +8,7 @@ page-description: Answers to common questions about the Docker Swarm runner stac
 
 ## What is this repository?
 
-It is a set of Docker Swarm stack files, a small Linux entrypoint, optional setup helpers, and documentation. Together they run CircleCI machine runner 3 in containers, with one resource class for each Swarm service and a new container for every job. Refer to [Concepts](concepts.md).
+It is a set of Docker Swarm stack files, a small Linux entrypoint, a Linux service that keeps the runner on every node, optional setup helpers, and documentation. Together they run CircleCI machine runner 3 in containers, with one resource class for each Swarm service and a new container for every job. Refer to [Concepts](concepts.md).
 
 ## Does CircleCI support it?
 
@@ -20,10 +20,10 @@ Nothing, with one optional exception on Windows.
 
 | | You build | Optional |
 |---|---|---|
-| Linux | Nothing. The stack mounts the runner and the entrypoint from the host into a stock image such as `cimg/base`. You install them with a few commands or with `linux/setup.sh` | A custom image when jobs need tools, because the hardened class cannot install packages at run time. It needs util-linux `setpriv`. Refer to [Images](images.md) |
+| Linux | Nothing. The stack mounts the runner from a per-node volume, which its `runner-distributor` service fills, and the entrypoint from a Swarm config, into a stock image such as `cimg/base`. `docker stack deploy` is the whole install | A custom image when jobs need tools, because the hardened class cannot install packages at run time. It needs util-linux `setpriv`. Refer to [Images](images.md) |
 | Windows | Nothing. The stack mounts the runner and portable Git from `C:\machine-runner-swarm` into the stock Server Core image. `windows\Setup.ps1` stages them | A custom image for your tools, and a DIY image that lets a job finish after a stop. Refer to [Windows images](images.md#windows-bring-your-own-image) and [the stop-timeout image](operations.md#optional-an-image-that-lets-a-job-finish-after-a-stop-diy) |
 
-This repository publishes no images. The Linux and Windows hosts need the files from the install pages and a Docker engine, and that is all.
+This repository publishes no images. A Linux node needs a Docker engine and a Swarm join, and nothing else. A Windows host needs the files from the install page and a Docker engine.
 
 ## What do `sudo -niHu` and `setpriv` mean?
 
@@ -36,14 +36,14 @@ The setting `MACHINE_RUNNER_SWARM_JOB_SUDO` chooses between the default and the 
 
 ## Should I use the setup helper or the manual steps?
 
-Both give the same result. The manual steps are about 18 commands, and the helper runs the common ones in 3 invocations. The helper is optional, and every step of it is on the install pages.
+Both give the same result. The helper is optional, and every step of it is on the install pages.
 
 | | `setup.sh` or `Setup.ps1` does | It does not |
 |---|---|---|
-| Linux | Checks the node, creates a single-node Swarm on the loopback address, downloads and verifies the runner, installs it with the entrypoint, creates secrets from hidden prompts, and deploys the stack files you name | Install Docker, create resource classes or tokens, edit or copy the stack file, label or join nodes, build images, or run `--install` on the other nodes |
+| Linux | Checks the node, creates a single-node Swarm on the loopback address, creates secrets from hidden prompts, and deploys the stack files you name | Install Docker, install the runner (the `runner-distributor` service does that on every node), create resource classes or tokens, edit or copy the stack file, label or join nodes, or build images |
 | Windows | Stages the runner and Git with the access rights and the `current` junction, creates the Swarm, labels the node with the image tags it can run, creates secrets, and deploys | Install Docker or Windows features, create classes or tokens, edit or copy the stack file, add the labels of the optional classes, join other nodes, or build images |
 
-The steps run in a fixed order, and a rerun is safe. The helpers pin a runner version and its checksum, and do not look up the latest. Refer to [Optional: use the setup helper](install-linux.md#optional-use-the-setup-helper) and [the Windows helper](install-windows.md#optional-use-the-setup-helper).
+The steps run in a fixed order, and a rerun is safe. On Windows, the helper pins a runner version and its checksum, and does not look up the latest. On Linux, the helper does not touch the runner. Refer to [Optional: use the setup helper](install-linux.md#optional-use-the-setup-helper) and [the Windows helper](install-windows.md#optional-use-the-setup-helper).
 
 ## Why Swarm and not container runner or another runner?
 
@@ -83,7 +83,7 @@ No. Docker has no macOS containers, so Swarm cannot schedule macOS jobs. Apple's
 | Platform | Status |
 |---|---|
 | Linux, Ubuntu LTS, amd64 | Tested in CI, including real jobs |
-| Linux, Ubuntu LTS, arm64 | CI tests the install and the start of the stack. It runs real jobs on amd64 only |
+| Linux, Ubuntu LTS, arm64 | CI tests that the distributor installs the runner and that the stack starts. It runs real jobs on amd64 only |
 | Linux, RHEL 8 and later | Steps documented, not tested in CI |
 | Windows Server 2025 and 2022 | Tested in CI |
 | Windows Server 2019 | Supported by machine runner 3. Untested here, and the stack files have no label for it |
@@ -137,13 +137,15 @@ In the default Linux class, a job that uses sudo can. In the hardened class, it 
 
 Stopping a busy stock Server Core container from outside kills its job after about 5 seconds, whatever `stop_grace_period` says, and a finished job ends its container cleanly. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
-## Does the setup helper install the latest runner?
+## Which runner version do the nodes run?
 
-No. `linux/setup.sh` and `windows\Setup.ps1` install a pinned version and verify its SHA-256 checksum. Pass the version you want with `--version` and `--sha256` on Linux, or with `-RunnerVersion` on Windows, where the checksum comes from the release manifest.
+On Linux, the `runner-distributor` service decides, and the setup helper installs nothing. With the default setting, `current`, it follows the current release of CircleCI within major version 3, looks again every 24 hours, and verifies the SHA-256 of every download. To stay on a version, pin it with `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, and to go back, pin an older one. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+
+On Windows, `windows\Setup.ps1` installs a pinned version and verifies its SHA-256 checksum. Pass the version you want with `-RunnerVersion`, where the checksum comes from the release manifest.
 
 ## How do I verify a release?
 
-Each release has a `SHA256SUMS` file and a keyless cosign signature that was made with the CircleCI OIDC token. Refer to [Verify a release](install-linux.md#verify-a-release), or [Verify a release](install-windows.md#verify-a-release) on Windows.
+Each release has a `SHA256SUMS` file and a keyless cosign signature that was made with the CircleCI OIDC token. Refer to [Verify a release](install-linux.md#verify-a-release), or [Verify a release](install-windows.md#verify-a-release) on Windows. The runner binary is a separate download. On Linux, the distributor verifies its SHA-256 and the entrypoint checks it at every container start. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux).
 
 ## Can a fork pull request use these runners?
 
@@ -173,12 +175,12 @@ The stack sets nothing for them, and this repository does not test them.
 
 ## Does it work on hosts without internet access?
 
-Not without a route to CircleCI. Every runner needs outbound HTTPS to `runner.circleci.com`, and every new container downloads the task agent from `circleci-binary-releases.s3.amazonaws.com`. A host that reaches those names through an allow list or a proxy works. The variable `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` points only the `setup.sh` download of the runner at an HTTPS mirror, so it does not replace the task agent download. Pull the images from a registry that the nodes can reach. Refer to [Registry needs](multi-node.md#registry-needs).
+Not without a route to CircleCI. Every runner needs outbound HTTPS to `runner.circleci.com`, and every new container downloads the task agent from `circleci-binary-releases.s3.amazonaws.com`. A host that reaches those names through an allow list or a proxy works. On Linux, the runner download of the distributor can come from a mirror of your own: set `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` to an internal HTTP server that holds `manifest.json` and the tarballs. Refer to [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror). The mirror does not replace the task agent download. Pull the images, including `alpine` for the distributor, from a registry that the nodes can reach. Refer to [Registry needs](multi-node.md#registry-needs).
 
 ## Does it work with rootless Docker, user namespaces, or Podman?
 
 - **Podman** cannot run Swarm, so it cannot run this stack.
-- **Rootless Docker** and **`userns-remap`** are not tested. The stack assumes a root daemon: the entrypoint checks that the mounted runner directory belongs to root, and the secret belongs to uid 2000. With a remap, root-owned host files appear under another owner, and the entrypoint is likely to exit with code 80. Swarm also ignores `userns_mode` in stack files.
+- **Rootless Docker** and **`userns-remap`** are not tested. The stack assumes a root daemon: the entrypoint checks that the runner volume belongs to root, and the secret belongs to uid 2000. Whether these checks hold under a remap is untested. Swarm also ignores `userns_mode` in stack files.
 
 ## Does it work with SELinux on RHEL?
 

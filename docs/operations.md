@@ -273,6 +273,8 @@ The runner of a container names the version directory that the container resolve
 $ docker top <container ID> | grep circleci-runner
 ```
 
+When a node gets no runner, or a download is refused, refer to [The runner waits for the distributor, and then exits with code 80](troubleshooting.md#the-runner-waits-for-the-distributor-and-then-exits-with-code-80) and the entries that follow it.
+
 #### Run the downloads from a mirror
 
 A site without a route to the release bucket of CircleCI serves two things from an internal HTTP server: `manifest.json`, and the tarball `<version>/circleci-runner_linux_<arch>.tar.gz` of every version that the nodes may run. The distributor builds the address of a tarball from the base URL and the version, and it does not follow the `url` fields of the manifest, so a mirror may hold a copy of `manifest.json` unchanged.
@@ -338,6 +340,7 @@ A junction cannot be replaced in one step, so for a moment `current` does not ex
 ### Update the images
 
 - **Linux and Windows stock images.** Change the tag or digest of `image` in your stack file, and run `docker stack deploy`. Swarm resolves a tag to its digest when you deploy, so deploy again to pick up a tag that the publisher re-pushed.
+- **The distributor image.** The service `runner-distributor` runs `alpine:3`, pinned by digest. Change the digest in your stack file to move to a newer Alpine, and deploy. The distributor restarts on every node at once, and no running job is affected.
 - **Your own images.** Rebuild, push, change the tag, and deploy. Rebuild on a schedule, for example monthly, and when the base image or a tool changes.
 - **Windows base images.** Microsoft republishes the Server Core tags each Patch Tuesday. Pin by digest, and rebuild your own images on top of them after each update. Change a Windows service only while its class is idle. Refer to [Stop a busy Windows container](#stop-a-busy-windows-container).
 

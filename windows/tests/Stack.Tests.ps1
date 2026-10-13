@@ -24,7 +24,7 @@ BeforeAll {
 }
 
 Describe 'the stack files' {
-    It 'split the classes: runners.yaml holds only windows-default and deploys alone, the optional ones are separate overlays' {
+    It 'split the classes: runners.yaml holds only windows-default and deploys alone, the optional ones are separate add-on stack files' {
         ($script:blocks.Keys | Sort-Object) | Should -Be @('windows-custom', 'windows-default', 'windows-docker-build', 'windows-persistent')
         $script:fileOf['windows-default'] | Should -Be 'runners.yaml'
         @($script:fileOf.Keys | Where-Object { $script:fileOf[$_] -eq 'runners.yaml' }) | Should -Be @('windows-default')

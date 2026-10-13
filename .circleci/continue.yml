@@ -215,7 +215,7 @@ jobs:
               echo "--- docker stack config -c $f"
               docker stack config -c "$f" > "/tmp/$(echo "$f" | tr / _).rendered" || rc=1
             done
-            # Every file of one OS together (the optional files are overlays), and the e2e test stack.
+            # Every file of one OS together (the main file plus its add-on stack files), and the e2e test stack.
             for os in linux windows; do
               set --
               for f in $files; do case "$f" in $os/stack/*) set -- "$@" -c "$f" ;; esac; done

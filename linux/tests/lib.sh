@@ -221,7 +221,7 @@ create_secrets() {
 }
 
 # make_override FILE SPEC...: write a compose override. SPEC = "service replicas [ENV=value ...]".
-# Services of runners.yaml without a SPEC are scaled to 0; others (overlay files) only appear when given.
+# Services of runners.yaml without a SPEC are scaled to 0; others (add-on stack files) only appear when given.
 make_override() {
   local file=$1 spec s name replicas rest found kv
   local -a svcs=("${BASE_SERVICES[@]}")

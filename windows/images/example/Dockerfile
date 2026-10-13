@@ -12,7 +12,7 @@
 #   docker build -f windows/images/example/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 `
 #     -t machine-runner-swarm-windows-example:ltsc2022 windows
 #
-# It is the windows-custom service in windows/stack/custom-image.yaml, an optional overlay file: deploy it with
+# It is the windows-custom service in windows/stack/custom-image.yaml, an add-on stack file: deploy it with
 #   docker stack deploy -c windows/stack/runners.yaml -c windows/stack/custom-image.yaml runners
 # Push the image to a registry that every Windows node can pull from. Rebuild it when the base image or the tool changes.
 

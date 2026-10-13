@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # stack-config.sh: validate the stack files the way `docker stack deploy` reads them (alone and merged
-# with each overlay) and check the contract of the design on every service. Needs only the Docker CLI
+# with each add-on stack file) and check the contract of the design on every service. Needs only the Docker CLI
 # (no daemon, no Swarm).
 #
 # Usage: stack-config.sh

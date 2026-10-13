@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # persistent.sh: continuous mode (CIRCLECI_RUNNER_MODE=continuous) keeps ONE container across jobs.
-# Token-free: the real linux/stack/persistent.yaml overlay (node.hostname edited the way its comment says), the real circleci-runner-entrypoint, and a fake runner that runs a fake job every second.
+# Token-free: the real linux/stack/persistent.yaml add-on stack file (node.hostname edited the way its comment says), the real circleci-runner-entrypoint, and a fake runner that runs a fake job every second.
 #
 # Phases:
 #   reuse   JOBS jobs in the SAME container, and residue from earlier jobs is visible (the price of

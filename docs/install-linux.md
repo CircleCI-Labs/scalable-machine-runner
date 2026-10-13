@@ -328,10 +328,11 @@ With no step, it runs `--check --install`. Options are `--version`, `--sha256`, 
 
 ```bash
 sudo linux/setup.sh --check --swarm-init --install
-printf %s "$TOKEN" | linux/setup.sh --secret linux-default
-linux/setup.sh --secret linux-java        # a hidden prompt asks for the token
-linux/setup.sh --deploy
+sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened   # a hidden prompt asks for each token
+sudo linux/setup.sh --deploy
 ```
+
+Create one secret for every service of the stack files you deploy. `--deploy` fails with `secret not found` when one is missing, and `linux-hardened` is in `runners.yaml` too. Every command needs `sudo` or membership of the `docker` group, because each one talks to the Docker daemon, and `--install` needs root. The helper is a bash script with a `#!/usr/bin/env bash` line, so it runs from any shell, including zsh. To script one secret, pipe the token: `printf %s "$TOKEN" | sudo linux/setup.sh --secret linux-default`. Several `--secret` values need a terminal, because stdin carries one token.
 
 The helper pins the SHA-256 checksums of runner version 3.1.12 for amd64 and arm64. For another version, pass `--version X.Y.Z --sha256 <hash>` with the hash from the `checksums.txt` of that release. The helper does not look up the latest version. It installs a pinned version, so that it knows the checksum before the download. Set `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` to an HTTPS mirror for hosts without internet access. The mirror must use the same layout: `<base>/<version>/circleci-runner_linux_<arch>.tar.gz`.
 

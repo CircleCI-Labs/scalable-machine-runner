@@ -161,9 +161,9 @@ Swarm secrets are immutable. To rotate a token, create a second secret and swap 
 
 2. Create a secret with the new token. Use a new name, such as `linux-default-token-v2`.
 
-   ```bash
-   read -rsp 'New token: ' TOKEN; echo
-   printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create linux-default-token-v2 -
+   ```sh
+   printf 'New token (hidden): '; stty -echo; IFS= read -r TOKEN; stty echo; echo
+   [ -n "$TOKEN" ] && printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create linux-default-token-v2 -
    unset TOKEN
    ```
 

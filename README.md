@@ -77,7 +77,7 @@ Refer to [Concepts](docs/concepts.md) for the model, the job lifecycle, and what
 
 This example runs one node with three resource classes. For the full steps, including RHEL and the checks, refer to [Install on Linux with Docker Swarm](docs/install-linux.md).
 
-Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/), and an organization admin who agreed to the [CircleCI Runner Terms](https://circleci.com/legal/runner-terms/).
+Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/), and an organization admin who agreed to the [CircleCI Runner Terms](https://circleci.com/legal/runner-terms/). Every `docker` and `setup.sh` command below needs `sudo`, or a user in the `docker` group. Step 2 and the install of the runner need root.
 
 1. Get the files, and create a resource class and token for each service in `linux/stack/runners.yaml`.
 
@@ -113,14 +113,10 @@ Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https:
    docker swarm init --advertise-addr 127.0.0.1 --listen-addr 127.0.0.1:2377
    ```
 
-4. Create one secret for each service. Each secret is a runner config file with the token.
+4. Create one secret for each service. Each secret is a runner config file with the token. The helper asks for each token with hidden input and never prints it. It is a bash script, so it works from any shell, including zsh.
 
    ```bash
-   for class in linux-default linux-java linux-hardened; do
-     read -rsp "Token for $class: " TOKEN; echo
-     printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create "$class-token" -
-   done
-   unset TOKEN
+   sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened
    ```
 
 5. Deploy the stack, and check that the replicas run.

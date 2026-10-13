@@ -218,15 +218,19 @@ api:
 
 The stack mounts the secret at `/run/secrets/circleci_runner_config.yaml`, owned by the runner user (uid 2000) with mode `0400`. The runner reads it with `--config`. Every other setting is a `CIRCLECI_RUNNER_*` environment variable in the stack file.
 
-Create the secrets with a hidden prompt, so that the token does not reach your shell history or the process list.
+Create the secrets with a hidden prompt, so that the token does not reach your shell history or the process list. This loop uses only POSIX features, so it works in bash, zsh, and dash. Do not replace it with `read -rsp`: that form is bash only, and zsh reads `-p` as a coprocess and fails, which leaves `TOKEN` empty and creates a secret without a token. The loop stops at an empty token.
 
-```bash
+```sh
 for class in linux-default linux-java linux-hardened; do
-  read -rsp "Token for $class: " TOKEN; echo
+  printf 'Token for %s (hidden): ' "$class"
+  stty -echo; IFS= read -r TOKEN; stty echo; echo
+  [ -n "$TOKEN" ] || { echo "no token entered for $class" >&2; break; }
   printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create "$class-token" -
 done
 unset TOKEN
 ```
+
+Run every `docker` command in these steps with `sudo`, or as a user in the `docker` group. Without either, `docker` cannot reach the daemon. The setup helper below does the same in one command: `sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened`.
 
 The secret name is the service name plus `-token`. `docker stack deploy` fails with `secret not found` when a service references a secret that does not exist. Create every secret that the file references, or delete the services you do not need from your copy of the file. Each optional class in step 6 needs its own secret.
 

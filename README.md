@@ -167,7 +167,7 @@ Windows works the same way with `windows/stack/runners.yaml`. Two things differ.
 
 - The resource class token is a Swarm secret. It reaches the container as a file, and it is never in an environment variable or a stack file.
 - **Linux default classes** give jobs passwordless sudo, like the Docker executor. A job that uses sudo can read the token. The protection is against accidental exposure.
-- **Linux hardened classes** (`MACHINE_RUNNER_SWARM_JOB_SUDO=false`) remove sudo, so the token is unreadable from jobs.
+- **Linux hardened classes** (`MACHINE_RUNNER_SWARM_JOB_SUDO=false`) remove sudo and step jobs down with `setpriv --no-new-privs`, so the token is unreadable from jobs and a setuid binary cannot lift a job to root.
 - **Windows classes** run jobs and the runner as the same account, so a job can read the token. Swarm stores a Windows secret in clear text on the container disk. Treat each class as a trust boundary, and enable BitLocker on the Docker volume.
 - **Docker builds are opt-in.** A job that reaches the Docker engine has root on the node. The build classes run only on dedicated worker nodes.
 - **Persistent classes** give up the clean environment. Use them only for trusted projects.

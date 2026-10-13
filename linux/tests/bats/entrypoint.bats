@@ -59,6 +59,9 @@ echo "JOB uid=$(id -u) user=$(id -un) home=$HOME"
 echo "JOB caps=$(grep -E '^Cap(Prm|Eff|Amb)' /proc/self/status | tr '\n\t' '  ')"
 echo "JOB token=${CIRCLECI_RUNNER_API_AUTH_TOKEN:-unset} java=${JAVA_HOME:-unset} name=${CIRCLECI_RUNNER_NAME:-unset}"
 echo "JOB path=$PATH"
+echo "JOB no_new_privs=$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' /proc/self/status)"
+# a setuid-root binary (the test makes a copy of setpriv): its effective uid is root's unless the kernel ignores the setuid bit
+if [ -x /tmp/swarm-test/suid-setpriv ]; then echo "JOB suid_euid=$(/tmp/swarm-test/suid-setpriv --dump | sed -n 's/^euid:[[:space:]]*//p')"; fi
 if sudo -n true 2>/dev/null; then echo "JOB sudo=yes"; else echo "JOB sudo=no"; fi
 if touch /opt/machine-runner-swarm/bin/x 2>/dev/null; then echo "JOB opt_swarm_writable=yes"; else echo "JOB opt_swarm_writable=no"; fi
 if (: < "@CONFIG@") 2>/dev/null; then echo "JOB config=readable"; else echo "JOB config=denied"; fi
@@ -257,6 +260,9 @@ mkuser() { # name [uid]
   [[ $output == *"JOB sudo=no"* ]]
   [[ $output == *"JOB config=denied"* ]]
   [[ $output == *"CapAmb: 00000000000000c0"* ]]
+  # the default class is unchanged: no no-new-privs flag
+  [[ $output != *"--no-new-privs"* ]]
+  [[ $output == *"JOB no_new_privs=0"* ]]
 }
 
 @test "su starts the runner when setpriv is missing (sudo still steps jobs down)" {
@@ -331,6 +337,50 @@ mkuser() { # name [uid]
   PATH=$(path_without sudo) MACHINE_RUNNER_SWARM_JOB_SUDO=false STUB_JOB=1 run ep
   [ "$status" -eq 0 ]
   [[ $output == *"JOB sudo=no"* ]]
+}
+
+@test "hardened: steps down with setpriv --no-new-privs even when the image has sudo, so a setuid binary cannot elevate" {
+  need sudo
+  need setpriv
+  mkdir -p /tmp/swarm-test
+  cp "$(command -v setpriv)" /tmp/swarm-test/suid-setpriv
+  chown 0:0 /tmp/swarm-test/suid-setpriv
+  chmod 4755 /tmp/swarm-test/suid-setpriv
+  chmod 0755 /tmp/swarm-test
+  MACHINE_RUNNER_SWARM_JOB_SUDO=false STUB_JOB=1 run ep
+  [ "$status" -eq 0 ]
+  [[ $output == *"sudo=false stepdown=setpriv no_new_privs=yes"* ]]
+  [[ $output == *'"--ambient-caps=-all","--no-new-privs","--","env"'* ]]
+  [[ $output != *'"sudo","-niHu"'* ]]
+  [[ $output == *"JOB no_new_privs=1"* ]]
+  [[ $output == *"JOB sudo=no"* ]]
+  [[ $output == *"JOB caps=CapPrm: 0000000000000000 CapEff: 0000000000000000 CapAmb: 0000000000000000"* ]]
+  # the setuid-root copy of setpriv stays the job user (2001 or the image's circleci uid), not root
+  [[ $output == *"JOB suid_euid="* ]]
+  [[ $output != *"JOB suid_euid=0"* ]]
+}
+
+@test "default class with a setuid binary: no no-new-privs flag, the setuid bit still works (the control of the test above)" {
+  need sudo
+  need setpriv
+  mkdir -p /tmp/swarm-test
+  cp "$(command -v setpriv)" /tmp/swarm-test/suid-setpriv
+  chown 0:0 /tmp/swarm-test/suid-setpriv
+  chmod 4755 /tmp/swarm-test/suid-setpriv
+  chmod 0755 /tmp/swarm-test
+  STUB_JOB=1 run ep
+  [ "$status" -eq 0 ]
+  [[ $output == *"sudo=true stepdown=sudo no_new_privs=no"* ]]
+  [[ $output == *"JOB no_new_privs=0"* ]]
+  [[ $output == *"JOB suid_euid=0"* ]]
+}
+
+@test "hardened: exit 80 without util-linux setpriv, even when sudo is installed (no unprotected step-down)" {
+  need sudo
+  PATH=$(path_without setpriv) MACHINE_RUNNER_SWARM_JOB_SUDO=false run ep
+  [ "$status" -eq 80 ]
+  [[ $output == *"MACHINE_RUNNER_SWARM_JOB_SUDO=false needs util-linux setpriv with --no-new-privs"* ]]
+  [[ $output != *"ARGS="* ]]
 }
 
 # ---------------------------------------------------------------------------------------------

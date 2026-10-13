@@ -80,7 +80,8 @@ ev=/e2e-evidence
 if [ "${MACHINE_RUNNER_SWARM_JOB_SUDO:-true}" = false ]; then rm -f /usr/bin/sudo /etc/sudoers.d/*; fi
 wf=$(sed -n 's/^workflow=//p' "${ev}/host")
 instance=$(cat /proc/sys/kernel/random/uuid)
-echo "circleci-runner-entrypoint: runner=2000 job=circleci sudo=${MACHINE_RUNNER_SWARM_JOB_SUDO:-true} stepdown=sudo instance=${instance}" >&2
+if [ "${MACHINE_RUNNER_SWARM_JOB_SUDO:-true}" = false ]; then stepdown="setpriv no_new_privs=yes"; else stepdown="sudo no_new_privs=no"; fi
+echo "circleci-runner-entrypoint: runner=2000 job=circleci sudo=${MACHINE_RUNNER_SWARM_JOB_SUDO:-true} stepdown=${stepdown} instance=${instance}" >&2
 # A process called circleci-runner that belongs to the runner user, as in the real container.
 id circleci-runner > /dev/null 2>&1 || useradd -u 2000 -M -s /usr/sbin/nologin circleci-runner
 cp /bin/sleep /tmp/circleci-runner

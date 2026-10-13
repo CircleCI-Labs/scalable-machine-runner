@@ -10,9 +10,12 @@
 # (exit 80 for a bad value, 1 for a missing config file).
 #
 # Environment: MACHINE_RUNNER_SWARM_JOB_USER  default circleci (created with uid 2001 if missing)
-#              MACHINE_RUNNER_SWARM_JOB_SUDO  default true; false removes the job user's sudo rights in this container
+#              MACHINE_RUNNER_SWARM_JOB_SUDO  default true; false removes the job user's sudo rights in this container and
+#                                             steps jobs down with setpriv --no-new-privs, even when the image has sudo:
+#                                             Swarm ignores no-new-privileges, so a setuid binary could otherwise still elevate
 # Arguments replace the runner's default: machine --config /run/secrets/circleci_runner_config.yaml
-# Exit: 80 when a prerequisite is missing or an existing circleci-runner account is not uid 2000, otherwise the runner's own code (it is exec'd, so it
+# Exit: 80 when a prerequisite is missing (for JOB_SUDO=false, util-linux setpriv with --no-new-privs) or an existing circleci-runner
+# account is not uid 2000, otherwise the runner's own code (it is exec'd, so it
 # receives SIGTERM from the init process and drains: a running job finishes).
 set -eu
 
@@ -36,9 +39,19 @@ for p in /opt/machine-runner-swarm /opt/machine-runner-swarm/bin "$bin"; do
   [ "${s% *}" = 0 ] && [ $((0${s#* } & 022)) -eq 0 ] || die "$p must be owned by root and not group/world writable"
 done
 
-# Tools: sudo or setpriv steps jobs down; setpriv or su starts the runner as its user.
+# Tools: sudo or setpriv steps jobs down; setpriv or su starts the runner as its user. The hardened class (JOB_SUDO=false) always
+# uses setpriv with --no-new-privs, even when the image has sudo: Swarm ignores no-new-privileges, so a setuid binary (sudo, su, or
+# a local-root bug in any other) could otherwise lift a job to root and reach the token. The kernel flag is inherited by everything
+# the job starts and cannot be cleared.
 step=
-if has sudo; then step=sudo; elif setpriv_ok; then step=setpriv; fi
+nnp=no
+if [ "$sudo_ok" = false ]; then
+  { setpriv_ok && setpriv --no-new-privs -- true >/dev/null 2>&1; } ||
+    die "MACHINE_RUNNER_SWARM_JOB_SUDO=false needs util-linux setpriv with --no-new-privs, which keeps setuid binaries from lifting jobs to root, and this image has none" \
+      "(Debian/Ubuntu: util-linux; Alpine: apk add setpriv; UBI: microdnf install util-linux)"
+  step=setpriv
+  nnp=yes
+elif has sudo; then step=sudo; elif setpriv_ok; then step=setpriv; fi
 { [ -n "$step" ] && { setpriv_ok || has su; }; } || die "jobs cannot be stepped down in this image: it needs sudo or util-linux setpriv" \
   "(Debian/Ubuntu: apt-get install sudo; Alpine: apk add sudo setpriv; UBI: microdnf install sudo util-linux)"
 
@@ -87,8 +100,10 @@ if [ "$step" = sudo ]; then
   chmod 0440 /etc/sudoers.d/90-circleci-runner
   CIRCLECI_RUNNER_COMMAND_PREFIX=$(printf '["sudo","-niHu","%s","--"]' "$job")
 else
-  CIRCLECI_RUNNER_COMMAND_PREFIX=$(printf '["setpriv","--reuid=%s","--regid=%s","--init-groups","--inh-caps=-all","--ambient-caps=-all","--","env","HOME=%s","USER=%s","LOGNAME=%s"]' \
-    "$juid" "$jgid" "$jhome" "$job" "$job")
+  nnp_arg=
+  if [ "$nnp" = yes ]; then nnp_arg='"--no-new-privs",'; fi
+  CIRCLECI_RUNNER_COMMAND_PREFIX=$(printf '["setpriv","--reuid=%s","--regid=%s","--init-groups","--inh-caps=-all","--ambient-caps=-all",%s"--","env","HOME=%s","USER=%s","LOGNAME=%s"]' \
+    "$juid" "$jgid" "$nnp_arg" "$jhome" "$job" "$job")
 fi
 export CIRCLECI_RUNNER_COMMAND_PREFIX
 
@@ -106,7 +121,7 @@ install -d -m 0755 -o "$juid" -g "$jgid" /var/opt/circleci   # the parent too: t
 sock=/var/run/docker.sock
 if [ -S "$sock" ] && [ "$(stat -c %g "$sock")" != 0 ]; then echo "circleci-docker:x:$(stat -c %g "$sock"):$job" >> /etc/group; fi
 
-echo "circleci-runner-entrypoint: runner=2000 job=$job sudo=$sudo_ok stepdown=$step" >&2
+echo "circleci-runner-entrypoint: runner=2000 job=$job sudo=$sudo_ok stepdown=$step no_new_privs=$nnp" >&2
 [ $# -gt 0 ] || set -- machine --config /run/secrets/circleci_runner_config.yaml
 if setpriv_ok; then
   if [ "$step" = setpriv ]; then # setpriv steps jobs down, so the runner keeps setuid/setgid to call it

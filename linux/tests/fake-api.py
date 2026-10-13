@@ -20,7 +20,7 @@ case $1 in _internal) ;; *) exit 0 ;; esac   # the runner also runs "version" an
 echo "TASK uid=$(id -u) user=$(id -un) home=$HOME workdir=$w residue=$(ls -A "$w" 2>/dev/null | wc -l)" \\
   "sudo=$(sudo -n true 2>/dev/null && echo yes || echo no)" \\
   "config=$(cat /run/secrets/circleci_runner_config.yaml >/dev/null 2>&1 && echo READABLE || echo denied)" \\
-  "token_env=$(env | grep -c API_AUTH_TOKEN)" >&2
+  "token_env=$(env | grep -c API_AUTH_TOKEN)" "no_new_privs=$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' /proc/self/status)" >&2
 mkdir -p "$w/project/.git/objects" "$w/project/sub" && echo data > "$w/project/.git/objects/pack" && echo x > "$w/project/sub/file"
 exit 0
 """

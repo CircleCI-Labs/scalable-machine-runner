@@ -3,12 +3,13 @@
 #
 # A small fake API (fake-api.py, in a cimg container beside the Swarm) hands the real circleci-runner a
 # task with an empty job; the runner then does what it does for a real job: clean (or not) the working
-# directory, start the task agent through CIRCLECI_RUNNER_COMMAND_PREFIX ("sudo -niHu circleci --"), and
+# directory, start the task agent through CIRCLECI_RUNNER_COMMAND_PREFIX ("sudo -niHu circleci --", or setpriv with
+# --no-new-privs for the hardened class), and
 # clean up. The "agent" is a shell script that prints what the job user can see and leaves files in the
 # working directory the way a checkout would.
 #
 #   default      linux-default: the agent runs as circleci, has sudo, cannot read the config secret
-#   hardened     linux-hardened: the same without sudo
+#   hardened     linux-hardened: the same without sudo, and with the no-new-privs flag set (setpriv step-down)
 #   cleanup      CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true fails: the runner (uid 2000) cannot remove the
 #                working directory the job user owns. This is why the stack and the entrypoint default it to false
 #   persistent   persistent.yaml (continuous mode): two tasks in one runner; the second sees the first's files
@@ -55,7 +56,11 @@ for class in default hardened; do
   echo "RESULT test=task class=linux-$class $line"
   [[ $line == *"user=circleci home=/home/circleci workdir=/var/opt/circleci/workdir residue=0"* ]] || fail "linux-$class: the agent did not run as circleci in the working directory"
   [[ $line == *"config=denied token_env=0"* ]] || fail "linux-$class: the agent can reach the token"
-  if [[ $class == default ]]; then [[ $line == *"sudo=yes"* ]] || fail "linux-default: the job lost sudo"; else [[ $line == *"sudo=no"* ]] || fail "linux-hardened: the job has sudo"; fi
+  if [[ $class == default ]]; then
+    [[ $line == *"sudo=yes"* && $line == *"no_new_privs=0"* ]] || fail "linux-default: the job lost sudo, or runs with no-new-privs (the default class is unchanged)"
+  else
+    [[ $line == *"sudo=no"* && $line == *"no_new_privs=1"* ]] || fail "linux-hardened: the job has sudo, or runs without no-new-privs (a setuid binary could elevate)"
+  fi
   service_logs "$SWARM_TEST_MGR" "$svc" | grep -aq 'result=success' || fail "linux-$class: the runner did not finish the task successfully"
 done
 
@@ -77,4 +82,4 @@ printf 'RESULT test=task step=persistent %s\n' "${lines[@]}"
 [[ ${lines[0]} == *"residue=0"* && ${lines[1]} != *"residue=0"* ]] || fail "the second task of a persistent runner should see the first one's files"
 if service_logs "$SWARM_TEST_MGR" "$svc" | grep -aq 'failed to remove'; then fail "a persistent runner failed to clean up"; fi
 
-pass "the real runner runs tasks as the job user through sudo -niHu; cleanup=true cannot work with a stepped-down job, so it defaults to false; a persistent runner keeps files between tasks and does not fail"
+pass "the real runner runs tasks as the job user through sudo -niHu (default) or setpriv --no-new-privs (hardened); cleanup=true cannot work with a stepped-down job, so it defaults to false; a persistent runner keeps files between tasks and does not fail"

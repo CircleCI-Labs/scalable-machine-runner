@@ -306,9 +306,13 @@ verify() {
   if [ "${l1}" = "${l2}" ] || [ "${l1}" = "${l3}" ] || [ "${l2}" = "${l3}" ]; then log "two probes share a writable layer"; ok=0; fi
   # The step-down: the entrypoint logs the way jobs are stepped down to the job user.
   local stepdown
-  stepdown=$(grep -oE 'stepdown=[a-z]+' "${service_log}" | sort -u | paste -sd, -)
+  stepdown=$(grep -oE 'sudo=(true|false) stepdown=[a-z]+' "${service_log}" | sort -u |
+    sed -e 's/^sudo=true stepdown=/default:/' -e 's/^sudo=false stepdown=/hardened:/' | paste -sd, -)
   log "step-down used by the entrypoint: ${stepdown:-none}"
-  [ "${stepdown}" = stepdown=sudo ] || { log "expected every container to step jobs down with sudo (got: ${stepdown:-none})"; ok=0; }
+  # The default class steps jobs down with sudo; the hardened class with setpriv --no-new-privs, even though the image has sudo.
+  [ "${stepdown}" = "hardened:setpriv,default:sudo" ] ||
+    { log "expected sudo for the default class and setpriv for the hardened class (got: ${stepdown:-none})"; ok=0; }
+  grep -q 'sudo=false stepdown=setpriv no_new_privs=yes' "${service_log}" || { log "the hardened class did not start with no-new-privs"; ok=0; }
   for p in b1 b2 b3; do
     [ "$(field "$(evidence ${p})" user)" = circleci ] && [ "$(field "$(evidence ${p})" runner_user)" = circleci-runner ] ||
       { log "${p}: expected job user circleci and runner user circleci-runner"; ok=0; }
@@ -324,7 +328,7 @@ verify() {
   local verdict=PASS
   [ "${ok}" -eq 1 ] || verdict=FAIL
   echo "RESULT e2e=linux probes=3 distinct_containers=${ids} b2_residue=$(field "$(evidence b2)" residue)" \
-    "job_user=$(field "$(evidence b1)" user) runner_user=$(field "$(evidence b1)" runner_user) ${stepdown} token_in_job_env=$(field "$(evidence b1)" token_env) token_on_command_line=$(field "$(evidence b1)" token_ps)" \
+    "job_user=$(field "$(evidence b1)" user) runner_user=$(field "$(evidence b1)" runner_user) stepdown=${stepdown} token_in_job_env=$(field "$(evidence b1)" token_env) token_on_command_line=$(field "$(evidence b1)" token_ps)" \
     "token_default_nosudo=$(field "$(evidence b1)" token_nosudo) token_default_sudo=$(field "$(evidence b1)" token_sudo) runner_env_via_sudo_default=$(field "$(evidence b1)" runner_environ_via_sudo)" \
     "token_hardened_nosudo=$(field "$(evidence b3)" token_nosudo) token_hardened_sudo=$(field "$(evidence b3)" token_sudo) hardened_sudo_works=$(field "$(evidence b3)" sudo_works) verdict=${verdict}" \
     | tee "${root}/result.txt"

@@ -130,6 +130,8 @@ The container exits with code 80 and the message `jobs cannot be stepped down in
 
 **Cause.** The image has neither `sudo` nor util-linux `setpriv`, or it has no `setpriv` and no `su` to start the runner.
 
+A hardened class (`MACHINE_RUNNER_SWARM_JOB_SUDO=false`) exits with code 80 and the message `needs util-linux setpriv with --no-new-privs` when the image has no util-linux `setpriv`, even if it has sudo. The hardened class never steps jobs down with sudo, because a setuid binary could then lift a job to root.
+
 **Fix.** Add the packages in a derived image. Refer to [What an image needs](images.md#what-an-image-needs).
 
 ### Error: could not remove every sudo right

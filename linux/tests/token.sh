@@ -13,6 +13,11 @@
 #   linux-default, job WITH sudo            REPORTED. Root (sudo) can read the secret file, so the default
 #                                           class cannot protect the token
 #   linux-hardened                          denied everywhere, and sudo itself is unusable
+#   linux-hardened, through the step-down   the job runs the way the runner starts it (the entrypoint's setpriv
+#                                           prefix, from the runner's own environment): NoNewPrivs is set, so a
+#                                           setuid-root binary stays the job user and cannot reach the token.
+#                                           Swarm ignores no-new-privileges; the prefix supplies it
+#   control (no step-down)                  the same setuid-root binary run without the flag DOES reach the token
 #   control (root)                          the probe CAN see the sentinel, so "denied" is meaningful
 #
 # Usage: token.sh
@@ -92,6 +97,43 @@ echo "RESULT test=token class=linux-hardened job=circleci runner_user=$hard_runn
 echo "RESULT test=token class=linux-hardened: secret_file=$(kv secret_file "$out_hard") runner_environ=$(kv runner_environ "$out_hard") own_environment=$(kv own_environment "$out_hard") sudo=$(kv sudo "$out_hard") opt_swarm_writable=$(kv opt_swarm_writable "$out_hard")"
 echo "       sudo -l -U circleci: $hard_hostmsg"
 
+# --- linux-hardened: setuid binaries ---------------------------------------------------------
+# Swarm ignores no-new-privileges, and the hardened class keeps SETUID and SETGID in its bounding set for the
+# step-down, so a setuid-root binary would otherwise lift a job to root and reach the secret (root cannot read it
+# directly without CAP_DAC_OVERRIDE, but can become uid 2000). The entrypoint therefore steps jobs down with
+# setpriv --no-new-privs, even though the image has sudo. A setuid-root copy of setpriv stands in for a vulnerable binary:
+# it reports its effective uid (--dump) and can switch to the runner's uid.
+# shellcheck disable=SC2016  # the single-quoted script runs in the container
+idocker "$SWARM_TEST_MGR" exec "$hard_c" sh -c 'cp "$(command -v setpriv)" /tmp/suid-setpriv && chown 0:0 /tmp/suid-setpriv && chmod 4755 /tmp/suid-setpriv'
+# The runner's environment is readable only by a process that is the runner user and holds the runner's capabilities
+# (the ambient SETUID and SETGID of the step-down), so read it the way the entrypoint starts the runner.
+# shellcheck disable=SC2016  # the single-quoted script runs in the container
+prefix_words=$(idocker "$SWARM_TEST_MGR" exec "$hard_c" setpriv --reuid=2000 --regid=2000 --clear-groups --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid -- sh -c 'tr "\0" "\n" < /proc/'"$hard_pid"'/environ | sed -n "s/^CIRCLECI_RUNNER_COMMAND_PREFIX=//p"' |
+  sed -e 's/^\[//' -e 's/\]$//' -e 's/"//g' -e 's/,/ /g')
+[[ $prefix_words == "setpriv "* && $prefix_words == *"--no-new-privs"* ]] || fail "linux-hardened: the step-down prefix is not setpriv --no-new-privs ($prefix_words)"
+read -r -d '' suid_probe <<'EOF' || true
+secret=/run/secrets/circleci_runner_config.yaml
+sees() { if "$@" 2>/dev/null | tr '\0' '\n' | grep -q "$SENTINEL"; then echo READABLE; else echo denied; fi; }
+echo "whoami=$(id -un)"
+echo "uid=$(id -u)"
+echo "no_new_privs=$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' /proc/self/status)"
+echo "cap_eff=$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status)"
+echo "suid_euid=$(/tmp/suid-setpriv --dump | sed -n 's/^euid:[[:space:]]*//p')"
+echo "suid_secret_file=$(sees /tmp/suid-setpriv --reuid=2000 --regid=2000 --clear-groups -- cat $secret)"
+echo "secret_file=$(sees cat $secret)"
+if sudo -n true </dev/null 2>/dev/null; then echo "sudo=works"; else echo "sudo=unusable"; fi
+if su -c true root </dev/null 2>/dev/null; then echo "su=works"; else echo "su=unusable"; fi
+echo "setuid_binaries=$(find /usr/bin /bin /usr/sbin /sbin -xdev -perm -4000 -type f 2>/dev/null | wc -l)"
+EOF
+# As the runner starts a job: the runner user (uid 2000, ambient setuid and setgid) runs the prefix, which steps down to the job user.
+# shellcheck disable=SC2086  # the prefix is a list of words
+out_nnp=$(printf 'SENTINEL=%s\n%s\n' "$SENTINEL_TOKEN" "$suid_probe" | idocker "$SWARM_TEST_MGR" exec -i -u root "$hard_c" setpriv --reuid=2000 --regid=2000 --clear-groups \
+  --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid -- $prefix_words sh -s)
+# Without the step-down (docker exec -u circleci: no no-new-privs flag): what a setuid-root bug would give.
+out_nonnp=$(printf 'SENTINEL=%s\n%s\n' "$SENTINEL_TOKEN" "$suid_probe" | cexec "$hard_c" circleci sh -s)
+echo "RESULT test=token class=linux-hardened through_step_down: user=$(kv whoami "$out_nnp") no_new_privs=$(kv no_new_privs "$out_nnp") cap_eff=$(kv cap_eff "$out_nnp") suid_euid=$(kv suid_euid "$out_nnp") suid_secret_file=$(kv suid_secret_file "$out_nnp") secret_file=$(kv secret_file "$out_nnp") sudo=$(kv sudo "$out_nnp") su=$(kv su "$out_nnp") setuid_binaries_in_image=$(kv setuid_binaries "$out_nnp")"
+echo "RESULT test=token class=linux-hardened control_without_no_new_privs: no_new_privs=$(kv no_new_privs "$out_nonnp") suid_euid=$(kv suid_euid "$out_nonnp") suid_secret_file=$(kv suid_secret_file "$out_nonnp") (what a setuid-root bug would reach without the flag)"
+
 # --- assertions ------------------------------------------------------------------------------
 [[ $def_runner_user == circleci-runner && $hard_runner_user == circleci-runner ]] || fail "the runner does not run as circleci-runner"
 [[ $def_runner_caps == 0000000000000000 ]] || fail "the runner process holds capabilities ($def_runner_caps)"
@@ -104,9 +146,17 @@ echo "       sudo -l -U circleci: $hard_hostmsg"
 [[ $(kv sudo "$out_hard") == unusable* && $hard_hostmsg == *"not allowed to run sudo"* ]] || fail "linux-hardened: the job user can still use sudo"
 [[ $(kv sudo "$out_def") == works ]] || fail "linux-default: the job user has no sudo (expected passwordless sudo by default)"
 
+[[ $(kv no_new_privs "$out_nnp") == 1 && $(kv cap_eff "$out_nnp") == 0000000000000000 ]] || fail "linux-hardened: the job does not run with no-new-privs and no capabilities"
+[[ $(kv whoami "$out_nnp") == "$(kv whoami "$out_hard")" && $(kv uid "$out_nnp") != 0 && $(kv suid_euid "$out_nnp") == "$(kv uid "$out_nnp")" ]] ||
+  fail "linux-hardened: a setuid-root binary run by the job user became root"
+[[ $(kv suid_secret_file "$out_nnp") == denied && $(kv secret_file "$out_nnp") == denied ]] || fail "linux-hardened: a setuid binary reached the token"
+[[ $(kv sudo "$out_nnp") == unusable && $(kv su "$out_nnp") == unusable ]] || fail "linux-hardened: sudo or su works for the job user"
+[[ $(kv no_new_privs "$out_nonnp") == 0 && $(kv suid_euid "$out_nonnp") == 0 && $(kv suid_secret_file "$out_nonnp") == READABLE ]] ||
+  fail "the setuid control did not reach the token without the flag: the probe is blind"
+
 if [[ $(kv sudo_secret_file "$out_def") == READABLE ]]; then
   finding="a job that uses sudo CAN read the token in the default class (secret file via sudo: READABLE); only MACHINE_RUNNER_SWARM_JOB_SUDO=false protects it"
 else
   finding="UNEXPECTED: sudo did not expose the token in the default class; update the docs"
 fi
-pass "no sudo: denied; hardened: denied and sudo unusable; finding: $finding"
+pass "no sudo: denied; hardened: denied, sudo unusable, and a setuid-root binary stays the job user under no-new-privs (control without the flag reaches the token); finding: $finding"

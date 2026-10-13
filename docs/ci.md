@@ -184,7 +184,7 @@ e2e-linux (job group, serial-group <project slug>/e2e-linux)
 
 - The first step checks that `/e2e-evidence/host` names this workflow: a probe claimed by a stray runner fails there.
 - Residue: B1 plants files in `$HOME`, `/tmp`, `/var/tmp` and (with sudo) `/etc`; every probe fails if it finds an earlier probe's files.
-- Identity: the container ID (from `/proc/self/mountinfo`) and the writable layer hash must differ from the previous probe's. The step-down is checked too: the job runs as `circleci` (the image's user), the runner as `circleci-runner`, the entrypoint logged `stepdown=sudo`, and `sudo -n true` works in the default service. This is the first real check of jobs through the `sudo -niHu circleci --` prefix.
+- Identity: the container ID (from `/proc/self/mountinfo`) and the writable layer hash must differ from the previous probe's. The step-down is checked too: the job runs as `circleci` (the image's user), the runner as `circleci-runner`, the entrypoint logged `stepdown=sudo` for the default service and `stepdown=setpriv no_new_privs=yes` for the hardened one, and `sudo -n true` works in the default service only. This is the first real check of jobs through the `sudo -niHu circleci --` prefix and through the `setpriv --no-new-privs` prefix of the hardened class.
 - Token readability, recorded in the evidence and printed in the verdict. As the job user, without and with sudo, it tries to read `/run/secrets/circleci_runner_config.yaml` (only byte counts are kept, never the content), it counts other users' `/proc/PID/environ` that it can read, and it checks the job environment, every process's command line and, through sudo, the runner's environment for the token's variable and key names (names only, never values). The token must be in none of them. A read without sudo must fail in both services. In the hardened service sudo must be unusable and the token unreadable with it; in the default service the sudo outcome is recorded and not asserted, because root can read the token.
 - Each probe's last step writes `passed` or `failed` to `/e2e-evidence/<probe>.<workflow>.status`, so the host stops at once on a failed probe.
 
@@ -192,13 +192,13 @@ e2e-linux (job group, serial-group <project slug>/e2e-linux)
 
 - three containers with distinct IDs and exit code 0, each the one that Swarm started for its probe (the container ID in the evidence equals the Nth `start` event of that service);
 - distinct writable layers, and `residue=[]` for every probe;
-- the entrypoint's `stepdown=sudo` in the runner log, job user `circleci` and runner user `circleci-runner` in every probe;
+- the entrypoint's step-down in the runner log, `sudo` for the default class and `setpriv` with `no_new_privs=yes` for the hardened class, job user `circleci` and runner user `circleci-runner` in every probe;
 - B3 without working sudo, and no probe able to read the token without sudo.
 
-It prints, for example (a real run, 2026-10-13):
+It prints, for example:
 
 ```text
-RESULT e2e=linux probes=3 distinct_containers=3 b2_residue=[] job_user=circleci runner_user=circleci-runner stepdown=sudo token_in_job_env=absent token_on_command_line=absent token_default_nosudo=denied token_default_sudo=readable runner_env_via_sudo_default=no token_hardened_nosudo=denied token_hardened_sudo=no-sudo hardened_sudo_works=no verdict=PASS
+RESULT e2e=linux probes=3 distinct_containers=3 b2_residue=[] job_user=circleci runner_user=circleci-runner stepdown=hardened:setpriv,default:sudo token_in_job_env=absent token_on_command_line=absent token_default_nosudo=denied token_default_sudo=readable runner_env_via_sudo_default=no token_hardened_nosudo=denied token_hardened_sudo=no-sudo hardened_sudo_works=no verdict=PASS
 ```
 
 ### Windows

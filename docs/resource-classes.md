@@ -188,7 +188,7 @@ Refer to the [machine runner 3 configuration reference](https://circleci.com/doc
 | Variable | Default | Notes |
 |---|---|---|
 | `MACHINE_RUNNER_SWARM_JOB_USER` | `circleci` | The account that runs jobs. The entrypoint creates it with uid 2001 when the image has none |
-| `MACHINE_RUNNER_SWARM_JOB_SUDO` | `true` | `false` removes every sudo right of the job user in that container. Any other value exits with code 80 |
+| `MACHINE_RUNNER_SWARM_JOB_SUDO` | `true` | `false` removes every sudo right of the job user in that container and steps jobs down with `setpriv --no-new-privs`, which needs util-linux `setpriv` in the image (exit code 80 without it). Any other value exits with code 80 |
 
 The runner user is `circleci-runner` with uid 2000. It owns the secret file and has no sudo rights.
 
@@ -196,7 +196,7 @@ The entrypoint sets these variables for the runner. It always sets the command p
 
 | Variable | Value |
 |---|---|
-| `CIRCLECI_RUNNER_COMMAND_PREFIX` | `["sudo","-niHu","<job user>","--"]`, or a `setpriv` command when the image has no sudo |
+| `CIRCLECI_RUNNER_COMMAND_PREFIX` | `["sudo","-niHu","<job user>","--"]`, or a `setpriv` command when the image has no sudo, and always a `setpriv --no-new-privs` command in a hardened class |
 | `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` | `false`. Do not set it to `true` on Linux |
 | `CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY` | `/var/lib/circleci-runner/agent`, owned by the runner user |
 | `CIRCLECI_RUNNER_WORK_DIR` | `/var/opt/circleci/workdir`, owned by the job user. Keep a custom directory under `/var/opt/circleci` |
@@ -246,7 +246,7 @@ The runner does not look for a config file on its own. The entrypoint arguments 
 | Code | Source | Meaning |
 |---|---|---|
 | 0 | Runner | A normal exit after a job or after a drain. Swarm starts a new container |
-| 80 | Entrypoint | A prerequisite is missing: `/opt/machine-runner-swarm` is not root-owned or is writable, the image has neither sudo nor `setpriv`, `MACHINE_RUNNER_SWARM_JOB_SUDO` is invalid, or the entrypoint cannot remove every sudo right of the job user |
+| 80 | Entrypoint | A prerequisite is missing: `/opt/machine-runner-swarm` is not root-owned or is writable, the image has neither sudo nor `setpriv` (or, for a hardened class, no util-linux `setpriv` with `--no-new-privs`), `MACHINE_RUNNER_SWARM_JOB_SUDO` is invalid, or the entrypoint cannot remove every sudo right of the job user |
 | 80 | Runner | A configuration error: a missing or invalid name, an empty token, an unknown log level, or an invalid mode |
 | 1 | Runner | The config file is missing because the secret is not attached, the YAML does not parse, or a duration is malformed |
 

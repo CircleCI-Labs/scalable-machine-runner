@@ -27,7 +27,7 @@ The shipped file uses these images:
 | Requirement | Why |
 |---|---|
 | Linux, any C library | The runner is statically linked. It runs unmodified in `cimg/base`, `cimg/openjdk`, Alpine, and UBI minimal |
-| `sudo`, or util-linux `setpriv` | Steps each job down to the job user |
+| `sudo`, or util-linux `setpriv` | Steps each job down to the job user. The hardened class (`MACHINE_RUNNER_SWARM_JOB_SUDO=false`) needs util-linux `setpriv` with `--no-new-privs`, even when the image has sudo |
 | `setpriv` or `su` | Starts the runner as `circleci-runner` |
 | `useradd` or `adduser` | Creates `circleci-runner`, and the job user when the image has none |
 | `sed`, `grep`, `stat`, `install`, `getent`, `id`, `cut`, `tr`, `chmod`, `env` | Used by the entrypoint. BusyBox and coreutils both provide them |
@@ -40,7 +40,7 @@ The `cimg` images have everything. Alpine has only the BusyBox `su`, and UBI min
 | Alpine | `apk add sudo setpriv` |
 | UBI minimal | `microdnf install sudo util-linux`. The `util-linux-core` package is not enough |
 
-The entrypoint exits with code 80 and a message that names the packages when the tools are missing. The unit tests of the entrypoint cover the `setpriv` path. The end-to-end CI jobs run real jobs through the sudo path only, because the CI image has sudo.
+The entrypoint exits with code 80 and a message that names the packages when the tools are missing. The unit tests of the entrypoint cover the `setpriv` path, and the token test runs the hardened step-down against the real runner. The end-to-end CI jobs run real jobs through the sudo path in the default class and through the `setpriv --no-new-privs` path in the hardened class.
 
 The job user is `circleci` by default. Set `MACHINE_RUNNER_SWARM_JOB_USER` to another existing account, such as the default account of a different image. If the account does not exist, the entrypoint creates it with uid 2001, and gives it passwordless sudo while `MACHINE_RUNNER_SWARM_JOB_SUDO` is `true` and the image has sudo. The image environment variables, such as `PATH`, `JAVA_HOME`, `LANG`, and proxy variables, reach the jobs. The runner token does not.
 

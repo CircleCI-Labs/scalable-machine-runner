@@ -70,7 +70,7 @@ flowchart TB
 - **Storage.** The secret is a minimal runner config file that holds only `api.auth_token`. Swarm mounts it as a read-only file in memory at `/run/secrets/circleci_runner_config.yaml`, owned by the runner user `circleci-runner` (uid 2000) with mode `0400`. The runner reads it with `--config`. The token is in no environment variable, no command line, and no stack file, and `docker inspect` does not show it.
 - **Users.** The runner runs as `circleci-runner`, which has no sudo rights and cannot write to `/opt/machine-runner-swarm`. Jobs run as the job user, stepped down with `command_prefix`.
 - **Default class.** The job user keeps passwordless sudo. A job that does not use sudo cannot read the token. A job that uses sudo can read the secret file, because root can read any file, and it can become the runner user. No in-container control stops this. The secret is a read-only mount of one file, so root cannot truncate, delete, or unmount it without `CAP_SYS_ADMIN`, but root can read it. Scrubbing the file, making the runner process non-dumpable, and dropping capabilities do not help while sudo works. The protection is against accidental exposure, such as a script that prints files or environment.
-- **Hardened class.** `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` removes every sudo right of the job user before the runner starts, and the container does not start when a right survives. The job user cannot read the file or the process of the runner, and cannot become another user. Tools must be in the image. Use this for shared or regulated classes.
+- **Hardened class.** `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` removes every sudo right of the job user before the runner starts, and the container does not start when a right survives. It also steps every job down with `setpriv --no-new-privs`, even when the image has sudo, and the container does not start when the image has no util-linux `setpriv`. Swarm ignores `no-new-privileges`, so this per-job flag is what stops a setuid binary (`sudo`, `su`, or one with a local-root bug) from lifting a job to root. The job user cannot read the file or the process of the runner, and cannot become another user. A kernel or container-runtime bug can still lift a job to root, because the containers share the host kernel. Tools must be in the image. Use this for shared or regulated classes.
 
 The test `linux/tests/token.sh` measures these results against the real runner binary.
 
@@ -80,6 +80,7 @@ The test `linux/tests/token.sh` measures these results against the real runner b
 | Read `/proc/<runner pid>/environ` | Denied, and it holds no token | Denied |
 | Token in the job environment | Absent | Absent |
 | `sudo -n true` | Works | Fails, because `sudo -l -U <job user>` reports that the user is not allowed to run sudo |
+| Run a setuid-root binary through the step-down of the runner | Becomes root (sudo is the way) | Stays the job user: `NoNewPrivs` is `1`, and the binary cannot reach the token. Without the flag the same binary reads it |
 | Read the secret file with sudo | Readable | Not possible |
 | Read the `/proc` of the runner as root without `CAP_SYS_PTRACE` | Denied | Not possible |
 | Write to `/opt/machine-runner-swarm` | No | No |

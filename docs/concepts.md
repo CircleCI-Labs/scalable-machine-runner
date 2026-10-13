@@ -8,7 +8,7 @@ page-description: How Docker Swarm services map to CircleCI resource classes, wh
 
 This page explains the model behind the stack files in this repository. Read it before you change a stack file or choose between the default and the hardened class.
 
-The stack runs CircleCI machine runner 3 as Docker Swarm services. Swarm handles replicas, restarts, secrets, and placement. This repository adds only a stack file for each operating system, a small entrypoint for Linux, and optional setup helpers.
+The stack runs CircleCI machine runner 3 as Docker Swarm services. Swarm handles replicas, restarts, secrets, and placement. This repository adds only a stack file for each operating system, a small entrypoint and a runner distributor service for Linux, and optional setup helpers.
 
 ## Services are resource classes
 
@@ -96,7 +96,7 @@ sequenceDiagram
 
 The steps in order:
 
-1. Swarm starts a container from the service image. On Linux the entrypoint sets up the users and starts the runner. On Windows the runner is the main process.
+1. Swarm starts a container from the service image. On Linux the entrypoint checks the runner, sets up the users, and starts the runner. On Windows the runner is the main process.
 2. The runner downloads its task agent, polls CircleCI, and claims one job.
 3. The runner steps the job down to the job user on Linux, runs it, and exits when the job ends.
 4. Swarm sees the exit, waits for the restart delay of 10 seconds, and starts a new container.
@@ -123,11 +123,31 @@ A clean environment means that a job starts in a container created from the imag
 | Users, groups, and sudo rules created by an earlier job | The kernel: all containers on a node share it |
 | On Windows, the registry, the user profile, `%TEMP%`, and `C:\ProgramData` | Data of finished containers that Swarm has not yet pruned from the node disk |
 
-The host directory with the runner (`/opt/machine-runner-swarm/current` on Linux, `C:\machine-runner-swarm\current` on Windows, each a link to the installed version) is mounted read-only, so a job cannot change what the next job runs. A new runner version is a new directory and a moved link: Docker follows the link when it creates a container, so the next job runs the new version, and a job that runs now finishes on the old one. Refer to [Upgrade the runner](operations.md#upgrade-the-runner-and-images).
+The runner is mounted read-only, so a job cannot change what the next job runs. On Linux it comes from the per-node volume `runner-bin`, which a service of the stack fills. Refer to [The runner distributor on Linux](#the-runner-distributor-on-linux). On Windows it is the host directory `C:\machine-runner-swarm\current`, a link to the installed version. A new runner version is a new directory and a moved link: Docker follows the link when it creates a container, so the next job runs the new version, and a job that runs now finishes on the old one. Refer to [Upgrade the runner](operations.md#upgrade-the-runner-and-images).
 
 The working directory needs no cleanup in a single-task class, because the container is discarded. On Linux, the runner does not clean it at all. The runner user cannot remove files that the job user owns, so the stack sets `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` to `"false"`. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
 
 Containers are not a virtual machine boundary. Read [Security](security.md) before you run untrusted code.
+
+## The runner distributor on Linux
+
+The Linux services use stock images such as `cimg/base`, and the image holds none of the runner. The service `runner-distributor` puts the runner on every Linux node, so nothing is installed on a node by hand. `docker stack deploy` is the whole install, and it is the only upgrade path.
+
+- **The service.** `runner-distributor` is a `global` service, so it runs on every Linux node, on a Docker-build node too, and on a node that joins later. It runs the stock `alpine:3` image, pinned by digest. Its script, `linux/runner-distributor.sh`, is a Swarm config.
+- **The volume.** The distributor writes to `runner-bin`, a named volume that exists once on every node. Each version has a directory `versions/<version>` with `bin/circleci-runner`, `SHA256`, `VERSION`, and `TARBALL`. The link `current` points to the active version and moves with one atomic rename. The file `history` lists the versions in the order they were active.
+- **The runner services.** Every class mounts `runner-bin` read-only at `/opt/machine-runner-swarm`. The entrypoint is another Swarm config, mounted at `/circleci-runner-entrypoint` with the mode `0555`, and it starts as root. A job cannot change either of them.
+- **The wait.** The entrypoint waits up to `MACHINE_RUNNER_SWARM_RUNNER_WAIT` seconds (default 120) until `current` exists, so a first deploy and a new node need no order. Then it resolves `current` once, when the container starts, and checks the binary against its record. Without a runner, or with a binary that differs, it exits with code 80, and Swarm tries again after the restart delay.
+
+Because a container resolves `current` once, a running job and its container keep their version. The next container, which is the next job, gets the new one. A persistent class runs one container for all jobs, so it picks up a new version when its container restarts. Refer to [Recycle a class](operations.md#recycle-a-class).
+
+The runner services carry no version and no hash. Which version the nodes run is a setting of the distributor service only, so an upgrade, a pin, and a rollback change that one service, and the runner services never restart. An idle replica keeps the old binary until it recycles, which takes at most the idle timeout of 1 hour.
+
+| Setting | Behavior |
+|---|---|
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION=current` (the default for now) | The distributor follows CircleCI's manifest. It adopts a new release of major version 3, and it looks again every 24 hours |
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12` | The distributor pins that version. It switches to an installed version without any network, so a rollback needs no download |
+
+The distributor verifies every download against a SHA-256 and records the SHA-256 of the binary next to it. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux) for the settings and to [Security](security.md) for the checks.
 
 ## Users and the runner token on Linux
 
@@ -155,7 +175,7 @@ Choose the hardened class for shared or regulated work. Choose the default class
 
 The entrypoint `circleci-runner-entrypoint` starts as root, prepares the container, and then runs the runner as the runner user. It never reads the token. In order, it:
 
-1. Checks that `/opt/machine-runner-swarm`, `/opt/machine-runner-swarm/bin`, and the runner are owned by root and not writable by the group or others.
+1. Waits for the runner distributor of the node, resolves the link `current` once, and checks the runner binary against its SHA-256 record. Then it checks that the runner and every directory above it, up to `/opt/machine-runner-swarm`, are owned by root and not writable by the group or others. Refer to [The runner distributor on Linux](#the-runner-distributor-on-linux).
 2. Looks for the tools it needs. `sudo` or util-linux `setpriv` steps jobs down, and `setpriv` or `su` starts the runner. With `MACHINE_RUNNER_SWARM_JOB_SUDO=false`, util-linux `setpriv` with `--no-new-privs` is required, whether or not the image has sudo. Without the tools it exits with code 80. Refer to [What an image needs](images.md#what-an-image-needs).
 3. Creates the users with `useradd` or `adduser`: `circleci-runner` with uid and gid 2000, and the job user when the image has none. It does not edit `/etc/passwd` by hand, because sudo refuses a user that has no `passwd` and no `shadow` entry.
 4. With `MACHINE_RUNNER_SWARM_JOB_SUDO=false`, removes the job user from the `sudo`, `wheel`, and `admin` groups, and deletes the sudoers rules whose first entry is the user, one of its groups, its numeric ID, or `ALL`. It then runs `sudo -l -U <job user>`, and the container exits with code 80 unless the answer is that the user is not allowed to run sudo. A rule that comes through an alias, or from a list where the user is not first, such as `other,circleci ALL=...`, therefore stops the container and does not stay unnoticed.
@@ -197,7 +217,11 @@ A plain `docker compose up` restarts the same container, so the environment is n
 | Persistent class | A class that runs in continuous mode with a named volume, so jobs share state. It gives up the clean environment |
 | Default class, hardened class | The Linux default classes (`linux-default`, `linux-java`) keep passwordless sudo for jobs. The hardened class (`linux-hardened`) removes sudo and steps every job down with `setpriv --no-new-privs`. Refer to [Users and the runner token on Linux](#users-and-the-runner-token-on-linux) |
 | Token secret | The Swarm secret `<service>-token`. It is a runner config file that holds the token of the resource class |
-| Entrypoint | On Linux, the script `circleci-runner-entrypoint`, which prepares the users and then starts the runner. On Windows there is none: the runner is the main process |
-| Setup helper | The optional scripts `linux/setup.sh` and `windows\Setup.ps1`, which run steps of the install pages with checks |
-| Stock image, custom image | A stock image is a publisher's image as it is, for example `cimg/base` or Windows Server Core. The stack mounts the runner into it from the host. A custom image is one you derive from it, for example to add tools. A baked image is a Linux custom image with the runner inside. Refer to [Images](images.md) |
+| Entrypoint | On Linux, the script `circleci-runner-entrypoint`, which a Swarm config delivers. It checks the runner, prepares the users, and then starts the runner. On Windows there is none: the runner is the main process |
+| Runner distributor | On Linux, the `global` service `runner-distributor`. On every node it downloads, verifies, and installs the runner into `runner-bin`, moves `current`, and looks again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL`. Refer to [The runner distributor on Linux](#the-runner-distributor-on-linux) |
+| `runner-bin` | The named volume, one on every Linux node, that holds the runner versions. The distributor writes it, and the runner services mount it read-only at `/opt/machine-runner-swarm` |
+| `current` | The link in `runner-bin` that points to the active `versions/<version>`. A container resolves it once, when it starts. As a value of `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, `current` makes the distributor follow CircleCI's current release |
+| Record | The file `versions/<version>/SHA256`, which holds the SHA-256 of the binary in the format of `sha256sum -c`. The distributor writes it when it installs a version, and the entrypoint checks the binary against it at every container start |
+| Setup helper | The optional scripts `linux/setup.sh` and `windows\Setup.ps1`, which run steps of the install pages with checks. On Linux the helper checks the node, starts Swarm, creates secrets, and deploys. It installs nothing, because the distributor installs the runner |
+| Stock image, custom image | A stock image is a publisher's image as it is, for example `cimg/base` or Windows Server Core. The stack mounts the runner into it, on Linux from the volume `runner-bin` and on Windows from the host. A custom image is one you derive from it, for example to add tools. Refer to [Images](images.md) |
 | Drain | The word has two meanings. A **runner drain** happens when the runner gets SIGTERM: it takes no new job and finishes the running one. A **node drain** is `docker node update --availability drain`: Swarm stops the tasks of that node, which starts a runner drain in each, and starts replacements on other nodes. This documentation always says which one |

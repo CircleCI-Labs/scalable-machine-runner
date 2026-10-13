@@ -86,7 +86,7 @@ In the default Linux class, a job that uses sudo can. In the hardened class, it 
 
 ## Why does a Windows job end when I update or stop a service?
 
-A stock Server Core container ends about 5 seconds after any stop, whatever `stop_grace_period` says. The exit code is 3221225786. Run the stock-image Windows services on the stop-timeout image, which lets the runner drain. Refer to [Windows drain](operations.md#windows-drain) and [Build the stop-timeout image](install-windows.md#4-build-the-stop-timeout-image).
+Stopping a busy stock Server Core container from outside kills its job after about 5 seconds, whatever `stop_grace_period` says. The exit code is 3221225786. The normal flow is not affected: a job that finishes ends the runner and the container cleanly. Only a deploy or update, a scale-down, a drain, `docker stack rm`, and a restart of Docker stop a busy container. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Windows drain](operations.md#windows-drain).
 
 ## Does the setup helper install the latest runner?
 

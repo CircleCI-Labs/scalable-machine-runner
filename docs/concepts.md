@@ -101,7 +101,7 @@ Three timing facts follow from this design:
 
 Stopping a service sends SIGTERM to the runner. The runner drains, which means it accepts no new job and lets the running job finish. The stack sets `stop_grace_period: 5h5m`, which is the runner `max_run_time` of 5 hours plus 5 minutes.
 
-On Windows, `stop_grace_period` is not enough. A stock Server Core container ends about 5 seconds after a stop, so the running job dies. Stock-image Windows services use the stop-timeout image, which sets the wait in the image. Refer to [Windows drain](operations.md#windows-drain).
+On Windows, `stop_grace_period` is not enough. A stock Server Core container ends about 5 seconds after a stop, so a job that runs at that moment dies. The normal flow is not affected: a finished job ends the container by itself. Only a stop from outside, such as an update, a scale-down, or a drain, kills a busy container, so change a Windows service while its class is idle. Refer to [Windows drain](operations.md#windows-drain).
 
 ## What a clean environment covers
 
@@ -115,7 +115,7 @@ A clean environment means that a job starts in a container created from the imag
 | Users, groups, and sudo rules created by an earlier job | The kernel: all containers on a node share it |
 | On Windows, the registry, the user profile, `%TEMP%`, and `C:\ProgramData` | Data of finished containers that Swarm has not yet pruned from the node disk |
 
-The host directory with the runner (`/opt/machine-runner-swarm` on Linux, `C:\machine-runner-swarm` on Windows) is mounted read-only, so a job cannot change what the next job runs.
+The host directory with the runner (`/opt/machine-runner-swarm/current` on Linux, `C:\machine-runner-swarm\current` on Windows, each a link to the installed version) is mounted read-only, so a job cannot change what the next job runs. A new runner version is a new directory and a moved link: Docker follows the link when it creates a container, so the next job runs the new version, and a job that runs now finishes on the old one. Refer to [Upgrade the runner](operations.md#upgrade-the-runner-and-images).
 
 The working directory needs no cleanup in a single-task class, because the container is discarded. On Linux, the runner does not clean it at all. The runner user cannot remove files that the job user owns, so the stack sets `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` to `"false"`. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
 

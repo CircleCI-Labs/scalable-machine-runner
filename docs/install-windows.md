@@ -14,7 +14,7 @@ This page describes how to deploy CircleCI machine runner 3 as a Docker Swarm st
 The manual steps come first. The optional [setup helper](#optional-use-the-setup-helper) runs most of the same steps.
 
 > [!IMPORTANT]
-> A stock Server Core container ends about 5 seconds after any stop, whatever `stop_grace_period` says. A rolling update, a scale down, or a node drain then kills the running job. Use the stop-timeout image for every stock-image service. Refer to [Build the stop-timeout image](#4-build-the-stop-timeout-image).
+> The services run the stock Server Core image, and no image is built. A job that finishes ends its container cleanly. Stopping a busy container from outside kills its job after about 5 seconds, with the exit code 3221225786. This happens on a deploy or update, a scale-down, a node drain, `docker stack rm`, and a restart of Docker. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Windows drain](operations.md#windows-drain).
 
 ## Prerequisites
 
@@ -140,7 +140,7 @@ The task agent runs `C:\Program Files\Git\usr\bin\tar.exe` for workspaces, and i
 
 The task agent starts `tar.exe` with `--force-local`, from the root of the drive, and with forward-slash operands that are relative to that root. For example, it passes `foo/bar` for `C:\foo\bar`. A backslash operand makes the tar of Git fail with `Cannot stat`, so use the forward-slash form when you test `tar` by hand.
 
-Run the following in an elevated PowerShell. It downloads each file, verifies its SHA-256 checksum, and fills `C:\machine-runner-swarm`. The Git and 7-Zip checksums are the values pinned in `windows\Setup.ps1`, and the runner checksum comes from the CircleCI release manifest.
+Run the following in an elevated PowerShell. It downloads each file, verifies its SHA-256 checksum, and fills `C:\machine-runner-swarm\<runner version>`, and then points the junction `C:\machine-runner-swarm\current` at that directory. The stack mounts the junction, so a new version later goes next to this one, and the junction moves. The Git and 7-Zip checksums are the values pinned in `windows\Setup.ps1`, and the runner checksum comes from the CircleCI release manifest.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -148,13 +148,14 @@ $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $swarm = 'C:\machine-runner-swarm'
 $runnerVersion = '3.1.12'
+$dir = "$swarm\$runnerVersion"
 $gitVersion = '2.56.0.2'
 $gitTag = 'v2.56.0.windows.2'
 $gitSha = '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b'
 $sevenZipVersion = '26.04'
 $sevenZipSha = '256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282'
 $work = Join-Path $env:TEMP 'swarm-stage'
-New-Item -ItemType Directory -Force "$swarm\bin", "$swarm\git", $work | Out-Null
+New-Item -ItemType Directory -Force "$dir\bin", "$dir\git", $work | Out-Null
 
 function Get-Verified($uri, $file, $sha) {
   Invoke-WebRequest -Uri $uri -OutFile $file -UseBasicParsing
@@ -167,25 +168,25 @@ $manifest = (Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing).Content | Con
 $entry = $manifest.releases.$runnerVersion.windows.amd64
 $runnerUrl = "https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/$runnerVersion/circleci-runner_windows_amd64.tar.gz"
 Get-Verified $runnerUrl "$work\runner.tar.gz" $entry.sha256
-& "$env:SystemRoot\System32\tar.exe" -xzf "$work\runner.tar.gz" -C "$swarm\bin"
+& "$env:SystemRoot\System32\tar.exe" -xzf "$work\runner.tar.gz" -C "$dir\bin"
 
 # Portable Git, unpacked with the standalone 7-Zip extractor
 Get-Verified "https://github.com/ip7z/7zip/releases/download/$sevenZipVersion/7zr.exe" "$work\7zr.exe" $sevenZipSha
 Get-Verified "https://github.com/git-for-windows/git/releases/download/$gitTag/PortableGit-$gitVersion-64-bit.7z.exe" "$work\pgit.exe" $gitSha
-& "$work\7zr.exe" x -y "-o$swarm\git" "$work\pgit.exe"
+& "$work\7zr.exe" x -y "-o$dir\git" "$work\pgit.exe"
 
 # Git's post-install scripts, once, so the tree is ready to mount read-only
-& "$swarm\git\usr\bin\bash.exe" --norc -c 'export PATH=/usr/bin:/ucrt64/bin:/mingw64/bin:/cmd:$PATH; export SYSCONFDIR=/etc; for p in $(export LC_COLLATE=C; echo /etc/post-install/*.post); do test -e "$p" && . "$p"; done'
-Remove-Item "$swarm\git\post-install.bat" -ErrorAction SilentlyContinue
-Set-Content "$swarm\VERSION" "runner=$runnerVersion", "git=$gitVersion" -Encoding ASCII
+& "$dir\git\usr\bin\bash.exe" --norc -c 'export PATH=/usr/bin:/ucrt64/bin:/mingw64/bin:/cmd:$PATH; export SYSCONFDIR=/etc; for p in $(export LC_COLLATE=C; echo /etc/post-install/*.post); do test -e "$p" && . "$p"; done'
+Remove-Item "$dir\git\post-install.bat" -ErrorAction SilentlyContinue
+Set-Content "$dir\VERSION" "runner=$runnerVersion", "git=$gitVersion" -Encoding ASCII
 Remove-Item $work -Recurse -Force
 ```
 
-The script uses the `tar.exe` in `System32` on purpose. A GNU `tar` from another Git on the `PATH` of the host reads `C:\machine-runner-swarm\bin` as a remote host name.
+The script uses the `tar.exe` in `System32` on purpose. A GNU `tar` from another Git on the `PATH` of the host reads `C:\machine-runner-swarm\3.1.12\bin` as a remote host name.
 
-A `PsExec64.exe` on the `PATH` of the host does not matter. The stack sets the `PATH` of the containers in full, so the host `PATH` never reaches them. Only an image build checks for it.
+A `PsExec64.exe` on the `PATH` of the host does not matter. The stack sets the `PATH` of the containers in full, so the host `PATH` never reaches them.
 
-### Set the access rights on C:\machine-runner-swarm
+### Set the access rights and the junction
 
 Containers with process isolation open the bind mounts as an identity that does not exist on the host. Microsoft says to grant access to Authenticated Users. `Setup.ps1` sets these rights, and you set them by hand as follows.
 
@@ -196,46 +197,28 @@ Containers with process isolation open the bind mounts as an identity that does 
 | `Authenticated Users` | Read and execute |
 
 ```powershell
-icacls C:\machine-runner-swarm /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX'
-icacls 'C:\machine-runner-swarm\*' /reset /T /C /Q
+$rights = '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-11:(OI)(CI)RX'
+icacls $swarm /inheritance:r /grant:r $rights
+icacls $dir /inheritance:r /grant:r $rights
+icacls "$dir\*" /reset /T /C /Q
+if (Test-Path "$swarm\current") { cmd /c rmdir "$swarm\current" }
+New-Item -ItemType Junction -Path "$swarm\current" -Target $dir | Out-Null
 ```
 
-The first command sets the rights on the directory only, and cuts the inheritance from `C:\`. The second command resets every file below it to inherit them. Do not combine the two with `/T` in one call, because that leaves the files with an empty access list, and the container then fails with `Access is denied`.
+The first two `icacls` commands set the rights on a directory only, and cut the inheritance from `C:\`. The first one protects `C:\machine-runner-swarm`, so nobody else can replace the junction. The third command resets every file below the version directory to inherit them. Do not combine the second and the third with `/T` in one call, because that leaves the files with an empty access list, and the container then fails with `Access is denied`. `cmd /c rmdir` removes the junction and never the directory behind it.
 
-A job cannot change the files. Authenticated Users can read and run them but not write, and the mounts are read-only. Hyper-V isolation opens bind mounts as `LocalSystem` instead, and this repository does not test it. Windows can bind-mount only directories, which is why `C:\machine-runner-swarm` and `C:\machine-runner-swarm\git` are directories and the runner config is a Swarm secret and not a mounted file.
+A job cannot change the files. Authenticated Users can read and run them but not write, and the mounts are read-only. Hyper-V isolation opens bind mounts as `LocalSystem` instead, and this repository does not test it. Windows can bind-mount only directories, which is why the junction and `git` are directories and the runner config is a Swarm secret and not a mounted file.
 
 Check the result. The first command prints the runner version, and the second prints the Git version.
 
 ```powershell
-C:\machine-runner-swarm\bin\circleci-runner.exe --version
-C:\machine-runner-swarm\git\cmd\git.exe --version
+C:\machine-runner-swarm\current\bin\circleci-runner.exe --version
+C:\machine-runner-swarm\current\git\cmd\git.exe --version
 ```
 
 Repeat this step on every Windows host. The directory must exist on each host that can run a service.
 
-## 4. Build the stop-timeout image
-
-Docker stops a container by sending a shutdown event to it. The runner drains on that event: it accepts no new job and lets the running job finish. On Server Core, Windows waits only the time in the registry value `WaitToKillServiceTimeout` before it ends the processes of the container. The default is 5 seconds, whatever `docker stop -t` or `stop_grace_period` says. A stock container therefore exits about 5 seconds after any stop with the exit code 3221225786 (`0xC000013A`), and the running job dies with it.
-
-The image `windows\images\stop-timeout` is the stock Server Core image plus that one registry value. Build it for each image tag that you run. The build context is the directory of the Dockerfile.
-
-```powershell
-docker build -f windows/images/stop-timeout/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 `
-  -t registry.example.com/ci/servercore-stop:ltsc2022 windows/images/stop-timeout
-docker build -f windows/images/stop-timeout/Dockerfile --build-arg WINDOWS_TAG=ltsc2025 `
-  -t registry.example.com/ci/servercore-stop:ltsc2025 windows/images/stop-timeout
-```
-
-The build argument `SHUTDOWN_TIMEOUT_SECONDS` sets the wait. The default is 18300 seconds, which is the 5 hours of `max_run_time` plus the 5 minutes of drain margin in `stop_grace_period`. The value must be at least the longest job that you allow plus the drain margin. If you lower `CIRCLECI_RUNNER_MAX_RUN_TIME` and `stop_grace_period`, you can lower the build argument to match. If you raise them, rebuild the image with a larger value.
-
-Set `image:` of every stock-image service in your copy of the stack file to this image. On a single node, a locally built image works: deploy with `docker stack deploy --resolve-image never`, because the image is not in a registry. For several nodes, push the image to a registry that every Windows node can pull from, because Swarm does not share local images.
-
-The baked image already includes the value. Refer to [Images](images.md#windows-the-baked-image). Nano Server images do not have this limit, but this repository does not support Nano Server.
-
-> [!WARNING]
-> Never use `New-Item -Force` on an existing registry key in an image build or in a running container. It replaces the key and deletes its values and subkeys. On `HKLM:\SYSTEM\CurrentControlSet\Services\cexecsvc`, it removes the definition of the container exec service, and the container fails to start with `hcs::System::Start: context deadline exceeded`. Use `reg add` or `Set-ItemProperty`, which set one value and leave the rest of the key alone.
-
-## 5. Start Swarm and label the node
+## 4. Start Swarm and label the node
 
 On the first host, start Swarm. Always pass `--advertise-addr` with the IPv4 address of the host. A plain `docker swarm init` fails on some hosts with `could not find the system's IP address`, and a host with several network adapters needs the address to pick the right one.
 
@@ -258,7 +241,7 @@ The optional classes need one more label each. Add it to the nodes that run them
 | `windows-docker-build` | `machine-runner-swarm.docker-build=true` |
 | `windows-persistent` | `machine-runner-swarm.class.windows-persistent=true` |
 
-## 6. Create the secrets
+## 5. Create the secrets
 
 Create one secret for each service you deploy, including each optional class. The secret is the config file of the runner and holds only the token:
 
@@ -284,18 +267,17 @@ Remove-Item -LiteralPath $file -Force
 
 Windows does not support the `uid`, `gid`, and `mode` options of secrets. Only administrators and `SYSTEM` can read the file inside the container, and jobs run as an administrator. Swarm also writes the secret in clear text to the disk of the container until the container stops, which is a Swarm limitation on Windows. Linux keeps the secret in memory. Enable BitLocker on the Docker volume. Refer to [Token model on each OS](security.md#token-model-on-each-os).
 
-## 7. Review the stack file
+## 6. Review the stack file
 
 Copy `windows\stack\runners.yaml`, and keep the copy under version control. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
 
 | Service | File | Purpose |
 |---|---|---|
 | `windows-default` | `runners.yaml` | Stock Server Core image, two replicas |
-| `windows-custom` | `custom-image.yaml` | Your own image on top of the baked runner image. Refer to [Images](images.md) |
+| `windows-custom` | `custom-image.yaml` | Your own image on top of stock Server Core. Refer to [Images](images.md#windows-bring-your-own-image) |
 | `windows-persistent` | `persistent.yaml` | A long-lived runner with a named volume. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
 | `windows-docker-build` | `docker-build.yaml` | Builds Windows images with the host engine. Refer to [Docker Builds](docker-builds.md) |
 
-- Set `image:` of each stock-image service to your stop-timeout image from step 4.
 - `runners.yaml` needs only the secret `windows-default-token`. Each overlay file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
 - For Server 2025 nodes, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-build == ltsc2025`.
 
@@ -310,19 +292,19 @@ docker stack config -c windows\stack\runners.yaml -c windows\stack\custom-image.
 
 For the keys that Windows honours and the keys that it ignores, refer to [Stack keys on Windows](resource-classes.md#stack-keys-on-windows).
 
-## 8. Deploy the stack
+## 7. Deploy the stack
 
 ```powershell
 docker stack deploy -c windows\stack\runners.yaml runners
 ```
 
-To add the optional classes, pass their files after `runners.yaml` with more `-c` flags, for example your own image on top of the baked runner image:
+To add the optional classes, pass their files after `runners.yaml` with more `-c` flags, for example your own image on top of stock Server Core:
 
 ```powershell
 docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml runners
 ```
 
-The bind source of the runner mount is `${MACHINE_RUNNER_SWARM_DIR:-C:\machine-runner-swarm}`. Set `MACHINE_RUNNER_SWARM_DIR` before the deploy to use another directory, which [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images) uses for rolling updates.
+The bind source of the runner mount is the junction `C:\machine-runner-swarm\current`. A new runner version needs no deploy: refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 
 ## Verify the deployment
 
@@ -363,21 +345,21 @@ The bind source of the runner mount is `${MACHINE_RUNNER_SWARM_DIR:-C:\machine-r
 - The `PATH` of the service reaches every step, because the runner passes its environment to the task agent and the task agent passes it to the steps.
 - `checkout`, caches, test results, and artifacts need Git and outbound access. Workspaces use the `tar` and `gzip` from the mounted Git. Caches and test results use built-in code.
 - OpenID Connect tokens need a writable `%TEMP%`.
-- The stack enables Git long paths through the environment. The Windows registry value `LongPathsEnabled` is not set. A job that needs long paths for other tools sets the value itself, or runs on a baked image that sets it.
+- The stack enables Git long paths through the environment. The Windows registry value `LongPathsEnabled` is not set. A job that needs long paths for other tools sets the value itself, or sets it in its own image.
 - Not supported: desktop or UI automation, Docker commands in jobs (except the opt-in docker-build class), and service containers.
 - Not tested: `add_ssh_keys`, Hyper-V isolation, group managed service accounts, and proxies.
 - The variables `MACHINE_RUNNER_SWARM_JOB_SUDO` and `MACHINE_RUNNER_SWARM_JOB_USER` of the Linux entrypoint do not exist on Windows, and Windows ignores them. There is no step-down.
 
 ## Optional: use the setup helper
 
-`windows\Setup.ps1` stages `C:\machine-runner-swarm`, starts Swarm on request, labels the node, creates the secrets, and deploys, with checks. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <name> PASS` or `FAIL` for each preflight check: administrator, Windows Server build, Windows-container mode, and Swarm manager.
+`windows\Setup.ps1` stages `C:\machine-runner-swarm\<version>` and the `current` junction, starts Swarm on request, labels the node, creates the secrets, and deploys, with checks. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <name> PASS` or `FAIL` for each preflight check: administrator, Windows Server build, Windows-container mode, and Swarm manager.
 
-The helper always stages before it starts Swarm. It ignores a `PsExec64.exe` on the host `PATH`. It does not build the stop-timeout image, and it does not add the labels of the optional classes.
+The helper always stages before it starts Swarm. It does not add the labels of the optional classes.
 
 | Parameter | Effect |
 |---|---|
-| `-InstallDir` | Directory to stage. The default is `C:\machine-runner-swarm` |
-| `-RunnerVersion` | Runner version. The default is `3.1.12`. The checksum comes from the CircleCI release manifest |
+| `-InstallDir` | The directory of the versions and of the `current` junction. The default is `C:\machine-runner-swarm`. The helper stages `<InstallDir>\<RunnerVersion>` |
+| `-RunnerVersion` | Runner version. The default is `3.1.12`. The checksum comes from the CircleCI release manifest. A run with another version stages it next to the others and moves `current` to it, and a run with an installed version only moves `current` back |
 | `-StageOnly` | Stops after staging. Needs no Docker |
 | `-InitSwarm -AdvertiseAddr <ip>` | Creates a Swarm when none exists. The address is required, and the helper waits until the node is a manager |
 | `-Class <name>,<name>` | Asks for each token with hidden input and creates the secret `<name>-token`. An existing secret stays unchanged |
@@ -386,7 +368,7 @@ The helper always stages before it starts Swarm. It ignores a `PsExec64.exe` on 
 
 The helper labels the node `machine-runner-swarm.windows-build=ltsc2022` or `ltsc2025` from the host build. It supports Server 2022 and 2025 only, so on Server 2019 use the manual steps.
 
-Run it after you build the stop-timeout image. The example uses your copy of the stack file, because you set its `image:` to your stop-timeout image.
+The example uses your copy of the stack file.
 
 ```powershell
 .\windows\Setup.ps1 -InitSwarm -AdvertiseAddr 10.0.0.5 -Class windows-default -StackFile .\my-runners.yaml -Deploy
@@ -394,11 +376,11 @@ Run it after you build the stop-timeout image. The example uses your copy of the
 
 ## Upgrade
 
-Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images). Do not overwrite `C:\machine-runner-swarm` while containers use it, because Windows cannot replace files that are in use.
+Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images). Stage a new version in its own directory next to the others. Never overwrite a version directory while containers use it, because Windows cannot replace files that are in use.
 
 ## Stop and uninstall
 
-Refer to [Uninstall](operations.md#uninstall). Every stop of a service, including a scale down, a rolling update, and a node drain, ends the containers. The running jobs finish only on the stop-timeout image or on the baked image. Refer to [Windows drain](operations.md#windows-drain).
+Refer to [Uninstall](operations.md#uninstall). Every stop of a service, including a scale down, a rolling update, and a node drain, ends the containers. A running job is killed after about 5 seconds. Refer to [Windows drain](operations.md#windows-drain).
 
 ## Troubleshooting
 

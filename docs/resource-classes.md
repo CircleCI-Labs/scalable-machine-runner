@@ -19,7 +19,7 @@ To add a class:
    ```
 
 2. Copy an existing service in your stack file and change the values in the table below.
-3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#5-create-the-secrets) or [Create the secrets on Windows](install-windows.md#6-create-the-secrets).
+3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#5-create-the-secrets) or [Create the secrets on Windows](install-windows.md#5-create-the-secrets).
 4. Deploy the stack again, with the same set of `-c` files as before. Swarm creates the new service and leaves unchanged services alone.
 
    ```console
@@ -76,7 +76,7 @@ secrets:
 
 Use `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` with the capability settings of `linux-hardened` for a hardened class. Refer to [Concepts](concepts.md#users-and-the-runner-token-on-linux).
 
-On Windows, copy a service such as `windows-default`, and keep its `image` on your stop-timeout build. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks.
+On Windows, copy a service such as `windows-default`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks.
 
 ## Size the limits
 
@@ -172,7 +172,7 @@ Swarm still replaces the container when the runner exits. Only the volume surviv
 | `CIRCLECI_RUNNER_IDLE_TIMEOUT` | `1h` | Single-task services | An idle replica exits and Swarm replaces it. Do not set it in continuous mode |
 | `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` | `"false"` on Linux, `"true"` on Windows | Every service | On Windows, the runner removes the working directory before and after each task. On Linux it stays off, because the runner user cannot remove files that the job user owns. Refer to [Working directory cleanup](security.md#working-directory-cleanup) |
 | `CIRCLECI_RUNNER_LOGGING_FORMAT` | `text` | Every service | No color codes in logs |
-| `CIRCLECI_RUNNER_MAX_RUN_TIME` | Commented out, default `5h` | Every service | If you lower it, lower `stop_grace_period` to the same value plus 5 minutes. On Windows, also rebuild the stop-timeout image with a matching `SHUTDOWN_TIMEOUT_SECONDS` |
+| `CIRCLECI_RUNNER_MAX_RUN_TIME` | Commented out, default `5h` | Every service | If you lower it, lower `stop_grace_period` to the same value plus 5 minutes |
 | `HTTPS_PROXY`, `NO_PROXY` | Commented out | Every service | Jobs inherit variables that you set here |
 | `MACHINE_RUNNER_SWARM_JOB_SUDO` | `"true"` or `"false"` | Linux | `"false"` makes the class hardened |
 | `CIRCLECI_RUNNER_WORK_DIR` | `C:\cci\w` | Windows | The working directory of jobs. The task agent creates it |
@@ -208,7 +208,6 @@ Arguments that you pass to the entrypoint replace the default command, which is 
 | Variable | Used by | Effect |
 |---|---|---|
 | `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `linux/setup.sh` | HTTPS mirror of the runner downloads |
-| `MACHINE_RUNNER_SWARM_DIR` | The Windows stack file | Host directory of the runner mounts. The default is `C:\machine-runner-swarm` |
 
 ### Stack keys on Windows
 

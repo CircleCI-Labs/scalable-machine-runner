@@ -154,13 +154,14 @@ A single node needs no firewall change. Multi-node clusters open the ports in [I
 
 ## 3. Install the runner and the entrypoint
 
-The stack mounts the host directory `/opt/machine-runner-swarm` read-only into every container. It holds the statically linked runner and the entrypoint, so a stock image needs no rebuild when the runner version changes.
+The stack mounts the host link `/opt/machine-runner-swarm/current` read-only at `/opt/machine-runner-swarm` in every container. The link points to the directory of the installed version, which holds the statically linked runner and the entrypoint, so a stock image needs no rebuild when the runner version changes. A new version goes into its own directory, and the link moves to it: refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
 | Path | Content |
 |---|---|
-| `/opt/machine-runner-swarm/bin/circleci-runner` | Machine runner 3 binary |
-| `/opt/machine-runner-swarm/bin/circleci-runner-entrypoint` | Entrypoint script from `linux/entrypoint/circleci-runner-entrypoint` |
-| `/opt/machine-runner-swarm/VERSION` | Runner version |
+| `/opt/machine-runner-swarm/<version>/bin/circleci-runner` | Machine runner 3 binary |
+| `/opt/machine-runner-swarm/<version>/bin/circleci-runner-entrypoint` | Entrypoint script from `linux/entrypoint/circleci-runner-entrypoint` |
+| `/opt/machine-runner-swarm/<version>/VERSION` | Runner version |
+| `/opt/machine-runner-swarm/current` | A link to the version directory that the stack mounts |
 
 Run the following as root from the root of the repository. It downloads the runner, verifies its SHA-256 checksum against the file that CircleCI publishes, and installs both files.
 
@@ -179,12 +180,17 @@ curl -fsSL --proto '=https' --tlsv1.2 "$base/$v/checksums.txt" \
   | grep "circleci-runner_linux_$arch.tar.gz" | sha256sum -c -
 tar -xzf "circleci-runner_linux_$arch.tar.gz" --no-same-owner circleci-runner
 ./circleci-runner --version
-install -d -m 0755 -o root -g root /opt/machine-runner-swarm /opt/machine-runner-swarm/bin
-install -m 0755 -o root -g root circleci-runner "$repo/linux/entrypoint/circleci-runner-entrypoint" /opt/machine-runner-swarm/bin/
-echo "$v" > /opt/machine-runner-swarm/VERSION
+d=/opt/machine-runner-swarm
+install -d -m 0755 -o root -g root "$d" "$d/$v" "$d/$v/bin"
+install -m 0755 -o root -g root circleci-runner "$repo/linux/entrypoint/circleci-runner-entrypoint" "$d/$v/bin/"
+echo "$v" > "$d/$v/VERSION"
+ln -s "$v" "$d/.current.new"
+mv -T "$d/.current.new" "$d/current"
 ```
 
-The entrypoint refuses to start a container when `/opt/machine-runner-swarm`, `/opt/machine-runner-swarm/bin`, or the runner binary is not owned by root or is writable by the group or others. Use runner version 3.1.12 or later, which fixes the enforcement of `max_run_time`.
+The last two commands make the link `current`: a new link under a temporary name, and then one atomic rename over the old one, so a container is never created while the link is missing.
+
+Inside the container the link appears as `/opt/machine-runner-swarm`. The entrypoint refuses to start a container when that directory, its `bin` directory, or the runner binary is not owned by root or is writable by the group or others. Use runner version 3.1.12 or later, which fixes the enforcement of `max_run_time`.
 
 Repeat this step on every node. The directory must exist on each node that can run a service, otherwise the task fails with `bind source path does not exist`. Install the build that matches the architecture of the node.
 
@@ -314,7 +320,7 @@ $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml
 |---|---|
 | `--check` | Preflight: Linux, amd64 or arm64, Docker running and 24 or later, Swarm state, NTP |
 | `--swarm-init` | Runs `docker swarm init` on the loopback address unless Swarm is active, and sets the task history limit to 2 |
-| `--install` | Downloads the runner, verifies the SHA-256 checksum, and installs the runner and entrypoint into `--prefix` (default `/opt/machine-runner-swarm`). Needs root |
+| `--install` | Downloads the runner, verifies the SHA-256 checksum, installs the runner and entrypoint into `--prefix/<version>` (default prefix `/opt/machine-runner-swarm`), and points `--prefix/current` at it. Another `--version` installs next to the others and moves the link, and an installed version is only switched to, which is the rollback. Needs root |
 | `--secret <service>` | Creates the secret `<service>-token` from a token read on stdin |
 | `--deploy` | Runs `docker stack deploy` with each `--stack-file` (default `linux/stack/runners.yaml`) |
 

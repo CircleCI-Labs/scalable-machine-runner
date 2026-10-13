@@ -110,9 +110,9 @@ Swarm commands such as `docker stack deploy` fail on a worker.
 
 ### Error: bind source path does not exist
 
-A task is rejected with `invalid mount config for type "bind": bind source path does not exist: /opt/machine-runner-swarm`.
+A task is rejected with `invalid mount config for type "bind": bind source path does not exist: /opt/machine-runner-swarm/current`.
 
-**Cause.** The node has no `/opt/machine-runner-swarm` directory.
+**Cause.** The node has no `/opt/machine-runner-swarm/current` link, because the runner is not installed there, or the link points to a version that was deleted.
 
 **Fix.** Install the runner and the entrypoint on that node. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint).
 
@@ -233,21 +233,15 @@ icacls 'C:\machine-runner-swarm\*' /reset /T /C /Q
 
 Outbound connections fail with `Unable to connect to the remote server` or `no such host` for a few seconds after you create the swarm.
 
-**Fix.** Stage `C:\machine-runner-swarm`, pull the images, and build the stop-timeout image first, and run `docker swarm init` last. `Setup.ps1` stages before it starts Swarm.
+**Fix.** Stage `C:\machine-runner-swarm` and pull the images first, and run `docker swarm init` last. `Setup.ps1` stages before it starts Swarm.
 
 ### Windows container exits with code 3221225786 after a stop
 
 A job ends about 5 seconds after a rolling update, a scale down, a node drain, or `docker stop`. `docker service ps --no-trunc` shows `task: non-zero exit (3221225786)`, which is `0xC000013A`.
 
-**Cause.** The service runs the stock Server Core image. After the shutdown event, Windows waits only the time in the registry value `WaitToKillServiceTimeout` before it ends the processes of the container. The default is 5 seconds, whatever `stop_grace_period` says, so the runner and its job die before the drain ends.
+**Cause.** The container was stopped from outside while it ran a job. After the shutdown event, Windows waits only the time in the registry value `WaitToKillServiceTimeout` before it ends the processes of the container. The default is 5 seconds, whatever `stop_grace_period` says, so the runner and its job die before the drain ends. A job that finishes by itself does not end this way.
 
-**Fix.** Build the stop-timeout image and use it as the `image:` of the service. Refer to [Build the stop-timeout image](install-windows.md#4-build-the-stop-timeout-image). If the service already uses it, check the value in the image. It is in milliseconds, for example `18300000`.
-
-```powershell
-docker run --rm <image> reg query HKLM\SYSTEM\CurrentControlSet\Control /v WaitToKillServiceTimeout
-```
-
-If the container still ends after about 5 seconds, the exec service of the container has its own value, `ProcessShutdownTimeoutSeconds` under `HKLM\SYSTEM\CurrentControlSet\Services\cexecsvc`. This repository does not set it and has not tested it. Add it in a derived image with `reg add HKLM\SYSTEM\CurrentControlSet\Services\cexecsvc /v ProcessShutdownTimeoutSeconds /t REG_DWORD /d <seconds> /f`. Until the stop is graceful, change a service only while its class runs no job. Refer to [Windows drain](operations.md#windows-drain).
+**Fix.** Rerun the interrupted jobs, and change a service only while its class runs no job. Refer to [Windows drain](operations.md#windows-drain), which also shows an optional image of your own that lifts the limit.
 
 ### Error: hcs::System::Start: context deadline exceeded
 
@@ -263,7 +257,7 @@ A Windows container does not start, and `docker service ps --no-trunc` shows `hc
 
 **Cause.** The Git mount is missing, or the `PATH` of the service does not include `C:\Program Files\Git\usr\bin`. The `PATH` of a service replaces the one of the image.
 
-**Fix.** Keep both mounts and the full `PATH` from the shipped file, or use the baked image.
+**Fix.** Keep both mounts and the full `PATH` from the shipped file.
 
 ### tar fails with Cannot stat when you test it by hand
 
@@ -272,14 +266,6 @@ You run `C:\Program Files\Git\usr\bin\tar.exe` in a container with a backslash p
 **Cause.** The task agent starts this `tar.exe` from the root of the drive, with `--force-local`, and with forward-slash operands that are relative to the root. For `C:\cci\w\ws`, it passes `cci/w/ws`. It never passes a backslash operand, which this tar does not accept.
 
 **Fix.** Use the same form in your test. A workspace step that fails in a job is more likely a missing `tar` or `gzip` on the `PATH`, as in the previous entry.
-
-### Image build fails: PsExec64.exe must not be on PATH
-
-The build of the baked image, or of an image derived from it, stops with `PsExec64.exe must not be on PATH in the image`.
-
-**Cause.** With `PsExec64.exe` on the `PATH` of the container, the task agent switches to a desktop wrapper that containers cannot run. The check runs only when an image is built, and only the `PATH` of the image counts. A `PsExec64.exe` on the `PATH` of the host does not matter, and neither the manual staging of `C:\machine-runner-swarm` nor `Setup.ps1` checks for it.
-
-**Fix.** Pass a `BASE_IMAGE` that does not have `PsExec64.exe` on its `PATH`.
 
 ### Overlay network creation fails
 
@@ -310,4 +296,4 @@ $ docker stack ps runners --no-trunc
 $ docker service logs --tail 200 runners_<service>
 ```
 
-Include the contents of `/opt/machine-runner-swarm/VERSION` or `C:\machine-runner-swarm\VERSION`, and open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).
+Include the contents of `/opt/machine-runner-swarm/current/VERSION` or `C:\machine-runner-swarm\current\VERSION`, and open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).

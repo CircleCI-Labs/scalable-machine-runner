@@ -38,7 +38,7 @@ State also persists. The images, containers, volumes, and build cache of the hos
 
 ### Deploy on Linux
 
-1. Join a dedicated worker node and install `/opt/machine-runner-swarm` on it. Refer to [Multi-Node Clusters](multi-node.md).
+1. Join a dedicated worker node and install `/opt/machine-runner-swarm/current` on it. Refer to [Multi-Node Clusters](multi-node.md).
 2. Label the node:
 
    ```console

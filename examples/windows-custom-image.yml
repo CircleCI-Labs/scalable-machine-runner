@@ -1,5 +1,5 @@
 # Example: a job on a resource class backed by your own image, built like windows/images/example/Dockerfile
-# (the baked runner image plus Node.js): the "windows-custom" service in windows/stack/custom-image.yaml.
+# (stock Server Core plus Node.js): the "windows-custom" service in windows/stack/custom-image.yaml.
 # Whatever your image adds is there at the start of every job, and every job still gets a brand-new container.
 # Replace <namespace>. The tool here is Node.js; use whatever your team adds to its image.
 version: 2.1

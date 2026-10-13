@@ -43,7 +43,7 @@ A dotted line means that the node satisfies every constraint of the service, so 
 | Node type | Role | Needs |
 |---|---|---|
 | Manager | Holds the cluster state and every secret. Schedules tasks | Docker Engine. Linux managers can manage Windows workers |
-| Linux worker | Runs Linux services | Docker Engine, `/opt/machine-runner-swarm` with the build for its architecture |
+| Linux worker | Runs Linux services | Docker Engine, `/opt/machine-runner-swarm/current` with the build for its architecture |
 | Windows worker | Runs Windows services | Docker Engine in Windows-container mode, `C:\machine-runner-swarm`, the `machine-runner-swarm.windows-build` label |
 
 ### Managers and quorum
@@ -96,7 +96,7 @@ $ docker node ls
 On each node:
 
 1. Install Docker Engine and confirm that the clock is synchronized. Refer to [Prepare each node](install-linux.md#2-prepare-each-node).
-2. Install the runner and entrypoint into `/opt/machine-runner-swarm`. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint). The directory must exist on every node that can run a service.
+2. Install the runner and entrypoint into `/opt/machine-runner-swarm/<version>` and the link `current`. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint). The directory must exist on every node that can run a service.
 3. Open the ports in [Inter-node ports](#inter-node-ports).
 4. Run the join command.
 
@@ -112,7 +112,7 @@ The installation steps on [Install on Linux with Docker Swarm](install-linux.md)
 On each node:
 
 1. Install Docker Engine in Windows-container mode and the Windows Containers feature.
-2. Stage `C:\machine-runner-swarm` and pull the images, including your stop-timeout image. Refer to [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git) and [Build the stop-timeout image](install-windows.md#4-build-the-stop-timeout-image). Do this before the join.
+2. Stage `C:\machine-runner-swarm` and pull the images. Refer to [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git). Do this before the join.
 3. Open the ports in [Inter-node ports](#inter-node-ports).
 4. Run the join command.
 5. Label the node from a manager with its build: `docker node update --label-add machine-runner-swarm.windows-build=ltsc2022 <node name>`. Use `ltsc2025` on Server 2025.
@@ -198,7 +198,7 @@ Swarm does not share images between nodes. Each node pulls the image of a task f
 - Pin images by digest, for example `cimg/base:2026.10@sha256:<digest>`, so that every node runs the same content. Tags such as `21.0` move.
 - Pull large images ahead of time. A Windows `servercore` image is about 2.2 GB compressed.
 - Public registries apply pull rate limits. A mirror or an authenticated pull avoids failed pulls on a busy cluster.
-- A baked image, your own image, and the Windows stop-timeout image must be in a registry that all nodes of their OS can reach. Refer to [Images](images.md).
+- A baked image and your own image must be in a registry that all nodes of their OS can reach. Refer to [Images](images.md).
 
 ## Inter-node ports
 

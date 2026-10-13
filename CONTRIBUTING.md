@@ -6,7 +6,7 @@ Thank you for helping to improve the machine runner swarm. This repository is pa
 
 Search the [existing issues](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) first, and check that you use the latest release. Then open a new issue with the bug template. Include:
 
-- The release or commit of this repository, and the runner version from `/opt/machine-runner-swarm/VERSION` or `C:\machine-runner-swarm\VERSION`.
+- The release or commit of this repository, and the runner version from `/opt/machine-runner-swarm/current/VERSION` or `C:\machine-runner-swarm\current\VERSION`.
 - The operating system of the node and the Docker Engine version.
 - The output of `docker service ps --no-trunc runners_<service>` and `docker service logs --tail 100 runners_<service>`.
 
@@ -68,13 +68,14 @@ Each Linux test prints `RESULT` lines and exits 0 when it passes. `run-all.sh` r
 | Test | What it checks |
 |---|---|
 | `stack-config.sh` | `docker stack config` for every combination of stack files, and the settings of each service. Needs no daemon |
-| `install.sh` | `setup.sh --install` in a root container. Needs network access |
+| `install.sh` | `setup.sh --install` in a root container: the verified download, two versions side by side, and the rollback. Needs network access |
 | `helper.sh` | `setup.sh --swarm-init`, `--secret`, and `--deploy` against a fresh Docker-in-Docker daemon |
 | `ephemerality.sh` | A new container for every job and no residue. The negative control runs `docker run --restart always` |
 | `exit80.sh` | The restart delay, no hot loop, and the exit codes 80 and 1 of the real runner |
 | `token.sh` | What a job can read in the default class and in the hardened class |
 | `task.sh` | The real runner runs tasks as the job user, against a fake API. Also the failure with `CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true`, and a persistent runner |
 | `placement.sh` | Placement on a manager and a worker, and `docker-build.yaml` |
+| `upgrade.sh` | A flip of `current` reaches the next container only, and running jobs finish on their version. A `global-job` installs the runner on both nodes. Needs network access |
 | `persistent.sh` | Continuous mode and `persistent.yaml` |
 | `drain.sh` | SIGTERM during a job: the job finishes |
 | `limits.sh` | `init`, `ulimits`, pids, memory, CPU, reservations, and the capability sets take effect |
@@ -91,7 +92,8 @@ The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and on
 | `Test-Ephemerality.ps1` | A new container for every job and no residue, with the restart-policy negative control |
 | `Test-Exit80.ps1` | Exit 80 without a hot loop |
 | `Test-Placement.ps1` | Placement constraints and node labels |
-| `Test-StopHandling.ps1` | A stop lets a job finish on the stop-timeout image, and kills it on the stock image. `-Online` stops the real runner and expects a drain |
+| `Test-StopHandling.ps1` | What a stop does to a busy stock container (it kills the job, informational), and a Swarm secret as the runner config. `-Online` stops the real runner and expects a drain |
+| `Test-Upgrade.ps1` | A junction or symbolic link as the bind source: the next container sees the new version, and the running one keeps the old |
 | `Test-Persistent.ps1` | Continuous mode, and a named volume that outlives the container |
 
 ### Documentation checks

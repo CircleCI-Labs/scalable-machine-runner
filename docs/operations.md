@@ -39,64 +39,106 @@ In the web app, select **Runners** to see the replicas of each class in the inve
 
 ## Upgrade the runner and images
 
-Swarm replaces containers one at a time. The stack files set `update_config` to `order: stop-first` and `parallelism: 1`. Swarm sends SIGTERM to a busy replica, the runner drains, which means it finishes the running job, and only then does Swarm start the new container. An idle replica stops within about 5 seconds and exits with code 0. A busy replica exits with code 0 when its job ends, so an update can take as long as your longest job, up to the `stop_grace_period` of 5 hours and 5 minutes. The command waits until the update finishes, unless you add `--detach`. This holds on Linux. On Windows, it holds only with the stop-timeout image or the baked image. Refer to [Windows drain](#windows-drain).
+Swarm replaces containers one at a time. The stack files set `update_config` to `order: stop-first` and `parallelism: 1`. Swarm sends SIGTERM to a busy replica, the runner drains, which means it finishes the running job, and only then does Swarm start the new container. An idle replica stops within about 5 seconds and exits with code 0. A busy replica exits with code 0 when its job ends, so an update can take as long as your longest job, up to the `stop_grace_period` of 5 hours and 5 minutes. The command waits until the update finishes, unless you add `--detach`. This holds on Linux. On Windows, a stop kills a busy container after about 5 seconds. Refer to [Windows drain](#windows-drain). A new runner version needs no stop on Linux: refer to the next section.
 
 ### Upgrade the runner on Linux
 
-The runner binary lives on the host in `/opt/machine-runner-swarm`, not in the images.
+The runner lives on the host in `/opt/machine-runner-swarm/<version>/bin`, not in the images. The stack mounts the link `/opt/machine-runner-swarm/current` at `/opt/machine-runner-swarm`. An upgrade installs the new version next to the old one and moves the link. Docker follows the link when it creates a container, so every new container, which is the next job of every replica, runs the new version. A job that runs now finishes on the old version, because its container keeps the directory that it started with. Nothing stops, so no job is interrupted.
 
 1. Pick the new version. Use the latest `3.1.x` or later, and never a version below 3.1.12. The [runner changelog](https://circleci.com/changelog/runner/) lists releases.
-2. On every node, install the new version into `/opt/machine-runner-swarm`. Repeat the commands of [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint) with the new `v`, or use the helper with the checksum from the release's `checksums.txt`:
+2. On every node, install the new version and move the link. The helper downloads the runner, verifies the checksum from the release's `checksums.txt`, installs it into `/opt/machine-runner-swarm/<new version>`, and then replaces the link with one atomic rename:
 
    ```console
    $ sudo linux/setup.sh --install --version <new version> --sha256 <hash>
    ```
 
-   Running containers keep the old binary until Swarm replaces them.
+   The hash is the one of the `circleci-runner_linux_<arch>.tar.gz` file of the node's architecture. To do it by hand, repeat the commands of [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint) with the new directory, and then move the link: `ln -s <new version> /opt/machine-runner-swarm/.current.new && mv -T /opt/machine-runner-swarm/.current.new /opt/machine-runner-swarm/current`.
 
 3. Check the version on each node:
 
    ```console
-   $ /opt/machine-runner-swarm/bin/circleci-runner --version
+   $ readlink /opt/machine-runner-swarm/current
+   $ /opt/machine-runner-swarm/current/bin/circleci-runner --version
    ```
 
-4. Replace the containers. Idle replicas exit after `CIRCLECI_RUNNER_IDLE_TIMEOUT` and pick up the new binary without help. To roll a service now, force an update:
+4. Move the replicas that already wait for a job. A replica that is idle keeps the old version until it claims a job or exits after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack files. A persistent class runs one container for all jobs, so it keeps the old version until you recycle it. To move a service now, force an update. An idle replica stops within seconds, and a busy one finishes its job first:
 
    ```console
    $ docker service update --force runners_linux-default
    ```
 
-5. To roll back, install the previous version on every node and force the update again.
+5. To roll back, run the same command with the previous version. A version that is installed is not downloaded again, and the command only moves the link back. Then force the update again.
+
+   ```console
+   $ sudo linux/setup.sh --install --version <previous version>
+   ```
+
+6. Delete the old version when no container uses it: `sudo rm -rf /opt/machine-runner-swarm/<old version>`. The entrypoint always comes from the checkout that you run the helper from, and every run copies it into the version directory.
+
+#### Install on every node with one command
+
+A Swarm global job runs a short script on every node from a small image, so you do not log in to each node. The script `linux/install-job.sh` does what `setup.sh --install` does with the tools of Alpine (BusyBox): `wget`, `sha256sum`, and `tar`. It reads the architecture from `uname -m`. The job mounts `/opt` of the node, and the entrypoint reaches it as a Swarm config, because it comes from this repository and not from the runner release. Run it on a manager node:
+
+```console
+$ docker config create machine-runner-swarm-entrypoint-<date> linux/entrypoint/circleci-runner-entrypoint
+$ docker service create --name runner-install --mode global-job --restart-condition none \
+    --constraint node.platform.os==linux \
+    --mount type=bind,source=/opt,target=/host-opt \
+    --config source=machine-runner-swarm-entrypoint-<date>,target=/circleci-runner-entrypoint,mode=0444 \
+    --env MACHINE_RUNNER_SWARM_VERSION=<new version> \
+    --env MACHINE_RUNNER_SWARM_SHA256_AMD64=<hash> --env MACHINE_RUNNER_SWARM_SHA256_ARM64=<hash> \
+    alpine:3.22 sh -c "$(cat linux/install-job.sh)"
+$ docker service ps runner-install
+$ docker service rm runner-install
+```
+
+`docker service ps` shows one task for each node, and every task ends in `Complete`. Read `docker service logs runner-install` for the line `[ ok ] ... current -> <version>` of each node. Then continue with step 4 above. Notes:
+
+- A global job runs on the nodes that exist when you create it. A node that joins later has no install, so run the helper on it, or remove the job and create it again.
+- Swarm configs are immutable. Create a new config, with a new name, for each change of the entrypoint.
+- To roll back, create the job again with the previous version. An installed version is only switched to.
+- The job runs as root and writes to `/opt` of every node, so start it only from a manager that you trust. Pin the image by digest in production. Every node needs HTTPS access to `circleci-binary-releases.s3.amazonaws.com`.
 
 ### Upgrade the runner on Windows
 
-> [!IMPORTANT]
-> A rolling update stops containers, and a stock Server Core container ends about 5 seconds after a stop. On the plain Microsoft image, every update kills the running jobs of the replica that it replaces. Run stock-image services on the stop-timeout image, or change a service only while its class runs no job. Refer to [Windows drain](#windows-drain).
+The layout is the one of Linux. Each version has its own directory, `C:\machine-runner-swarm\<version>`, and the junction `C:\machine-runner-swarm\current` points to the installed version. The stack mounts the junction. Docker follows it when it creates a container, so the next container, which is the next job, runs the new version, and a job that runs now keeps the directory that it started with. `windows\tests\Test-Upgrade.ps1` checks this in CI. Windows cannot replace files that a running container uses, so never overwrite a version directory.
 
-Windows cannot replace files that a running container uses, so never overwrite `C:\machine-runner-swarm`. Stage the new version in a new directory on every Windows node, then point the stack at it.
-
-1. Stage the new directory with the steps of [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git), with `$swarm = 'C:\machine-runner-swarm-<new version>'` and the new runner version. The helper does the same:
+1. On every Windows node, stage the new version next to the old one. The helper downloads the runner and Git, verifies the checksums, and moves the junction:
 
    ```powershell
-   .\windows\Setup.ps1 -InstallDir C:\machine-runner-swarm-<new version> -RunnerVersion <new version> -StageOnly
+   .\windows\Setup.ps1 -RunnerVersion <new version> -StageOnly
    ```
 
-2. Deploy with `MACHINE_RUNNER_SWARM_DIR` set, and with the same `-c` files as before. Swarm performs a rolling update, one replica at a time.
+   By hand, repeat the steps of [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git) with the new `$runnerVersion`.
+
+2. Check the version on each node:
 
    ```powershell
-   $env:MACHINE_RUNNER_SWARM_DIR = 'C:\machine-runner-swarm-<new version>'
-   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.yaml runners
+   (Get-Item C:\machine-runner-swarm\current).Target
+   C:\machine-runner-swarm\current\bin\circleci-runner.exe --version
    ```
 
-3. Set `MACHINE_RUNNER_SWARM_DIR` again on every later deploy, or edit the default in your copy of the file.
-4. To roll back, deploy again with the previous `MACHINE_RUNNER_SWARM_DIR`.
-5. Delete the old directory when no container uses it.
+3. A replica that already waits for a job keeps the old version until it claims a job or exits after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack file. A forced update replaces it at once, but it also stops the containers of the service, which kills a running job after about 5 seconds. Force the update only while the class is idle. Refer to [Windows drain](#windows-drain).
+
+   ```powershell
+   docker service update --force runners_windows-default
+   ```
+
+4. To roll back, run the helper with the previous version. It is staged already, so the command only moves the junction back:
+
+   ```powershell
+   .\windows\Setup.ps1 -RunnerVersion <previous version> -StageOnly
+   ```
+
+5. Delete the old version directory when no container uses it.
+
+A junction cannot be replaced in one step, so for a moment `current` does not exist. A container that Swarm creates in that moment does not start, and Swarm starts the next one after the restart delay of 10 seconds. The window is a few milliseconds long.
 
 ### Update the images
 
 - **Linux and Windows stock images.** Change the tag or digest of `image` in your stack file, and run `docker stack deploy`. Swarm resolves a tag to its digest when you deploy, so deploy again to pick up a tag that the publisher re-pushed.
 - **Your own images.** Rebuild, push, change the tag, and deploy. Rebuild on a schedule, for example monthly, and when the base image or a tool changes.
-- **Windows base images.** Microsoft republishes the Server Core tags each Patch Tuesday. Pin by digest, and rebuild the stop-timeout image and the baked image after each update. Both set the registry value with `reg add`. If you change the build, never use `New-Item -Force` on an existing registry key, because it deletes the values in the key.
+- **Windows base images.** Microsoft republishes the Server Core tags each Patch Tuesday. Pin by digest, and rebuild your own images on top of them after each update. Change a Windows service only while its class is idle. Refer to [Windows drain](#windows-drain).
 
 For a single service, you can also run `docker service update --image <new image> runners_<service>`. Record the change in your stack file, so that the next deploy does not undo it.
 
@@ -104,7 +146,7 @@ For a single service, you can also run `docker service update --image <new image
 
 1. Read the [changelog](../CHANGELOG.md). Entries marked `[BREAKING]` say what to change.
 2. Compare your stack file with the file of the new release, and merge the differences.
-3. Install the new `circleci-runner-entrypoint` on every Linux node. The install step copies the runner and the entrypoint together. A new release can change the entrypoint, and the stack runs the copy in `/opt/machine-runner-swarm`.
+3. Install the new `circleci-runner-entrypoint` on every Linux node. The install step copies the runner and the entrypoint together into the version directory. A new release can change the entrypoint, and the stack runs the copy behind `/opt/machine-runner-swarm/current`. Run `sudo linux/setup.sh --install --version <installed version>` from the new checkout, which refreshes the entrypoint and keeps the version.
 4. Run `docker stack deploy` with the same set of `-c` files as before.
 
 ## Rotate a runner token
@@ -162,7 +204,7 @@ If a token leaked, create the new token first, swap it as above, and delete the 
 
 ## Drain a node for patching
 
-Draining a node stops its tasks and keeps new tasks away. Swarm sends SIGTERM and waits for the grace period, so a running job finishes. On Windows, this holds only on the stop-timeout image or the baked image. Refer to [Windows drain](#windows-drain). Restarting the Docker daemon stops every running container, because live restore does not work in Swarm mode, so always drain before you patch Docker or reboot.
+Draining a node stops its tasks and keeps new tasks away. Swarm sends SIGTERM and waits for the grace period, so a running job finishes. On Windows, a drain kills a running job after about 5 seconds, so drain a Windows node only while its classes are idle. Refer to [Windows drain](#windows-drain). Restarting the Docker daemon stops every running container, because live restore does not work in Swarm mode, so always drain before you patch Docker or reboot.
 
 ```console
 $ docker node update --availability drain <node name>
@@ -179,34 +221,24 @@ Tasks do not move back to the node by themselves. Single-task replicas restart a
 
 ### Windows drain
 
-On Linux, a stop lets the running job finish. On Windows, a stop kills the job after about 5 seconds unless the image sets the registry value `WaitToKillServiceTimeout`.
+On Linux, a stop lets the running job finish. On Windows, stopping a busy container from outside kills its job after about 5 seconds.
 
-When Docker stops a container, Windows sends the shutdown event to it. The runner turns the event into SIGTERM and drains: it accepts no new job and lets the running job finish. On Server Core, Windows waits only `WaitToKillServiceTimeout` before it ends the processes. The default is 5 seconds, whatever `docker stop -t` or `stop_grace_period` says. The engine waits for the full time, but the container ends its processes first. The container then exits with the code 3221225786 (`0xC000013A`), and the job dies with it.
+**The normal flow is not affected.** A job finishes, the runner exits, and the container ends cleanly. Swarm then starts a new container for the next job. Nothing stops a container from outside, so no job is lost.
 
-Every one of these actions stops containers in the same way:
+**Only a stop of a busy container from outside kills the job.** When Docker stops a container, Windows sends the shutdown event to it. The runner turns the event into SIGTERM and drains: it accepts no new job and lets the running job finish. On Server Core, Windows waits only the time in the registry value `WaitToKillServiceTimeout` before it ends the processes. The default is 5 seconds, whatever `docker stop -t` or `stop_grace_period` says. The container then exits with the code 3221225786 (`0xC000013A`), and the job dies with it. Every one of these actions stops containers in this way:
 
-- A rolling update, with `docker stack deploy` or `docker service update`.
-- `docker service scale` to a lower number, and `docker stack rm`.
-- `docker node update --availability drain`, and a restart of the Docker service.
+- A rolling update, with `docker stack deploy` or `docker service update`: a deploy or an update.
+- `docker service scale` to a lower number: a scale-down.
+- `docker node update --availability drain`: a drain.
+- `docker stack rm`, and a restart of the Docker service.
 
-| Image | A stop while a job runs |
-|---|---|
-| Stock `mcr.microsoft.com/windows/servercore` | The job is killed after about 5 seconds, with exit code 3221225786 |
-| The stop-timeout image (`windows\images\stop-timeout`) | The runner drains and the job finishes, up to `SHUTDOWN_TIMEOUT_SECONDS`. The default is 18300 seconds |
-| The baked image | The same, because the baked image sets the value too |
+So roll out changes while the class is idle, or rerun the jobs that were interrupted.
 
-The two images set the value as the registry entry `WaitToKillServiceTimeout`, in milliseconds, under `HKLM\SYSTEM\CurrentControlSet\Control`. Choose a value that is at least the longest job that you allow plus the drain margin. The default of 18300 seconds is `max_run_time` of 5 hours plus 5 minutes. Refer to [Build the stop-timeout image](install-windows.md#4-build-the-stop-timeout-image) and [The baked image](images.md#windows-the-baked-image).
+Microsoft describes the same limit in [hcsshim pull request 1416](https://github.com/microsoft/hcsshim/pull/1416) and in [Windows-Containers issue 164](https://github.com/microsoft/Windows-Containers/issues/164). Microsoft fixed it only in the containerd shim, and Swarm uses the runtime of the Docker engine, which does not have that fix. The CI of this repository measures the rule in every run: [`Test-StopHandling.ps1`](../windows/tests/Test-StopHandling.ps1) stops a stock container that runs a fake job of 40 seconds and reports what happens to the job.
 
-> [!WARNING]
-> Never use `New-Item -Force` on an existing registry key, in an image build or in a running container. It replaces the key and deletes its values and subkeys. On the `cexecsvc` service key, it makes the container fail to start with `hcs::System::Start: context deadline exceeded`. Use `reg add` or `Set-ItemProperty`, which set one value.
+#### Roll out a change when the class is idle
 
-Microsoft describes the same limit in [hcsshim pull request 1416](https://github.com/microsoft/hcsshim/pull/1416) and in [Windows-Containers issue 164](https://github.com/microsoft/Windows-Containers/issues/164). Microsoft fixed it only in the containerd shim, and Swarm uses the runtime of the Docker engine, which does not have that fix.
-
-The tests stop a container during a job that runs for less than a minute. They do not run a job for hours. Before you rely on a long drain, test it. Run a job of a few minutes on a node that is not in production, force an update of its service with `docker service update --force`, and check that the job finishes.
-
-#### Change a service on the plain Microsoft image
-
-If you run the plain Microsoft image, change a service only while its class runs no job. The runner API shows what a class is doing. Use a personal API token, not a resource class token.
+The runner API shows what a class is doing. Use a personal API token, not a resource class token.
 
 ```powershell
 $h = @{ 'Circle-Token' = $env:CIRCLECI_API_TOKEN }
@@ -215,6 +247,25 @@ Invoke-RestMethod -Headers $h -Uri 'https://runner.circleci.com/api/v3/runner/ta
 ```
 
 The first call returns `running_runner_tasks`, and the second returns `unclaimed_task_count`. Wait for `running_runner_tasks` to be 0 in a quiet period, and then run `docker service update` or `docker stack deploy`. A rolling update replaces one replica at a time and interrupts only that replica. Single-task runners also recycle after every job and at the idle timeout, so an idle class is easy to find. A drain of a node and `docker service scale` to a lower number kill running jobs in the same way, so wait for an idle class there too. Refer to the [runner API reference](https://circleci.com/docs/reference/runner-api/).
+
+#### Optional: an image that lets a job finish after a stop (DIY)
+
+You can lift the limit with your own image. The image sets the registry value `WaitToKillServiceTimeout` once, at build time. The value is in milliseconds, so set at least the longest job that you allow plus a margin. This example uses 18,300,000, which is 5 hours and 5 minutes, the `max_run_time` of the runner plus 5 minutes:
+
+```dockerfile
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+RUN reg add HKLM\SYSTEM\CurrentControlSet\Control /v WaitToKillServiceTimeout /t REG_SZ /d 18300000 /f
+```
+
+> [!NOTE]
+> Set the value at build time. We tested setting it at run time with `reg add` inside a running container, for example from the first step of a job, and it does not work. Windows reads the value only when the container boots, so a value that you change later has no effect on that container.
+
+Use the image as the `image:` of the service. The service still mounts the runner and Git and sets `PATH`, as in the shipped stack file. Build one image for each Server Core tag, push it to a registry that every Windows node can reach, and rebuild it after each Patch Tuesday update of the base image.
+
+> [!WARNING]
+> Never use `New-Item -Force` on an existing registry key, in an image build or in a running container. It replaces the key and deletes its values and subkeys. On the `cexecsvc` service key, it makes the container fail to start with `hcs::System::Start: context deadline exceeded`. Use `reg add` or `Set-ItemProperty`, which set one value.
+
+An image like this is not part of the default path, and this repository does not build or test it. Before you rely on a long drain, test it. Run a job of a few minutes on a node that is not in production, force an update of its service with `docker service update --force`, and check that the job finishes.
 
 ## Recycle a class
 
@@ -265,6 +316,7 @@ On a node that runs a docker-build class, jobs also leave images, volumes, and b
    ```
 
    ```powershell
+   cmd /c rmdir C:\machine-runner-swarm\current
    Remove-Item C:\machine-runner-swarm -Recurse -Force
    ```
 

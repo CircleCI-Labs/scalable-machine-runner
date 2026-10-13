@@ -1,18 +1,18 @@
 ---
 page-title: Images
 page-audience: admin
-page-description: Run the runner in stock Linux and Windows images with a read-only mount, bring your own image, or bake the runner into a Windows image.
+page-description: Run the runner in stock Linux and Windows images with a read-only mount, and bring your own image.
 ---
 
 # Images
 
-This repository publishes no images. The stack files run stock images and add the runner from the host, so the image of a class is the environment that its jobs see. This page describes the stock Linux images, how to bring your own image, and the Windows options, including the stop-timeout image that Windows stock-image services need.
+This repository publishes no images. The stack files run stock images and add the runner from the host, so the image of a class is the environment that its jobs see. This page describes the stock Linux images, the stock Windows image, and how to bring your own image on each OS.
 
 ## Linux: stock images with the mounted runner
 
-The statically linked runner binary and `circleci-runner-entrypoint` live on the host in `/opt/machine-runner-swarm`. The stack mounts that directory read-only at the same path in every container, and sets `entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]` and `user: "0"`. The entrypoint starts as root, prepares the users, and then runs the runner as `circleci-runner`.
+The statically linked runner binary and `circleci-runner-entrypoint` live on the host in `/opt/machine-runner-swarm/<version>/bin`, and the link `/opt/machine-runner-swarm/current` points to the installed version. The stack mounts that link read-only at `/opt/machine-runner-swarm` in every container, and sets `entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]` and `user: "0"`. The entrypoint starts as root, prepares the users, and then runs the runner as `circleci-runner`.
 
-The result is that the image contains none of the runner. You can use `cimg/base` or `cimg/openjdk:21.0` unmodified, and a new runner version needs no image rebuild.
+The result is that the image contains none of the runner. You can use `cimg/base` or `cimg/openjdk:21.0` unmodified, and a new runner version needs no image rebuild and no restart. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
 The shipped file uses these images:
 
@@ -94,8 +94,10 @@ The default Windows service runs the unmodified Microsoft Server Core image, for
 
 | Host path | Container path | Content |
 |---|---|---|
-| `C:\machine-runner-swarm` | `C:\machine-runner-swarm` | `bin\circleci-runner.exe` and `VERSION` |
-| `C:\machine-runner-swarm\git` | `C:\Program Files\Git` | Portable Git for Windows: `git`, `bash`, `sh`, `tar`, `gzip`, `ssh` |
+| `C:\machine-runner-swarm\current` | `C:\machine-runner-swarm` | `bin\circleci-runner.exe` and `VERSION` |
+| `C:\machine-runner-swarm\current\git` | `C:\Program Files\Git` | Portable Git for Windows: `git`, `bash`, `sh`, `tar`, `gzip`, `ssh` |
+
+`current` is a junction to `C:\machine-runner-swarm\<version>`, which `Setup.ps1` creates.
 
 The runner is the main process of the container. The service sets `entrypoint` to `C:\machine-runner-swarm\bin\circleci-runner.exe machine --config C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`. The service also sets the full `PATH`, because a `PATH` in the service environment replaces the one of the image. Git for Windows appears after the Windows directories, so the Windows `find`, `sort`, and `tar` stay first. The runner passes its environment to the task agent, and the task agent passes it to every step, so jobs see this `PATH`.
 
@@ -109,72 +111,25 @@ $ docker buildx imagetools inspect mcr.microsoft.com/windows/servercore:ltsc2022
 
 Nano Server is not supported. Windows images must match the host build. Refer to [Image tags and host builds](install-windows.md#image-tags-and-host-builds).
 
-## Windows: the stop-timeout image
+## Windows: bring your own image
 
-> [!IMPORTANT]
-> Use the stop-timeout image for every stock-image Windows service. A plain Server Core container ends about 5 seconds after any stop, so a rolling update, a scale down, or a node drain kills the running job. The container exits with the code 3221225786 (`0xC000013A`).
+Add tools in an image on top of stock Server Core. The image holds the tools only. The host still provides the runner and Git through the mounts, and the stack file still sets `entrypoint` and the full `PATH`, so add the directory of your tool to that `PATH`.
 
-When Docker stops a container, Windows sends the shutdown event to it, and the runner drains on that event. On Server Core, Windows then waits only the time in the registry value `HKLM\SYSTEM\CurrentControlSet\Control\WaitToKillServiceTimeout` before it ends the processes. The default is 5 seconds, whatever `docker stop -t` or `stop_grace_period` says. No setting in the stack file changes this limit, so the fix is in the image.
+The file [`windows/images/example/Dockerfile`](../windows/images/example/Dockerfile) is a generic example. It starts from stock Server Core and adds Node.js from the official zip, pinned by version and SHA-256. Copy it and swap the tool. Keep the pattern:
 
-The image `windows/images/stop-timeout` is the stock Server Core image plus that one value. Everything else stays stock, so the service still mounts `C:\machine-runner-swarm` and Git and sets its `PATH`. Build it for each tag that you run. The build context is the directory of the Dockerfile.
-
-```powershell
-docker build -f windows/images/stop-timeout/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 `
-  -t registry.example.com/ci/servercore-stop:ltsc2022 windows/images/stop-timeout
-docker build -f windows/images/stop-timeout/Dockerfile --build-arg WINDOWS_TAG=ltsc2025 `
-  -t registry.example.com/ci/servercore-stop:ltsc2025 windows/images/stop-timeout
-```
-
-| Build argument | Default | Purpose |
-|---|---|---|
-| `WINDOWS_TAG` | `ltsc2022` | The Server Core tag. It must match the host build. You can pass `ltsc2022@sha256:<digest>` |
-| `BASE_IMAGE` | `mcr.microsoft.com/windows/servercore:${WINDOWS_TAG}` | Another Server Core based image |
-| `SHUTDOWN_TIMEOUT_SECONDS` | `18300` | How long Windows waits at shutdown. The image stores it in milliseconds. Use at least `max_run_time` plus the drain margin. The default is 5 hours plus 5 minutes, the same as `stop_grace_period` |
-
-Set `image:` of each stock-image service to the result, then push it to a registry that every Windows node can pull from. A single node can use the local image with `docker stack deploy --resolve-image never`. Rebuild the image when Microsoft republishes the base tag. The baked image sets the same value, and an image that you derive from the baked image keeps it. Nano Server images do not have this limit, but this repository does not support Nano Server.
-
-> [!WARNING]
-> Never use `New-Item -Force` on an existing registry key when you build an image. It replaces the key and deletes its values and subkeys. On `HKLM:\SYSTEM\CurrentControlSet\Services\cexecsvc`, it removes the definition of the container exec service, and the container fails to start with `hcs::System::Start: context deadline exceeded`. Use `reg add` or `Set-ItemProperty`, which set one value and leave the rest of the key alone.
-
-For how stops and rolling updates behave, and for what to do on the plain image, refer to [Windows drain](operations.md#windows-drain).
-
-## Windows: the baked image
-
-The baked image holds the runner and Git inside the image, at the same paths as the mounts. Use it when you want one self-contained artifact, when you add tools on top, or when a host cannot hold `C:\machine-runner-swarm`. The runner is its `ENTRYPOINT` with the same `--config` path, so a service that uses it needs no mounts, no `PATH`, and no `entrypoint`. The build puts Git on the machine `PATH`, enables `core.longpaths` in the system Git configuration, and removes the credential helper.
-
-Build it from the root of the repository. The build context is the `windows` directory.
-
-```powershell
-docker build -f windows/images/servercore/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 -t machine-runner-swarm-windows-servercore:ltsc2022 windows
-```
-
-| Build argument | Default | Purpose |
-|---|---|---|
-| `WINDOWS_TAG` | `ltsc2022` | The Server Core tag. It must match the host build. You can pass `ltsc2022@sha256:<digest>` |
-| `BASE_IMAGE` | `mcr.microsoft.com/windows/servercore:${WINDOWS_TAG}` | Another Server Core based image. It needs Windows PowerShell 5.1 and `tar.exe` |
-| `RUNNER_VERSION`, `RUNNER_SHA256` | `3.1.12` and its checksum | The runner build |
-| `GIT_VERSION`, `GIT_RELEASE_TAG`, `GIT_SHA256` | Pinned in the file | The portable Git build |
-| `SEVENZIP_VERSION`, `SEVENZIP_SHA256` | Pinned in the file | The extractor for portable Git |
-| `SHUTDOWN_TIMEOUT_SECONDS` | `18300` | How long Windows waits for processes at container shutdown, so a stop lets a running job finish. Refer to [the stop-timeout image](#windows-the-stop-timeout-image) |
-
-The image runs as `ContainerAdministrator`. The runner creates a symbolic link when it installs the task agent, and an account without that privilege makes the runner retry the download forever. Never change `USER` in a derived image.
-
-The build fails with `PsExec64.exe must not be on PATH in the image` when the base image has `PsExec64.exe` on its `PATH`. With it, the task agent switches to a desktop wrapper that containers cannot run. Use a base image without it. A `PsExec64.exe` on the `PATH` of the host does not matter.
-
-### Add your own tools
-
-The file [`windows/images/example/Dockerfile`](../windows/images/example/Dockerfile) is a generic example. It starts from the baked image and adds Node.js from the official zip, pinned by version and SHA-256. Copy it and swap the tool. Keep the pattern:
-
-1. Start `FROM` the baked image. It has the runner as `ENTRYPOINT` and Git on the `PATH`.
+1. Start `FROM` the stock Server Core image of your host's tag.
 2. Download a pinned release, and verify its SHA-256 checksum before you use it.
-3. Add the tool to the machine `PATH`.
-4. Check that the tool runs. Leave `USER` and `ENTRYPOINT` alone.
+3. Install the tool in a fixed directory, and add that directory to the `PATH` of the service in `windows\stack\custom-image.yaml`.
+4. Check that the tool runs. Leave `USER` alone: the runner needs `ContainerAdministrator`, which creates symbolic links for the task agent.
 
-Build the baked image first, then the example:
+Do not put `PsExec64.exe` on the `PATH` of the image or of the service. With it, the task agent switches to a desktop wrapper that containers cannot run. A `PsExec64.exe` on the `PATH` of the host does not matter, because the stack sets the `PATH` of the container in full.
+
+Build the example from the root of the repository. The build context is the `windows` directory.
 
 ```powershell
-docker build -f windows/images/servercore/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 -t machine-runner-swarm-windows-servercore:ltsc2022 windows
-docker build -f windows/images/example/Dockerfile --build-arg BASE_IMAGE=machine-runner-swarm-windows-servercore:ltsc2022 -t machine-runner-swarm-windows-example:ltsc2022 windows
+docker build -f windows/images/example/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 -t machine-runner-swarm-windows-example:ltsc2022 windows
 ```
 
 Push the result to a registry that every Windows node can pull from, because Swarm does not share local images. Then set the image of the `windows-custom` service in `windows\stack\custom-image.yaml`, an optional overlay file, and create the resource class and the secret `windows-custom-token` for it. Deploy it with `-c windows\stack\runners.yaml -c windows\stack\custom-image.yaml`. The file [`examples/windows-custom-image.yml`](../examples/windows-custom-image.yml) shows a job on that class. Rebuild the image when the base image or a tool changes.
+
+A stop of a busy Windows container kills its job after about 5 seconds, with stock images and with your own. Refer to [Windows drain](operations.md#windows-drain), which also shows an optional image that lifts the limit.

@@ -89,7 +89,7 @@ Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https:
    done
    ```
 
-2. As root, install the runner and the entrypoint into `/opt/machine-runner-swarm`.
+2. As root, install the runner and the entrypoint into `/opt/machine-runner-swarm/<version>`, and point `current` at it.
 
    ```bash
    repo=$PWD; v=3.1.12
@@ -99,9 +99,11 @@ Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https:
    curl -fsSLO --proto '=https' --tlsv1.2 "$base/$v/circleci-runner_linux_$arch.tar.gz"
    curl -fsSL --proto '=https' --tlsv1.2 "$base/$v/checksums.txt" | grep "linux_$arch.tar.gz" | sha256sum -c -
    tar -xzf "circleci-runner_linux_$arch.tar.gz" --no-same-owner circleci-runner
-   install -d -m 0755 -o root -g root /opt/machine-runner-swarm /opt/machine-runner-swarm/bin
-   install -m 0755 -o root -g root circleci-runner "$repo/linux/entrypoint/circleci-runner-entrypoint" /opt/machine-runner-swarm/bin/
-   echo "$v" > /opt/machine-runner-swarm/VERSION
+   d=/opt/machine-runner-swarm
+   install -d -m 0755 -o root -g root "$d" "$d/$v" "$d/$v/bin"
+   install -m 0755 -o root -g root circleci-runner "$repo/linux/entrypoint/circleci-runner-entrypoint" "$d/$v/bin/"
+   echo "$v" > "$d/$v/VERSION"
+   ln -s "$v" "$d/.current.new" && mv -T "$d/.current.new" "$d/current"
    cd "$repo"
    ```
 
@@ -140,7 +142,7 @@ Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https:
          - run: echo "runner $CIRCLECI_RUNNER_NAME"
    ```
 
-Windows works the same way with `windows/stack/runners.yaml`. Two things differ. Stage `C:\machine-runner-swarm` before you start Swarm. Run the stock-image services on the stop-timeout image, so that a stop does not kill a running job. Refer to [Install on Windows Server with Docker Swarm](docs/install-windows.md).
+Windows works the same way with `windows/stack/runners.yaml`. Two things differ. Stage `C:\machine-runner-swarm` before you start Swarm. Stopping a busy container from outside, for example in an update, kills its job after about 5 seconds, so change a Windows class while it is idle. Refer to [Install on Windows Server with Docker Swarm](docs/install-windows.md).
 
 ## Supported platforms
 
@@ -182,7 +184,7 @@ Refer to [Security](docs/security.md) for the threat model and the controls, and
 | [Install on Windows Server with Docker Swarm](docs/install-windows.md) | Server 2019, 2022, and 2025, manual steps first, with the optional `Setup.ps1` |
 | [Multi-Node Clusters](docs/multi-node.md) | Linux, Windows, and Arm nodes, labels, network zones, registries, ports, and quorum |
 | [Resource Classes](docs/resource-classes.md) | Define classes, size them, choose replica counts, persistent mode, and the configuration reference |
-| [Images](docs/images.md) | Stock images with the mounted runner, your own images, the Windows stop-timeout image, and the Windows baked image |
+| [Images](docs/images.md) | Stock images with the mounted runner, and your own images on each OS |
 | [Docker Builds](docs/docker-builds.md) | The opt-in host engine pattern and the alternatives |
 | [Security](docs/security.md) | Threat model, token model on each OS, hardening, CircleCI-side controls, egress, BitLocker |
 | [Operations](docs/operations.md) | Status, upgrades, token rotation, node drain, and uninstall |

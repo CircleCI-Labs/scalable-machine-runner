@@ -14,7 +14,7 @@ This page describes how to deploy CircleCI machine runner 3 as a Docker Swarm st
 The manual steps come first. The optional [setup helper](#optional-use-the-setup-helper) runs most of the same steps. For a first run, [Quickstart on Windows Server](quickstart-windows.md) is shorter.
 
 > [!IMPORTANT]
-> The services run the stock Server Core image, and no image is built. A job that finishes ends its container cleanly. Stopping a busy container from outside kills its job after about 5 seconds, with the exit code 3221225786. This happens on a deploy or update, a scale-down, a node drain, `docker stack rm`, and a restart of Docker. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
+> The services run the stock Server Core image, and no image is built. Stopping a busy container from outside kills its job after about 5 seconds, so change a Windows class while it is idle. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ## Prerequisites
 
@@ -377,7 +377,7 @@ Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-im
 
 ## Stop and uninstall
 
-Refer to [Uninstall](operations.md#uninstall). Every stop of a service, including a scale down, a rolling update, and a node drain, ends the containers. A running job is killed after about 5 seconds. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
+Refer to [Uninstall](operations.md#uninstall). Every stop of a busy service kills its job after about 5 seconds. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ## Troubleshooting
 

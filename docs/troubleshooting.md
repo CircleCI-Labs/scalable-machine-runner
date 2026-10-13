@@ -319,9 +319,9 @@ Outbound connections fail with `Unable to connect to the remote server` or `no s
 
 A job ends about 5 seconds after a rolling update, a scale down, a node drain, or `docker stop`. `docker service ps --no-trunc` shows `task: non-zero exit (3221225786)`, which is `0xC000013A`.
 
-**Cause.** The container was stopped from outside while it ran a job. After the shutdown event, Windows waits only the time in the registry value `WaitToKillServiceTimeout` before it ends the processes of the container. The default is 5 seconds, whatever `stop_grace_period` says, so the runner and its job die before the drain ends. A job that finishes by itself does not end this way.
+**Cause.** The container was stopped from outside while it ran a job, and Windows gives a stock Server Core container about 5 seconds, whatever `stop_grace_period` says. A job that finishes by itself does not end this way.
 
-**Fix.** Rerun the interrupted jobs, and change a service only while its class runs no job. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container), which also shows an optional image of your own that lifts the limit.
+**Fix.** Rerun the interrupted jobs, and change a service only while its class runs no job. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ### Error: hcs::System::Start: context deadline exceeded
 

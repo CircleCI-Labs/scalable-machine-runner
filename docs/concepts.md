@@ -109,7 +109,7 @@ Three timing facts follow from this design:
 
 Stopping a service sends SIGTERM to the runner. The runner drains (a runner drain), which means it accepts no new job and lets the running job finish. The stack sets `stop_grace_period: 5h5m`, which is the runner `max_run_time` of 5 hours plus 5 minutes.
 
-On Windows, `stop_grace_period` is not enough. A stock Server Core container ends about 5 seconds after a stop, so a job that runs at that moment dies. The normal flow is not affected: a finished job ends the container by itself. Only a stop from outside, such as an update, a scale-down, or a drain, kills a busy container, so change a Windows service while its class is idle. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
+On Windows, `stop_grace_period` does not hold a busy container: a stop from outside kills its job after about 5 seconds. A finished job ends its container by itself, so only an update, a scale-down, or a node drain is affected. Change a Windows service while its class is idle. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
 ## What a clean environment covers
 

@@ -8,14 +8,25 @@ version: 2.1
 # filters, so a skipped job is never scheduled:
 #
 #   full-suite   main, smr-swarm/*, or `full: true` (pipeline parameter, for a
-#                manual run through the API) adds the Windows Server 2025 jobs and
-#                makes the branch eligible for e2e.
-#   e2e-linux    full-suite AND E2E_RUNNER_TOKEN_LINUX is non-empty
-#   e2e-windows  full-suite AND E2E_RUNNER_TOKEN_WINDOWS is non-empty
+#                manual run through the API) adds the Windows Server 2025 jobs.
+#                Only main and smr-swarm/* are eligible for e2e.
+#   e2e-linux    an e2e branch AND E2E_RUNNER_TOKEN_LINUX is non-empty
+#   e2e-windows  an e2e branch AND E2E_RUNNER_TOKEN_WINDOWS is non-empty
 #   release      the branch is main AND both e2e flags are true. The release job then
 #                waits for every other job of the same workflow (docs/releasing.md).
 #                It implies the three flags above, so the release never runs without
 #                the full suite and both e2e groups.
+#
+# TWO setup workflows, mutually exclusive, so that the e2e runner tokens reach no other branch:
+#
+#   setup-e2e    branch main or smr-swarm/*. Its setup job has the scalable-machine-runner-e2e
+#                context, which holds the runner tokens. The context is restricted to the same
+#                branches by an expression (docs/ci.md), so a rerun on another branch or by API
+#                cannot use it either.
+#   setup-plain  every other branch. No context, so no token in the job: e2e is off, and the
+#                pipeline still runs lint, builds and local tests and stays green.
+#
+# The decision itself lives in ci/setup-gate.sh, with a table test in ci/tests/setup-gate.sh.
 #
 # A tag pipeline (the release creates the tag) runs nothing and cannot release: CircleCI
 # does not run a job for a tag unless the job has a tag filter, and neither this setup
@@ -27,8 +38,7 @@ version: 2.1
 # schedules them, they queue until a runner claims them, which takes days
 # when no runner exists. Halting a guard job ends only that job, so the probes
 # would still queue. The decision therefore has to be made before the e2e
-# workflow is compiled. Without the context, or without its secrets, the
-# pipeline still runs lint, builds and local tests, and stays green.
+# workflow is compiled.
 setup: true
 
 parameters:
@@ -36,58 +46,27 @@ parameters:
     type: boolean
     default: false
     description: >
-      Run the full suite (the Windows Server 2025 jobs and both e2e workflows when
-      their tokens exist) on any branch. Not used by a schedule: there is none.
+      Run the full suite (the Windows Server 2025 jobs) on any branch. The e2e workflows
+      still run only on main and smr-swarm/*. Not used by a schedule: there is none.
 
 jobs:
   setup:
+    parameters:
+      e2e:
+        type: boolean
+        description: >
+          true only in the workflow whose job has the e2e context attached. The gate then looks
+          for the tokens. false never enables e2e, whatever the environment holds.
     docker:
       - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
     resource_class: small
     steps:
       - checkout
       - run:
-          name: Decide which suites run (e2e only when the context tokens are present)
+          name: Decide which suites run (e2e only on main and smr-swarm/*, and only with the context tokens)
           command: |
             mkdir -p /tmp/setup
-            full=false
-            reason="branch ${CIRCLE_BRANCH:-<none>} runs lint, builds and local tests only"
-            case "${CIRCLE_BRANCH:-}" in
-              main) full=true; reason="main" ;;
-              smr-swarm/*) full=true; reason="smr-swarm/* branch" ;;
-            esac
-            if [ "<< pipeline.parameters.full >>" = "true" ]; then
-              full=true; reason="pipeline parameter full=true"
-            fi
-
-            present() { if [ -n "${!1:-}" ]; then echo present; else echo absent; fi; }
-            linux=false; windows=false
-            if [ "${full}" = true ]; then
-              [ -z "${E2E_RUNNER_TOKEN_LINUX:-}" ] || linux=true
-              [ -z "${E2E_RUNNER_TOKEN_WINDOWS:-}" ] || windows=true
-            fi
-
-            echo "full-suite:  ${full} (${reason})"
-            echo "e2e-linux:   ${linux} (E2E_RUNNER_TOKEN_LINUX $(present E2E_RUNNER_TOKEN_LINUX))"
-            echo "e2e-windows: ${windows} (E2E_RUNNER_TOKEN_WINDOWS $(present E2E_RUNNER_TOKEN_WINDOWS))"
-            if [ "${full}" = true ] && [ "${linux}${windows}" != truetrue ]; then
-              echo "An e2e workflow is skipped because its token is absent. The scalable-machine-runner-e2e"
-              echo "context is missing, restricted for this pipeline, or lacks the secret. See docs/ci.md."
-            fi
-
-            # release implies full-suite, e2e-linux and e2e-windows (both tokens are required,
-            # and a token only counts on a full-suite pipeline), so those stay true here.
-            release=false
-            if [ "${CIRCLE_BRANCH:-}" = main ] && [ "${linux}${windows}" = truetrue ]; then
-              release=true
-              echo "release:     true (main with both e2e tokens: the release job waits for every other job)"
-            else
-              echo "release:     false (only main with both e2e tokens releases)"
-            fi
-
-            jq -n --argjson full "${full}" --argjson linux "${linux}" --argjson windows "${windows}" \
-              --argjson release "${release}" \
-              '{"full-suite": $full, "e2e-linux": $linux, "e2e-windows": $windows, "release": $release}' > /tmp/setup/parameters.json
+            ci/setup-gate.sh --e2e "<< parameters.e2e >>" --full "<< pipeline.parameters.full >>" > /tmp/setup/parameters.json
             cat /tmp/setup/parameters.json
       - run:
           name: Continue the pipeline with .circleci/continue.yml
@@ -109,7 +88,19 @@ jobs:
             [ "${code}" = 200 ]
 
 workflows:
-  setup:
+  setup-e2e:
+    when:
+      or: &e2e-branch
+        - equal: [main, << pipeline.git.branch >>]
+        - matches: {pattern: "^smr-swarm/.*$", value: << pipeline.git.branch >>}
     jobs:
       - setup:
+          e2e: true
           context: [scalable-machine-runner-e2e]
+  setup-plain:
+    when:
+      not:
+        or: *e2e-branch
+    jobs:
+      - setup:
+          e2e: false

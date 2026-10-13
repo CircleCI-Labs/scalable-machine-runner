@@ -811,6 +811,11 @@ jobs:
               exit 1
             fi
       - run:
+          name: The setup gate (table test) and the two exclusive setup workflows (compiled per branch)
+          command: |
+            ci/tests/setup-gate.sh
+            ci/tests/setup-config.sh /tmp/cli/circleci
+      - run:
           name: The release job requires every other job (docs/releasing.md)
           command: |
             # In the compiled workflow the release waits for one lock job, which requires the real

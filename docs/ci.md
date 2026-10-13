@@ -13,7 +13,7 @@ as job artifacts.
 
 ## Pipeline shape
 
-There is one workflow, `ci`. Every job of it is listed in `.circleci/continue.yml`. The `setup` job passes four boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled.
+There is one workflow, `ci`. Every job of it is listed in `.circleci/continue.yml`. The `setup` job passes four boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled. The setup phase itself has two mutually exclusive workflows that run the same `setup` job: `setup-e2e` for `main` and `smr-swarm/*`, with the e2e context, and `setup-plain` for every other branch, without any context ([below](#when-things-run-and-the-setup-gate)).
 
 ```mermaid
 flowchart TD
@@ -37,7 +37,7 @@ flowchart TD
 | every pipeline | `lint-yaml` | `cimg/python:3.14.8` + yamllint 1.38.0 | `yamllint --strict .` |
 | every pipeline | `lint-stack` | `docker:29.9.0-cli` | `docker stack config -c` on every file in `linux/stack` and `windows/stack` alone, on all files of each OS together (the optional files are overlays), and on `windows/tests/stack.e2e.yaml`: the stack files must parse, merge and interpolate. No daemon or Swarm needed |
 | every pipeline | `lint-powershell` | `mcr.microsoft.com/powershell:7.5-ubuntu-24.04`, medium (the 5.1-compatibility analysis needs about 2.7 GB) | PSScriptAnalyzer 1.25.0 over `windows/` and `ci/` (errors and warnings fail), then `windows/tests/Invoke-UnitTests.ps1` on PowerShell 7: an ASCII check and the Pester 5.7.1 suites, including `Stack.Tests.ps1`, which keeps the stack files' invariants (no entrypoint script, the runner as the entrypoint, the secret target, Git's mount path, PATH, and that every named volume and secret is declared: `docker stack config` does not catch an undeclared volume, `docker stack deploy` fails with `undefined volume`). Pester runs without a terminal (it hangs under CircleCI's pseudo-terminal) |
-| every pipeline | `lint-circleci` | `cimg/base:2026.10` + CircleCI CLI 1.4.0 | `circleci config validate` on both config files, `circleci config process` with every parameter on (`validate` alone does not compile the filtered jobs), and a check that the `release` job requires every other job (below) |
+| every pipeline | `lint-circleci` | `cimg/base:2026.10` + CircleCI CLI 1.4.0 | `circleci config validate` on both config files, `circleci config process` with every parameter on (`validate` alone does not compile the filtered jobs), the table test of the setup gate (`ci/tests/setup-gate.sh`), a compile of `config.yml` for a table of branches that proves only `main` and `smr-swarm/*` get the e2e context (`ci/tests/setup-config.sh`), and a check that the `release` job requires every other job (below) |
 | every pipeline | `lint-markdown` | `davidanson/markdownlint-cli2:v0.18.1` | `.markdownlint-cli2.yaml` on every Markdown file; `docs/ci.md` with the same rules (the repository config ignores it) |
 | every pipeline | `lint-docs-links` | `lycheeverse/lychee:0.24.2` | Relative links and `#heading` anchors in every Markdown file, offline (external URLs are not fetched: the job is fast and never flaky) |
 | every pipeline | `lint-docs-mermaid` | `minlag/mermaid-cli:12.0.1`, medium | Renders every `mermaid` block in every Markdown file; a syntax error fails the job |
@@ -82,17 +82,24 @@ These were measured on 2026-10-12 and shaped the scripts. Check them first when 
 
 ## When things run, and the setup gate
 
-| Branch or trigger | Parameters set by `setup` | Jobs |
-|---|---|---|
-| any branch | none | the `every pipeline` rows |
-| `main`, `smr-swarm/*` | `full-suite` | adds the Server 2025 jobs |
-| the same, with `E2E_RUNNER_TOKEN_LINUX` present | adds `e2e-linux` | adds the Linux e2e group |
-| the same, with `E2E_RUNNER_TOKEN_WINDOWS` present | adds `e2e-windows` | adds the Windows e2e groups |
-| `main` with both tokens | adds `release` | adds the `release` job |
-| pipeline parameter `full: true` (API call), any branch | as for `main` | as for `main`, except `release` |
-| a tag | nothing | nothing: the setup job has no tag filter, so CircleCI shows "no workflow" |
+| Branch or trigger | Setup workflow | Parameters set by `setup` | Jobs |
+|---|---|---|---|
+| any branch other than the two below | `setup-plain`, no context | none | the `every pipeline` rows |
+| the same, with the pipeline parameter `full: true` (API call) | `setup-plain`, no context | `full-suite` | adds the Server 2025 jobs. Never e2e, never release |
+| `main`, `smr-swarm/*` | `setup-e2e`, with the e2e context | `full-suite` | adds the Server 2025 jobs |
+| the same, with `E2E_RUNNER_TOKEN_LINUX` present | `setup-e2e` | adds `e2e-linux` | adds the Linux e2e group |
+| the same, with `E2E_RUNNER_TOKEN_WINDOWS` present | `setup-e2e` | adds `e2e-windows` | adds the Windows e2e groups |
+| `main` with both tokens | `setup-e2e` | adds `release` | adds the `release` job |
+| a tag | none runs a job | nothing | nothing: the setup job has no tag filter, so CircleCI runs no job for the tag |
 
-There is no nightly schedule. The e2e jobs are added to the pipeline only when the `setup` job, which runs with the `scalable-machine-runner-e2e` context attached, sees a non-empty `E2E_RUNNER_TOKEN_LINUX` or `E2E_RUNNER_TOKEN_WINDOWS`. Without the context or its secrets the pipeline still runs lint and the local tests, and stays green.
+There is no nightly schedule. The two setup workflows are exclusive: `setup-e2e` has `when` the branch is `main` or starts with `smr-swarm/`, and `setup-plain` has `when` it is not. The `setup` job of `setup-e2e` has the `scalable-machine-runner-e2e` context attached, which holds the runner tokens, and the job of `setup-plain` has no context at all, so the tokens exist in no job of any other branch. A job of another branch could otherwise name the e2e runner class and read the token of the runner that claims it. The e2e jobs are added to the pipeline only when the context's job sees a non-empty `E2E_RUNNER_TOKEN_LINUX` or `E2E_RUNNER_TOKEN_WINDOWS`. Without the context or its secrets the pipeline still runs lint, builds and the local tests, and stays green.
+
+The decision lives in [`ci/setup-gate.sh`](../ci/setup-gate.sh), which the `setup` job calls with `--e2e true` (the job with the context) or `--e2e false` (the plain job, which never enables e2e, whatever its environment holds) and the `full` parameter. Two tests keep it honest, both in `lint-circleci`:
+
+- `ci/tests/setup-gate.sh` is a table of branches, contexts, parameters and tokens, and the parameters the gate must print. It needs only bash and jq.
+- `ci/tests/setup-config.sh` compiles `.circleci/config.yml` with `circleci config process` for a table of branch names and checks that exactly one setup workflow is left, that the e2e context appears only for `main` and `smr-swarm/*`, and that every other branch gets a job without a context and with `--e2e false`.
+
+A pipeline of `main` or `smr-swarm/*` that is started through the API, or an SSH rerun of such a job, is refused by the context restriction (below): its `setup` job fails with an authorization error. Start the full suite on another branch with `full: true` instead, or push a commit.
 
 **Why the gate is in the setup phase.** A guard job that runs `circleci-agent step halt` is not enough on its own.
 
@@ -234,7 +241,22 @@ The host (`ci/E2E-Host.ps1`) follows the same shape, with one service and three 
 
 The project is public, so job logs and artifacts are public.
 
-- The runner tokens live only in the `scalable-machine-runner-e2e` context. Its restrictions: this project only, plus the expression `not (pipeline.git.branch starts-with "pull/") and not job.ssh.enabled`. Forked-PR builds are off.
+- The runner tokens live only in the `scalable-machine-runner-e2e` context, and only the `setup` job of the `setup-e2e` workflow and the host jobs attach it. Its restrictions are this project and an expression that allows only the branches that may use it, an SSH rerun excluded, and a pipeline started through the API excluded:
+
+  ```text
+  (pipeline.git.branch == "main" or pipeline.git.branch starts-with "smr-swarm/") and not job.ssh.enabled and not (pipeline.config_source starts-with "api")
+  ```
+
+  A restriction of the context is a setting of the CircleCI organization, and the config file cannot change it, so a maintainer sets it. With the CLI, where `<org>` is the organization slug and `<project-id>` is `7bbdbb66-6ba8-4f6c-982e-d4fb401ec257`:
+
+  ```bash
+  circleci context restriction create scalable-machine-runner-e2e --org <org> --type project --value <project-id>
+  circleci context restriction create scalable-machine-runner-e2e --org <org> --type expression \
+    --value '(pipeline.git.branch == "main" or pipeline.git.branch starts-with "smr-swarm/") and not job.ssh.enabled and not (pipeline.config_source starts-with "api")'
+  ```
+
+  The expression is the second line of defence: the `when` of the setup workflows already keeps the context out of every other branch, and the restriction keeps an API pipeline (which can name any branch and, where the organization allows it, bring its own config) from using it. In the organization's advanced settings, leave pipelines with an unversioned config off.
+- **Project settings.** The project is connected through the GitHub OAuth integration, not the GitHub App. Its slug is `gh/CircleCI-Labs/scalable-machine-runner`, not `circleci/<org-id>/<project-id>`. The settings **Build forked pull requests** and **Pass secrets to builds from forked pull requests** (Project Settings, Advanced) exist for OAuth projects, and both must be **off**: a fork pull request would otherwise run its own `.circleci/config.yml` on this project. Also turn on the setting that requires an administrator to change project settings, and turn off SSH reruns, if the organization offers them.
 - On Linux the token goes to `docker secret create` on stdin and is never on disk. On Windows it is in a file for the instant `docker secret create` reads it, outside the artifact directory. It is never printed.
 - The probes never print their environment, and read the token only to count bytes.
 - The context is attached only to `setup` and the host jobs. The probes are ordinary runner jobs.
@@ -253,6 +275,8 @@ docker stack config -c linux/stack/runners.yaml > /dev/null
 docker stack config -c windows/stack/runners.yaml > /dev/null
 docker stack config -c windows/stack/custom-image.yaml > /dev/null
 circleci config validate .circleci/config.yml && circleci config validate .circleci/continue.yml
+ci/tests/setup-gate.sh               # the setup gate: which suites a branch gets
+ci/tests/setup-config.sh             # only main and smr-swarm/* get the e2e context (compiles config.yml per branch)
 circleci config process .circleci/continue.yml --pipeline-parameters '{full-suite: true, e2e-linux: true, e2e-windows: true, release: true}' > /dev/null
 
 ci/tests/e2e-sim.sh                  # the Linux e2e scripts against a fake runner (needs privileged Docker)
@@ -337,7 +361,8 @@ Windows dominates the cost: every Windows job pulls the 2 GB Server Core image o
 | The job fails and the runner log says `failed to remove working directory` or `could not clean up task`, with `permission denied` | Only if `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` is `true` on a Linux service; the entrypoint and the stack files default it to `false`. See [Error: failed to remove working directory](troubleshooting.md#error-failed-to-remove-working-directory-permission-denied) |
 | `Test-StopHandling.ps1` or the e2e fails with a container exit code of `3221225786` | A container that ran a job was ended about 5 seconds after a stop from outside. The e2e never stops a busy container, so look for something else that stopped the stack (a second pipeline, a cleanup that ran too early). Check `reports/stop-*.txt` |
 | `Test-Injection.ps1` fails `tar-agent-style` | GNU tar from the mounted Git failed on the operands the task agent passes (forward slashes, `--force-local`, `MSYS=winsymlinks:nativestrict`). Read the check's detail in `reports/injection-*.txt`; the e2e's workspace round trip is the end-to-end proof |
-| `setup` says an e2e group is skipped | The context is missing, restricted for this pipeline (a `pull/*` branch or an SSH rerun), or lacks the secret |
+| `setup` says an e2e group is skipped | The context is missing, or lacks the secret. The log says which token is absent. Only the `setup-e2e` workflow (`main` and `smr-swarm/*`) has the context at all |
+| `setup` of `main` or `smr-swarm/*` fails with an authorization error | The context's expression restriction refused the pipeline: it was started through the API, or it is an SSH rerun. Push a commit, or rerun without SSH |
 | A Windows step fails right after `docker swarm init` with `Unable to connect to the remote server` or `no such host` | The network drops for a few seconds after the swarm is created. Download and pull first |
 | `Access is denied` running `C:\machine-runner-swarm\bin\circleci-runner.exe` in a container, or reading `C:\machine-runner-swarm\VERSION` on the host | The files under `C:\machine-runner-swarm` have an empty ACL. `windows\Setup.ps1` sets the ACL on `C:\machine-runner-swarm` and then resets the children to inherit it; if this happens again, print `icacls C:\machine-runner-swarm C:\machine-runner-swarm\VERSION C:\machine-runner-swarm\bin\circleci-runner.exe` |
 | A Windows host step hangs instead of failing | A child process started with `-NoNewWindow` (`docker events`, `docker service logs`) keeps the step's console open. `E2E-Host.ps1` kills the child process trees on every failure path; keep that if it changes |

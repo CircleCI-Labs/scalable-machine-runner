@@ -78,10 +78,10 @@ Until you do this, the `release` job runs every step except the last one. It pri
 
 1. Create a token. Use a fine-grained personal access token with the resource owner `CircleCI-Labs`, **only** this repository, and the repository permission **Contents: Read and write**. GitHub always adds read access to metadata. No other permission is needed, because `gh release create` makes the tag and the release. A fine-grained token expires, so note the date to rotate it. A GitHub App installation token with the same permission also works, but it expires after one hour, so it does not fit a context variable.
 1. In the CircleCI organization settings, create the context `scalable-machine-runner-release` and add the variable `GITHUB_TOKEN` with the token.
-1. Restrict the context to this project, and add an expression restriction so that only pipelines of `main` can use it, and not an SSH rerun that could print the token:
+1. Restrict the context to this project, and add an expression restriction so that only pipelines of `main` can use it, and neither an SSH rerun that could print the token nor a pipeline started through the API, which can name any branch and, where the organization allows it, bring its own config:
 
    ```text
-   pipeline.git.branch == "main" and not job.ssh.enabled
+   pipeline.git.branch == "main" and not job.ssh.enabled and not (pipeline.config_source starts-with "api")
    ```
 
    With the CLI, where `<org>` is the organization slug and `<project-id>` is `7bbdbb66-6ba8-4f6c-982e-d4fb401ec257`:
@@ -89,8 +89,10 @@ Until you do this, the `release` job runs every step except the last one. It pri
    ```bash
    circleci context restriction create scalable-machine-runner-release --org <org> --type project --value <project-id>
    circleci context restriction create scalable-machine-runner-release --org <org> --type expression \
-     --value 'pipeline.git.branch == "main" and not job.ssh.enabled'
+     --value 'pipeline.git.branch == "main" and not job.ssh.enabled and not (pipeline.config_source starts-with "api")'
    ```
+
+   In the organization's advanced settings, leave pipelines with an unversioned config off.
 
 1. Protect `main` on GitHub: require a pull request and a review, and do not let anyone push to it. Whoever can change `.circleci/` or `ci/release.sh` on `main` controls what runs with the token.
 

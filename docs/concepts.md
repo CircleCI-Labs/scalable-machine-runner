@@ -147,7 +147,7 @@ The runner services carry no version and no hash. Which version the nodes run is
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION=current` (the default for now) | The distributor follows CircleCI's manifest. It adopts a new release of major version 3, and it looks again every 24 hours |
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12` | The distributor pins that version. It switches to an installed version without any network, so a rollback needs no download |
 
-The distributor verifies every download against a SHA-256 and records the SHA-256 of the binary next to it. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux) for the settings and to [Security](security.md) for the checks.
+The distributor verifies every download against a SHA-256 and records the SHA-256 of the binary next to it. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux) for the settings and to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) for the checks.
 
 ## Users and the runner token on Linux
 

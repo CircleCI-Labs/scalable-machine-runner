@@ -35,7 +35,7 @@ This page describes what the stack protects, what it does not protect, and which
 |---|---|---|
 | A job leaves state for the next job | Single-task mode and a new container for every job | Anything on mounted volumes or on a mounted Docker engine. Refer to [What a clean environment covers](concepts.md#what-a-clean-environment-covers) |
 | A job reads the runner token | The token is a file that only the runner user and root can read, and is not in the environment. Hardened classes remove sudo | In the default Linux class, a job that uses sudo reads it. On Windows, a job reads it |
-| A job replaces the runner or entrypoint | The directory with the runner is mounted read-only and is root-owned. The entrypoint refuses to start otherwise | None known |
+| A job replaces the runner or entrypoint | On Linux, the runner is in a per-node volume that the container mounts read-only and that only root owns, the entrypoint is a Swarm config, and the entrypoint checks the runner against its SHA-256 record at every container start. On Windows, the directory with the runner is mounted read-only | On Linux, a privileged sibling container can still change the volume. Refer to [Runner binary integrity on Linux](#runner-binary-integrity-on-linux) |
 | A job reaches other tenants through the network | One overlay network for each Linux class | Replicas of one class reach each other. Refer to [Isolation between runners](#isolation-between-runners) |
 | A job breaks out of the container | Default seccomp and AppArmor profiles, dropped capabilities, no privileged mode | Containers share the host kernel. A kernel or runtime vulnerability bypasses every control on this page |
 | A job takes over the node through Docker | The Docker engine is not mounted by default | The opt-in docker-build classes are root-equivalent, and administrator-equivalent on Windows. Refer to [Docker Builds](docker-builds.md) |
@@ -101,6 +101,33 @@ Treat each Windows resource class as a trust boundary. Use one token for each cl
 - Keep join tokens private, and rotate them with `docker swarm join-token --rotate`.
 - A user in the `docker` group on a manager can read every token. Limit administrator access to the managers.
 
+## Runner binary integrity on Linux
+
+The runner executes the jobs of your classes, so it must be the binary that CircleCI published. The `runner-distributor` service installs it, and the entrypoint checks it before every start. Refer to [The runner distributor on Linux](concepts.md#the-runner-distributor-on-linux) for how the parts fit.
+
+### Where the runner comes from
+
+The distributor downloads the tarball over HTTPS from the release bucket of CircleCI, and compares its SHA-256 with the value in the `manifest.json` of CircleCI, which it also gets over HTTPS. This is the same trust as the runner's own download of the task agent, which every container fetches from the same bucket.
+
+To take the manifest out of the chain, set `MACHINE_RUNNER_SWARM_RUNNER_SHA256` to the SHA-256 values that you accept (the tarballs of every architecture of your nodes), from the `checksums.txt` of the release, and pin the version. The distributor then installs only a tarball that has one of these values. With `current`, a new release is refused until you update the list.
+
+### The checks
+
+| When | Who | What |
+|---|---|---|
+| Download | Distributor | The SHA-256 of the tarball must equal the manifest value, or a value of your list. Otherwise it installs nothing |
+| Install | Distributor | The binary must report the version that it installs. The distributor records the SHA-256 of the binary in `versions/<version>/SHA256`, and the files are owned by root and not writable by others |
+| Every check interval (24 hours by default) | Distributor | It compares the active binary with its record, and installs the version again when the binary changed |
+| Every container start | Entrypoint | It resolves `current` once and runs `sha256sum -c` against the record. A missing record or a different binary ends in exit code 80 and the log line `does not match its SHA-256 record`. Hashing the 74 MB binary takes about 0.05 seconds |
+| While a job runs | Mount | The volume is read-only in the runner containers, and its files are owned by root with the mode `0755`, so a job cannot change it. The entrypoint is a Swarm config, which is immutable and read-only |
+
+### What remains
+
+- A privileged sibling container with `SYS_ADMIN` on the same node, for example a microVM class, could mount the volume read-write and change both the binary and its record. A class that can get `SYS_ADMIN` should use a read-only path of the node instead of the volume. That is a separate change.
+- The check at the start of a container narrows the window and does not close it: a sibling that rewrites the file between the hash and the `exec` of one start is not detected.
+- The docker-build class mounts the Docker socket of the host and is root-equivalent on its node, so it can change the volume too. Refer to [Docker Builds](docker-builds.md).
+- Whoever can update the `runner-distributor` service, for example a user in the `docker` group of a manager, chooses the version and the download address. A list in `MACHINE_RUNNER_SWARM_RUNNER_SHA256` limits what can be installed to the tarballs on it.
+
 ## Compared with the official runner installs
 
 This table puts the Linux classes of this repository next to the installs that CircleCI documents. The first three columns come from the public CircleCI documentation only, and the last two from the tests of this repository. Where the public documentation says nothing, the cell says so.
@@ -117,6 +144,7 @@ Read the table this way:
 
 - **A clean container is not a virtual machine.** The orchestrator is the only column with a hardware-level boundary between jobs. If jobs must not share a kernel, use the orchestrator, or dedicate nodes to one trust group. Refer to [Why Swarm and not container runner or another runner?](faq.md#why-swarm-and-not-container-runner-or-another-runner)
 - **The token.** In the orchestrator the token never reaches the VM, so even a root job cannot read it. In the hardened class the token is a file in the container, and the protection is that the job user cannot become root. In the default class a job that uses sudo reads it.
+- **The runner binary.** The table does not compare how the installs verify the runner. In this repository the distributor installs it with a SHA-256 check, and the entrypoint checks it at every container start. Refer to [Runner binary integrity on Linux](#runner-binary-integrity-on-linux).
 - **Windows is at parity with the official Windows runner.** The job runs as an administrator, the same account as the runner, and can read the token. The Windows class has no hardened variant. Treat each Windows class as a trust boundary, and refer to [Windows](#windows).
 
 ## Hardening defaults
@@ -126,7 +154,8 @@ Read the table this way:
 | Control | Setting in `linux/stack/runners.yaml` |
 |---|---|
 | Secret file | Owned by uid and gid 2000, mode `0400` |
-| Runner and entrypoint | Root-owned, read-only mount, not writable by the job user |
+| Runner | A per-node volume, root-owned and read-only in the container, so the job user cannot write to it. The entrypoint checks it against its SHA-256 record at every start |
+| Entrypoint | A Swarm config, mounted with the mode `0555` |
 | Separate users | The runner user has no sudo. The job user is stepped down |
 | Working directory | `CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"`. Refer to [Working directory cleanup](#working-directory-cleanup) |
 | Temporary files | The root filesystem is writable, and `/tmp` is writable and executable |
@@ -135,7 +164,7 @@ Read the table this way:
 | Capabilities | Default classes drop `NET_RAW` and `MKNOD`. The hardened class drops all and adds back `CHOWN` and `FOWNER` (the entrypoint sets the owner of directories), `SETUID` and `SETGID` (the step-down), `KILL` (the init process signals the runner, which has another uid), and `AUDIT_WRITE` (sudo audit messages) |
 | Limits | `pids: 4096`, `nofile` 65536, no core dumps, and reservations that equal the limits |
 | Network | One overlay network for each class, and no published ports, so SSH rerun is off unless you deploy the SSH add-on stack file |
-| Runner version | 3.1.12 or later |
+| Runner version | 3.1.12 or later. By default the distributor follows the current release of CircleCI within major version 3 |
 
 Swarm ignores `security_opt`, `privileged`, `userns_mode`, and the short `tmpfs` form, and its tmpfs mounts are not executable. The stack therefore sets no `no-new-privileges` and no `read_only` filesystem. The default seccomp and AppArmor profiles of Docker apply.
 
@@ -220,11 +249,11 @@ Runners need outbound HTTPS only, and no inbound access. Allow these hosts by na
 | Host | Port | Used for |
 |---|---|---|
 | `runner.circleci.com` | 443 | The runner API: claiming tasks |
-| `circleci-binary-releases.s3.amazonaws.com` | 443 | The task agent, which every new container downloads, and the runner download during setup |
+| `circleci-binary-releases.s3.amazonaws.com` | 443 | The task agent, which every new container downloads, and the runner download: on Linux by the `runner-distributor` service (the manifest and the tarball), on Windows during setup |
 | `circleci-tasks-prod.s3.us-east-1.amazonaws.com` | 443 | Caches, workspaces, artifacts, and test results |
 | `internal.circleci.com` | 443 | CircleCI endpoint used during checkout |
 | Your VCS host, for example `github.com` | 443, and 22 for SSH checkouts | Checkout |
-| Your image registries, for example Docker Hub and `mcr.microsoft.com` | 443 | Pulling the service images |
+| Your image registries, for example Docker Hub and `mcr.microsoft.com` | 443 | Pulling the service images, on Linux also the `alpine` image of the `runner-distributor` service |
 | `github.com` and `release-assets.githubusercontent.com` | 443 | Windows setup only: Git for Windows and 7-Zip. The first host redirects the downloads to the second |
 
 If your VCS organization uses an IP allow list, add the egress addresses of your nodes. The list applies to every checkout method. If you use an explicit proxy, test a checkout through it before you roll out a class. Jobs inherit `HTTPS_PROXY` and `NO_PROXY` from the service environment in the stack file.

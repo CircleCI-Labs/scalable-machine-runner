@@ -1,0 +1,74 @@
+# Optional class: image builds with the HOST Docker engine ("pattern A"). Deploy with an extra -c flag:
+#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml smr
+# Create the secret first (same format as in runners.yaml): linux-docker-build-token.
+#
+#   !!! The Docker socket is ROOT-EQUIVALENT on its node. A job that can use it can start a privileged
+#   !!! container, mount the host's filesystem and read other jobs' data. Keep this class on a dedicated,
+#   !!! expendable node, and never on a Swarm MANAGER: on a manager the socket also controls the Swarm,
+#   !!! so a job could read the tokens of every class.
+#
+# It only schedules where BOTH constraints hold, so label a worker node first:
+#   docker node update --label-add smr.docker-build=true <worker-node>
+# The job user can use the socket through its group (the entrypoint adds it); jobs need no sudo for docker.
+# Alternatives that do not hand out the engine: a rootless BuildKit daemon on the host (mount only its
+# socket), or daemonless builds (Kaniko, Buildah) inside an ordinary job. Keep the common settings in
+# sync with runners.yaml.
+
+x-env: &env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"   # the container is discarded after the job, and the runner (uid 2000) cannot remove job-owned files
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+
+services:
+  linux-docker-build:
+    image: cimg/base:2026.10   # includes the Docker CLI
+    user: "0"
+    entrypoint: ["/opt/smr/bin/smr-entrypoint"]
+    init: true
+    stop_grace_period: 5h5m
+    hostname: "{{.Node.Hostname}}-linux-docker-build-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-docker-build-{{.Task.Slot}}"
+      SMR_JOB_SUDO: "true"
+    secrets:
+      - source: linux-docker-build-token
+        target: circleci_runner_config.yaml
+        uid: "2000"
+        gid: "2000"
+        mode: 0400
+    networks: [linux-docker-build]
+    cap_drop: [NET_RAW, MKNOD]
+    ulimits:
+      nofile: {soft: 65536, hard: 65536}
+      core: 0
+    logging:
+      driver: local
+      options: {max-size: 20m, max-file: "3"}
+    volumes:
+      - type: bind
+        source: /opt/smr
+        target: /opt/smr
+        read_only: true
+      - type: bind
+        source: /var/run/docker.sock   # root-equivalent, see above
+        target: /var/run/docker.sock
+    deploy:
+      replicas: 1
+      restart_policy: {condition: any, delay: 10s}
+      update_config: {order: stop-first, parallelism: 1}
+      resources:
+        limits: {cpus: "4", memory: 8G, pids: 4096}
+        reservations: {cpus: "4", memory: 8G}
+      placement:
+        constraints:
+          - node.platform.os == linux
+          - node.role == worker
+          - node.labels.smr.docker-build == true
+
+networks:
+  linux-docker-build: {driver: overlay}
+
+secrets:
+  linux-docker-build-token: {external: true}

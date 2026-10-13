@@ -1,0 +1,160 @@
+# scalable-machine-runner: Linux runners as a Docker Swarm stack (one service per resource class).
+#
+#   sudo linux/setup.sh --install                      # runner + entrypoint into /opt/smr, on every runner node
+#   printf %s "$TOKEN" | linux/setup.sh --secret linux-default      # one secret per class, see below
+#   docker stack deploy -c linux/stack/runners.yaml smr
+#
+# Each service is one CircleCI resource class (linux-default is <namespace>/linux-default) and
+# deploy.replicas is the number of runners. The statically linked runner and smr-entrypoint are mounted
+# read-only from /opt/smr on the host into a STOCK image (cimg/*, Alpine, UBI). The runner runs in
+# single-task mode, so each container runs one job and exits; restart_policy "any" starts a NEW container
+# for the next job, and a job never sees files from an earlier one.
+#
+# Secret <service>-token holds a runner config with the class token, owned by the runner (uid 2000):
+#   printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create linux-default-token -
+# The runner reads it with --config; a missing secret makes it exit 1, an empty token exit 80.
+# Every other runner setting is a CIRCLECI_RUNNER_* variable below.
+#
+#   linux-default   cimg/base, jobs keep passwordless sudo (like the Docker executor)
+#   linux-java      cimg/openjdk:21.0, same model
+#   linux-hardened  jobs have NO sudo, so a job cannot read the runner token
+# Optional classes are separate files, deployed with an extra -c flag:
+#   docker-build.yaml  host Docker socket (root-equivalent)      persistent.yaml  long-lived runner + volume
+#
+# Notes:
+# - Pin images by digest in production (image: cimg/base:2026.10@sha256:...). Tags such as 21.0 float.
+# - Swarm ignores security_opt, privileged and short-form tmpfs, and its tmpfs is noexec, so none is used.
+# - Replicas of one class share an overlay network and can reach each other: Swarm cannot isolate them
+#   (enable_icc is ignored on swarm-scoped networks). Each class gets its own overlay, so classes cannot
+#   reach each other. Keep the host clock on NTP: TLS to CircleCI fails silently when it drifts.
+
+x-env: &env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h   # an idle slot is replaced, so it picks up a rotated secret or a new image
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"   # the container is discarded after the job, and the runner (uid 2000) cannot remove job-owned files
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  # CIRCLECI_RUNNER_MAX_RUN_TIME: 2h   # default 5h; keep stop_grace_period at this plus 5m
+  # HTTPS_PROXY: http://proxy.example.com:3128   # jobs inherit variables set here
+
+x-restart: &restart
+  condition: any   # every exit (job done, idle timeout, crash) starts a new container
+  delay: 10s       # also the pause between retries after a configuration error (exit 80)
+
+x-update: &update
+  order: stop-first   # a busy replica drains (finishes its job) before it is replaced
+  parallelism: 1
+
+x-placement: &placement
+  constraints:
+    - node.platform.os == linux
+    # - node.platform.arch == x86_64                # or aarch64
+    # - node.labels.smr.zone == <network zone>      # docker node update --label-add smr.zone=<zone> <node>
+  preferences:
+    - spread: node.id
+
+x-runner: &runner
+  user: "0"   # the entrypoint starts as root, then runs the runner as uid 2000
+  entrypoint: ["/opt/smr/bin/smr-entrypoint"]
+  init: true   # SIGTERM reaches the runner, which drains; stop_grace_period lets a running job finish
+  stop_grace_period: 5h5m   # the runner's max_run_time (5h) plus 5 minutes
+  ulimits:
+    nofile: {soft: 65536, hard: 65536}
+    core: 0
+  logging:
+    driver: local
+    options: {max-size: 20m, max-file: "3"}
+  volumes:
+    - type: bind
+      source: /opt/smr   # must exist on every node that can run the service: sudo linux/setup.sh --install
+      target: /opt/smr
+      read_only: true
+
+services:
+  linux-default:
+    <<: *runner
+    image: cimg/base:2026.10
+    hostname: "{{.Node.Hostname}}-linux-default-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-default-{{.Task.Slot}}"   # unique, at most 64 characters
+      SMR_JOB_SUDO: "true"   # jobs keep the image's passwordless sudo (and can then read the runner token)
+    secrets:
+      - source: linux-default-token
+        target: circleci_runner_config.yaml
+        uid: "2000"
+        gid: "2000"
+        mode: 0400
+    networks: [linux-default]
+    cap_drop: [NET_RAW, MKNOD]
+    deploy:
+      replicas: 2
+      restart_policy: *restart
+      update_config: *update
+      resources:
+        limits: {cpus: "2", memory: 4G, pids: 4096}
+        reservations: {cpus: "2", memory: 4G}   # extra replicas stay pending instead of overcommitting the node
+      placement: *placement
+
+  linux-java:
+    <<: *runner
+    image: cimg/openjdk:21.0
+    hostname: "{{.Node.Hostname}}-linux-java-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-java-{{.Task.Slot}}"
+      SMR_JOB_SUDO: "true"
+    secrets:
+      - source: linux-java-token
+        target: circleci_runner_config.yaml
+        uid: "2000"
+        gid: "2000"
+        mode: 0400
+    networks: [linux-java]
+    cap_drop: [NET_RAW, MKNOD]
+    deploy:
+      replicas: 1
+      restart_policy: *restart
+      update_config: *update
+      resources:
+        limits: {cpus: "4", memory: 8G, pids: 4096}
+        reservations: {cpus: "4", memory: 8G}
+      placement: *placement
+
+  # Hardened class: the job user has no sudo, so a job cannot read the runner token (the secret is
+  # root-and-runner-only 0400). Use it for shared or regulated classes; tools must be in the image.
+  linux-hardened:
+    <<: *runner
+    image: cimg/base:2026.10
+    hostname: "{{.Node.Hostname}}-linux-hardened-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-hardened-{{.Task.Slot}}"
+      SMR_JOB_SUDO: "false"
+    secrets:
+      - source: linux-hardened-token
+        target: circleci_runner_config.yaml
+        uid: "2000"
+        gid: "2000"
+        mode: 0400
+    networks: [linux-hardened]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, SETUID, SETGID, KILL, AUDIT_WRITE]   # entrypoint (chown and chmod), sudo step-down, docker-init signalling the runner
+    deploy:
+      replicas: 1
+      restart_policy: *restart
+      update_config: *update
+      resources:
+        limits: {cpus: "2", memory: 4G, pids: 4096}
+        reservations: {cpus: "2", memory: 4G}
+      placement: *placement
+
+networks:
+  # One overlay per class: classes cannot reach each other (replicas of a class still can).
+  linux-default: {driver: overlay}
+  linux-java: {driver: overlay}
+  linux-hardened: {driver: overlay}
+
+secrets:
+  linux-default-token: {external: true}
+  linux-java-token: {external: true}
+  linux-hardened-token: {external: true}

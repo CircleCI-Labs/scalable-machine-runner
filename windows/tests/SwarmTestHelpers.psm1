@@ -229,12 +229,13 @@ function ConvertTo-SwarmEnvArgument {
 function Get-SwarmStockMountArgument {
     <#
     .SYNOPSIS
-        The two read-only mounts of a stock-image service as docker run arguments: SwarmRoot at C:\machine-runner-swarm, and
-        SwarmRoot\git at C:\Program Files\Git (the path the task agent hard-codes for tar.exe).
+        The two read-only mounts of a stock-image service as docker run arguments: SwarmRoot\current (a junction to the
+        installed version, as in the stack files) at C:\machine-runner-swarm, and SwarmRoot\current\git at C:\Program Files\Git
+        (the path the task agent hard-codes for tar.exe).
     #>
     param([string] $SwarmRoot = 'C:\machine-runner-swarm')
-    return @('--mount', "type=bind,source=$SwarmRoot,target=C:\machine-runner-swarm,readonly",
-        '--mount', "type=bind,source=$SwarmRoot\git,target=C:\Program Files\Git,readonly")
+    return @('--mount', "type=bind,source=$SwarmRoot\current,target=C:\machine-runner-swarm,readonly",
+        '--mount', "type=bind,source=$SwarmRoot\current\git,target=C:\Program Files\Git,readonly")
 }
 
 function Initialize-SwarmFakeRunner {

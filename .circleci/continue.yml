@@ -432,7 +432,7 @@ jobs:
             & .\windows\tests\Invoke-UnitTests.ps1 -ResultsDirectory C:\test-results\pester
             exit $LASTEXITCODE
       - run:
-          name: Stage C:\machine-runner-swarm (windows\Setup.ps1 -StageOnly - runner, portable Git, ACLs)
+          name: Stage C:\machine-runner-swarm\<version> and the current junction (windows\Setup.ps1 -StageOnly - runner, portable Git, ACLs)
           command: |
             # Stage first: the downloads must not run right after `docker swarm init`.
             $global:LASTEXITCODE = 1
@@ -515,6 +515,13 @@ jobs:
           no_output_timeout: 15m
           command: |
             .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Persistent.ps1 -Report "reports\persistent-$env:WINDOWS_TAG.txt"
+            exit $LASTEXITCODE
+      - run:
+          name: A runner upgrade through a junction or symbolic link as the bind source (windows/tests/Test-Upgrade.ps1)
+          when: always
+          no_output_timeout: 25m
+          command: |
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Upgrade.ps1 -Report "reports\upgrade-$env:WINDOWS_TAG.txt"
             exit $LASTEXITCODE
       - store_artifacts:
           path: C:\test-results

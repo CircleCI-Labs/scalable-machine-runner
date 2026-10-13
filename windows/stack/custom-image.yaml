@@ -53,15 +53,15 @@ x-stock-env: &stock-env
 x-stock: &stock
   entrypoint: ['C:\machine-runner-swarm\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
 
-x-runner-mount: &runner-mount                     # the runner, read-only
+x-runner-mount: &runner-mount               # the runner, read-only
   type: bind
-  source: '${MACHINE_RUNNER_SWARM_DIR:-C:\machine-runner-swarm}'              # to roll out a new runner or Git: stage C:\machine-runner-swarm-<version> and
-  target: 'C:\machine-runner-swarm'                          # deploy with $env:MACHINE_RUNNER_SWARM_DIR='C:\machine-runner-swarm-<version>' (rolling update)
+  source: 'C:\machine-runner-swarm\current'  # a junction to C:\machine-runner-swarm\<version>, made by Setup.ps1: Docker resolves it
+  target: 'C:\machine-runner-swarm'           # when it creates a container, so a new version reaches the next job only (docs/operations.md)
   read_only: true
 
 x-git-mount: &git-mount                     # portable Git, where the task agent expects it
   type: bind
-  source: '${MACHINE_RUNNER_SWARM_DIR:-C:\machine-runner-swarm}\git'
+  source: 'C:\machine-runner-swarm\current\git'
   target: 'C:\Program Files\Git'
   read_only: true
 

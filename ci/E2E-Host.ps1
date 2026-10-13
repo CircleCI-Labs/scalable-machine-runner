@@ -193,7 +193,7 @@ function Invoke-Prepare {
     Invoke-Docker node ls | ForEach-Object { Write-Host $_ }
     Invoke-Docker node inspect self --format '{{json .Spec.Labels}}' | ForEach-Object { Write-Host "node labels: $_" }
     Get-ChildItem C:\machine-runner-swarm -Recurse -Depth 2 | Select-Object -First 40 | ForEach-Object { Write-Host $_.FullName }
-    & C:\machine-runner-swarm\bin\circleci-runner.exe --version
+    & C:\machine-runner-swarm\current\bin\circleci-runner.exe --version
 }
 function Install-Layout {
     # Stage C:\machine-runner-swarm with the shipped helper (runner, portable Git, ACLs). Stage first: the downloads

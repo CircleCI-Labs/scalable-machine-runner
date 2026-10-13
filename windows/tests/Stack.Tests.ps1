@@ -67,12 +67,13 @@ Describe 'the stack files' {
         foreach ($s in $script:stockServices) { $script:blocks[$s] | Should -Match '<<: \[\*runner, \*stock\]' }
     }
 
-    It 'mount the runner and Git read-only, Git at the path the task agent hard-codes' -TestCases @(
+    It 'mount the junction current of the installed version read-only, Git at the path the task agent hard-codes' -TestCases @(
         @{ Service = 'windows-default' }, @{ Service = 'windows-custom' }, @{ Service = 'windows-persistent' }, @{ Service = 'windows-docker-build' }
     ) {
         param($Service)
         $script:blocks[$Service] | Should -Match '- \*runner-mount\r?\n      - \*git-mount'
-        $script:files[$script:fileOf[$Service]] | Should -Match "(?m)^x-git-mount: &git-mount.*\r?\n  type: bind\r?\n  source: '\`$\{MACHINE_RUNNER_SWARM_DIR:-C:\\machine-runner-swarm\}\\git'\r?\n  target: 'C:\\Program Files\\Git'\r?\n  read_only: true"
+        $script:files[$script:fileOf[$Service]] | Should -Match "(?m)^x-runner-mount: &runner-mount.*\r?\n  type: bind\r?\n  source: 'C:\\machine-runner-swarm\\current'"
+        $script:files[$script:fileOf[$Service]] | Should -Match "(?m)^x-git-mount: &git-mount.*\r?\n  type: bind\r?\n  source: 'C:\\machine-runner-swarm\\current\\git'\r?\n  target: 'C:\\Program Files\\Git'\r?\n  read_only: true"
     }
 
     It 'spell out PATH for stock services: Windows first, then Git cmd, usr\bin and ucrt64\bin' {

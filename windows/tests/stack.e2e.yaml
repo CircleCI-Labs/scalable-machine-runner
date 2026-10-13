@@ -38,11 +38,11 @@ services:
       PATH: 'C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin'
     volumes:
       - type: bind
-        source: '${MACHINE_RUNNER_SWARM_DIR:-C:\machine-runner-swarm}'
+        source: 'C:\machine-runner-swarm\current'
         target: 'C:\machine-runner-swarm'
         read_only: true
       - type: bind
-        source: '${MACHINE_RUNNER_SWARM_DIR:-C:\machine-runner-swarm}\git'
+        source: 'C:\machine-runner-swarm\current\git'
         target: 'C:\Program Files\Git'
         read_only: true
       - type: bind

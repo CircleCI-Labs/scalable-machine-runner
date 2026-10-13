@@ -1,17 +1,20 @@
 <#
 .SYNOPSIS
-    OPTIONAL helper for the Windows runner stack: checks the host, stages C:\machine-runner-swarm, labels the node and
-    creates the token secrets. The Windows docs list the same steps as plain commands.
+    OPTIONAL helper for the Windows runner stack: checks the host, stages C:\machine-runner-swarm\<version>, labels the node
+    and creates the token secrets. The Windows docs list the same steps as plain commands.
     Windows PowerShell 5.1, in an elevated prompt on the container host. Safe to run again.
 
 .DESCRIPTION
     1. Preflight, printed as "CHECK <name> PASS|FAIL": administrator, Windows Server build, Docker in
        Windows-container mode, Swarm manager (-InitSwarm -AdvertiseAddr <ip> creates one; the address is required, a plain "docker swarm init" fails on some hosts).
-    2. Stages -InstallDir (default C:\machine-runner-swarm): bin\circleci-runner.exe (SHA-256 from CircleCI's release
-       manifest) and git\ (portable Git for Windows, pinned SHA-256, bash/tar/gzip included). Containers
-       read it as themselves, so SYSTEM and Administrators get full control and Authenticated Users
-       read and execute; a job cannot modify it. Skipped when the same versions are already there. Done BEFORE
-       any swarm init, because the network drops for a few seconds after it.
+    2. Stages <InstallDir>\<RunnerVersion> (InstallDir defaults to C:\machine-runner-swarm): bin\circleci-runner.exe
+       (SHA-256 from CircleCI's release manifest) and git\ (portable Git for Windows, pinned SHA-256, bash/tar/gzip
+       included). Containers read it as themselves, so SYSTEM and Administrators get full control and Authenticated
+       Users read and execute; a job cannot modify it. Skipped when the same versions are already there. Then it points
+       the junction <InstallDir>\current at that version: the stack mounts the junction, so the next container (the
+       next job) gets the new version and running jobs keep the old one. Run it again with another -RunnerVersion
+       to install side by side and flip, or with an installed one to roll back. Done BEFORE any swarm init, because
+       the network drops for a few seconds after it.
     3. Labels the node machine-runner-swarm.windows-build=ltsc2022|ltsc2025 (the stack file's placement uses it).
     4. -Class <name>,...: asks for each class's runner token (hidden input) and creates the Swarm secret
        <name>-token. The secret is a minimal runner config file ("api: auth_token: ..."); everything
@@ -137,6 +140,22 @@ function Install-Stage {
     Protect-Directory -Dir $Dir
 }
 
+function Switch-CurrentLink {
+    # <Root>\current is a junction to the version directory. Docker resolves it when it creates a container, so the next
+    # container gets the new version. The root grants write to nobody else: whoever can change the link chooses what runs.
+    # A junction cannot be replaced in one step: for a moment there is no link, and a container created in that moment
+    # does not start (Swarm starts the next one after the restart delay).
+    param([string] $Root, [string] $Version)
+    $link = Join-Path $Root 'current'
+    Invoke-Acl $Root /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX'
+    if (Test-Path -LiteralPath $link) {
+        & cmd.exe /c rmdir "`"$link`""   # removes the junction only, never the directory behind it
+        if ($LASTEXITCODE -ne 0) { throw "cannot remove the junction $link" }
+    }
+    $null = New-Item -ItemType Junction -Path $link -Target (Join-Path $Root $Version)
+    [Console]::Out.WriteLine("$link -> $(Join-Path $Root $Version)")
+}
+
 function Install-ClassSecret {
     # The Swarm secret <class>-token holds a minimal runner config with the token, from a hidden prompt.
     param([string] $Name)
@@ -154,7 +173,8 @@ if ($MyInvocation.InvocationName -ne '.') {
     if (-not (Test-Preflight -SkipDocker:$StageOnly -WillInitSwarm:$InitSwarm)) { throw 'preflight failed, see the CHECK lines' }
     if ($InitSwarm -and -not $AdvertiseAddr -and -not $StageOnly) { throw '-InitSwarm needs -AdvertiseAddr <the IPv4 address of this host>' }
     # Stage first: the network drops for a few seconds after "docker swarm init", and the downloads need it.
-    Install-Stage -Dir $InstallDir -Version $RunnerVersion -Force:$Force
+    Install-Stage -Dir (Join-Path $InstallDir $RunnerVersion) -Version $RunnerVersion -Force:$Force
+    Switch-CurrentLink -Root $InstallDir -Version $RunnerVersion
     if ($StageOnly) { return }
     if ($InitSwarm -and (Get-DockerInfo).Swarm -eq 'inactive') {
         $r = Invoke-Docker @('swarm', 'init', '--advertise-addr', $AdvertiseAddr)

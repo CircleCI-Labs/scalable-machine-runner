@@ -67,6 +67,20 @@ Describe 'Install-Stage' {
     }
 }
 
+Describe 'Switch-CurrentLink' {
+    It 'protects the root, then points a junction at the version, replacing the old link and keeping the old version' -Skip:([Environment]::OSVersion.Platform -ne 'Win32NT') {
+        $root = Join-Path $TestDrive 'swarm'
+        foreach ($v in '1.0.0', '2.0.0') { New-Item -ItemType Directory -Force -Path (Join-Path $root $v) | Out-Null; Set-Content -LiteralPath (Join-Path $root "$v\VERSION") -Value $v }
+        Mock Invoke-Acl { }
+        Switch-CurrentLink -Root $root -Version '1.0.0'
+        (Get-Content -LiteralPath (Join-Path $root 'current\VERSION')) | Should -Be '1.0.0'
+        Switch-CurrentLink -Root $root -Version '2.0.0'
+        (Get-Content -LiteralPath (Join-Path $root 'current\VERSION')) | Should -Be '2.0.0'
+        (Get-Content -LiteralPath (Join-Path $root '1.0.0\VERSION')) | Should -Be '1.0.0'
+        Should -Invoke Invoke-Acl -Times 2
+    }
+}
+
 Describe 'Protect-Directory' {
     It 'sets the ACL on the directory only, then resets every child to inherit it' {
         $script:calls = New-Object System.Collections.Generic.List[string]

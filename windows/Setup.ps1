@@ -22,17 +22,20 @@
     4. -Class <name>,...: asks for each class's runner token (hidden input) and creates the Swarm secret
        <name>-token. The secret is a minimal runner config file ("api: auth_token: ..."); everything
        else the runner needs is an environment variable in the stack file. Existing secrets are kept.
-    5. -Deploy: docker stack deploy. -StackFile takes one or more files and replaces the default
-       (windows\stack\runners.yaml, which deploys alone with just windows-default-token); list
-       runners.yaml first, then each overlay such as custom-image.yaml.
+    5. -Deploy: docker stack deploy. Without -StackFile it deploys the shipped windows\stack\runners.yaml as it is
+       (a first run: it needs just windows-default-token). Once you keep your own copy of the stack files, pass them:
+       -StackFile takes one or more files and replaces the default; list runners.yaml first, then each add-on file
+       such as custom-image.yaml. The files that are deployed are printed.
     -StageOnly stops after step 2 and needs no Docker.
 
 .EXAMPLE
+    # A first run: the shipped runners.yaml, unchanged.
     .\windows\Setup.ps1 -InitSwarm -AdvertiseAddr 10.0.0.5 -Class windows-default -Deploy
 
 .EXAMPLE
+    # Your copies of the stack files (docs\install-windows.md, step 6).
     .\windows\Setup.ps1 -Class windows-default,windows-custom -Deploy `
-        -StackFile .\windows\stack\runners.yaml,.\windows\stack\custom-image.yaml
+        -StackFile .\deploy\runners.yaml,.\deploy\custom-image.yaml
 #>
 [CmdletBinding()]
 param(
@@ -207,6 +210,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     Install-CapabilityLabel -NodeId (Get-DockerInfo).NodeId -Build ([int](Get-CimInstance -ClassName Win32_OperatingSystem).BuildNumber)
     foreach ($c in $Class) { Install-ClassSecret -Name $c }
     if ($Deploy) {
+        [Console]::Out.WriteLine("deploying $($StackFile -join ', ') as stack $StackName")
         $r = Invoke-Docker (@('stack', 'deploy') + @($StackFile | ForEach-Object { '-c'; $_ }) + @($StackName))
         $r.Output | ForEach-Object { [Console]::Out.WriteLine($_) }
         if ($r.ExitCode -ne 0) { throw 'docker stack deploy failed' }

@@ -1,6 +1,7 @@
 # Machine runner 3 on Windows Server, one Docker Swarm service per runner resource class.
 #
-#   docker stack deploy -c windows\stack\runners.yaml runners
+#   docker stack deploy -c windows\stack\runners.yaml runners          # a first run, as shipped
+#   docker stack deploy -c deploy\runners.yaml runners                  # later: your copy, kept under version control
 #
 # * One service = one resource class. The service name is the class short name, so
 #   "windows-default" serves <namespace>/windows-default. deploy.replicas = how many runners of
@@ -18,9 +19,10 @@
 #   points to the installed version and is mounted read-only into the unmodified Microsoft Server Core image: at
 #   C:\machine-runner-swarm, and its git directory at C:\Program Files\Git, the path the task agent hard-codes for tar.exe.
 #   PATH is set here, in full.
-# * The secret is the runner config, one per class. It is NOT created by this file:
-#       printf 'api:\n  auth_token: <token>\n' | docker secret create windows-default-token -
-#   (Setup.ps1 -Class asks for the token with hidden input and does this.) On Windows a secret lands
+# * The secret is the runner config, one per class. It is NOT created by this file. A YAML file holding only the token
+#   ("api:" with "  auth_token: <token>") is the secret <service>-token. Create it with
+#       .\windows\Setup.ps1 -Class windows-default     (asks for the token with hidden input and creates the secret)
+#   or with the PowerShell steps in docs/install-windows.md ("Create the secrets"). A shell pipe such as printf is not PowerShell. On Windows a secret lands
 #   at C:\ProgramData\Docker\secrets\<target>, is readable by administrators only, and is "persisted
 #   in clear text to the container's root disk" until the container stops. Enable BitLocker on the
 #   volume that holds the Docker root directory. Jobs run as ContainerAdministrator, so a job can

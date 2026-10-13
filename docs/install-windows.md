@@ -120,7 +120,7 @@ Run these steps in an elevated PowerShell on every host. Do them before you star
    docker info --format '{{.OSType}}'
    ```
 
-2. Pull the base image once, so the first task does not wait for it. Use `ltsc2025` on a Server 2025 host.
+2. Pull the base image of the shipped services once, so the first task does not wait for it. A Server 2025 host runs `ltsc2022` images too, so this is the image for both hosts. Pull `ltsc2025` as well only for a service that you put on that image.
 
    ```powershell
    docker pull mcr.microsoft.com/windows/servercore:ltsc2022
@@ -270,7 +270,14 @@ Windows does not support the `uid`, `gid`, and `mode` options of secrets. Only a
 
 ## 6. Review the stack file
 
-Copy `windows\stack\runners.yaml`, and keep the copy under version control. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
+Copy the stack files that you deploy into a directory of your own, `deploy\`, and keep it under version control. From here on, you check and deploy your copies and never the files under `windows\stack`, so an edit never touches the shipped files. For a first run, change nothing: the copy of `runners.yaml` works as it is, and you review it later.
+
+```powershell
+New-Item -ItemType Directory -Force deploy | Out-Null
+Copy-Item windows\stack\runners.yaml deploy\runners.yaml
+```
+
+The stack files use absolute host paths, so they work from any directory. Copy each optional file that you use the same way, for example `Copy-Item windows\stack\custom-image.yaml deploy\`. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
 
 | Service | File | Purpose |
 |---|---|---|
@@ -284,25 +291,32 @@ Copy `windows\stack\runners.yaml`, and keep the copy under version control. Revi
 
 The optional classes are overlay files. Add each with another `-c` flag, and pass the same set of files on every deploy. Each overlay repeats the anchors of `runners.yaml`, because an anchor does not reach into another file. When you change a common setting, change it in every file that you use.
 
-Check that the files parse. This needs no running Swarm.
+Check that your copies parse. This needs no running Swarm.
 
 ```powershell
-docker stack config -c windows\stack\runners.yaml | Out-Null
-docker stack config -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml -c windows\stack\persistent.yaml -c windows\stack\docker-build.yaml | Out-Null
+docker stack config -c deploy\runners.yaml | Out-Null
+```
+
+With the optional files, pass them all, in the same order as you deploy them:
+
+```powershell
+docker stack config -c deploy\runners.yaml -c deploy\custom-image.yaml -c deploy\persistent.yaml -c deploy\docker-build.yaml | Out-Null
 ```
 
 For the keys that Windows honours and the keys that it ignores, refer to [Stack keys on Windows](resource-classes.md#stack-keys-on-windows).
 
 ## 7. Deploy the stack
 
+Deploy your copy of the file from step 6:
+
 ```powershell
-docker stack deploy -c windows\stack\runners.yaml runners
+docker stack deploy -c deploy\runners.yaml runners
 ```
 
-To add the optional classes, pass their files after `runners.yaml` with more `-c` flags, for example your own image on top of stock Server Core:
+To add the optional classes, pass your copies of their files after `runners.yaml` with more `-c` flags, for example your own image on top of stock Server Core:
 
 ```powershell
-docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml runners
+docker stack deploy -c deploy\runners.yaml -c deploy\custom-image.yaml runners
 ```
 
 The bind source of the runner mount is the junction `C:\machine-runner-swarm\current`. A new runner version needs no deploy: refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
@@ -364,15 +378,16 @@ The helper always stages before it starts Swarm. It does not add the labels of t
 | `-StageOnly` | Stops after staging. Needs no Docker |
 | `-InitSwarm -AdvertiseAddr <ip>` | Creates a Swarm when none exists. The address is required, and the helper waits until the node is a manager |
 | `-Class <name>,<name>` | Asks for each token with hidden input and creates the secret `<name>-token`. An existing secret stays unchanged |
-| `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, default `windows\stack\runners.yaml`) and `-StackName` (default `runners`) |
+| `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, `runners.yaml` first) and `-StackName` (default `runners`). Without `-StackFile` it deploys the shipped `windows\stack\runners.yaml` as it is, which suits a first run. Once you keep copies as in step 6, pass them. The helper prints the files that it deploys |
 | `-Force` | Stages again even when the same versions are present |
 
 The helper labels the node from the host build: `machine-runner-swarm.windows-ltsc2022=true` on Server 2022, and both `windows-ltsc2022=true` and `windows-ltsc2025=true` on Server 2025. It supports Server 2022 and 2025 only. Server 2019 is untested and gets no label.
 
-The example uses your copy of the stack file.
+The first example is a first run: it deploys the shipped `runners.yaml` unchanged. The second deploys your copy from step 6, with its optional file.
 
 ```powershell
-.\windows\Setup.ps1 -InitSwarm -AdvertiseAddr 10.0.0.5 -Class windows-default -StackFile .\my-runners.yaml -Deploy
+.\windows\Setup.ps1 -InitSwarm -AdvertiseAddr 10.0.0.5 -Class windows-default -Deploy
+.\windows\Setup.ps1 -Class windows-default,windows-custom -StackFile .\deploy\runners.yaml,.\deploy\custom-image.yaml -Deploy
 ```
 
 ## Upgrade

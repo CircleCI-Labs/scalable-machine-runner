@@ -11,7 +11,7 @@ This page describes how to deploy CircleCI machine runner 3 as a Docker Swarm st
 > [!NOTE]
 > If you can run Kubernetes, CircleCI recommends [container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/) for containerized jobs. CircleCI documents a plain [machine runner 3 on Docker](https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-docker/) setup too. This page is a sibling of those pages for teams that run Docker Swarm and want a clean container for every job.
 
-The manual steps come first and need nothing from this repository except two files. The optional [setup helper](#optional-use-the-setup-helper) runs the same steps.
+The manual steps come first and need nothing from this repository except two files. The optional [setup helper](#optional-use-the-setup-helper) runs the same steps. For a first run, [Quickstart on Linux](quickstart-linux.md) is shorter.
 
 ## Prerequisites
 
@@ -104,7 +104,7 @@ Create a namespace if your organization has none. Each organization can have one
 $ circleci namespace create <namespace> --org <org>
 ```
 
-Create one resource class for each service in the stack file. The class name must equal the service name. The shipped file `linux/stack/runners.yaml` has the services `linux-default`, `linux-java`, and `linux-hardened`.
+Create one resource class for each service in the stack file. The class name must equal the service name. The shipped file `linux/stack/runners.yaml` has the services `linux-default`, `linux-java`, and `linux-hardened`. For a first run, keep these names. To rename or drop a service, edit your copy of the file first ([step 6](#6-review-the-stack-file)), and then create the classes and secrets of the services you keep.
 
 ```console
 $ circleci runner resource-class create <namespace>/linux-default --org <org> --generate-token
@@ -238,7 +238,14 @@ The secret name is the service name plus `-token`. `docker stack deploy` fails w
 
 ## 6. Review the stack file
 
-Copy `linux/stack/runners.yaml` and keep your copy under version control. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
+Copy `linux/stack/runners.yaml` into a directory of your own, `deploy/`, and keep it under version control. From here on you check and deploy your copy and never the shipped file, so an edit never touches the shipped files. For a first run, change nothing: the copy works as it is, and you review it later.
+
+```console
+$ mkdir -p deploy
+$ cp linux/stack/runners.yaml deploy/runners.yaml
+```
+
+The stack files use absolute host paths, so they work from any directory. Copy each add-on stack file that you use the same way. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
 
 | Setting | Default | Change it to |
 |---|---|---|
@@ -251,28 +258,30 @@ Copy `linux/stack/runners.yaml` and keep your copy under version control. Review
 Check that the file parses. This needs no running Swarm.
 
 ```console
-$ docker stack config -c linux/stack/runners.yaml > /dev/null
+$ docker stack config -c deploy/runners.yaml > /dev/null
 ```
 
 The optional classes are separate add-on stack files. Add each with another `-c` flag, and pass the same list of files on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each add-on stack file needs its own resource class and its own secret `<service>-token`.
 
 | File | Service | Purpose |
 |---|---|---|
-| `linux/stack/docker-build.yaml` | `linux-docker-build` | Builds images with the host Docker engine. Needs a labeled worker node. Refer to [Docker Builds](docker-builds.md) |
-| `linux/stack/persistent.yaml` | `linux-persistent` | A long-lived runner with a named volume. Needs the node name edited in the file. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
+| `linux/stack/docker-build.yaml` (copy to `deploy/`) | `linux-docker-build` | Builds images with the host Docker engine. Needs a labeled worker node. Refer to [Docker Builds](docker-builds.md) |
+| `linux/stack/persistent.yaml` (copy to `deploy/`) | `linux-persistent` | A long-lived runner with a named volume. Needs the node name edited in the file. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
 
 An add-on stack file repeats the common service settings of `runners.yaml`, because YAML anchors do not cross files. When you change a common setting, such as `stop_grace_period` or the logging options, change it in every file that you use.
 
 ## 7. Deploy the stack
 
+Deploy your copy of the file from step 6. The command returns before the replicas run, because `docker stack deploy` does not wait.
+
 ```console
-$ docker stack deploy -c linux/stack/runners.yaml runners
+$ docker stack deploy -c deploy/runners.yaml runners
 ```
 
-To add the optional classes, pass their files with more `-c` flags:
+To add the optional classes, pass your copies of their files with more `-c` flags, and pass the same list on every later deploy:
 
 ```console
-$ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml runners
+$ docker stack deploy -c deploy/runners.yaml -c deploy/persistent.yaml runners
 ```
 
 ## Verify the deployment
@@ -293,28 +302,9 @@ $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml
    $ docker service ps runners_linux-default
    ```
 
-3. In the web app, select **Runners** and open the resource class. Each replica shows up in the inventory with a name of the form `<node hostname>-<service>-<slot>`, for example `node1-linux-default-1`.
+3. Check that the runners connected. `circleci runner instance list --org <org> --resource-class <namespace>/linux-default` lists each replica with the status `online`, and the web app shows the same under **Runners**. A replica has a name of the form `<node hostname>-<service>-<slot>`, for example `node1-linux-default-1`.
 
-4. Add a job to your config and run it.
-
-   ```yaml
-   version: 2.1
-
-   jobs:
-     build:
-       machine: true
-       resource_class: <namespace>/linux-default
-       steps:
-         - checkout
-         - run: echo "runner $CIRCLECI_RUNNER_NAME"
-
-   workflows:
-     main:
-       jobs:
-         - build
-   ```
-
-   Run the workflow twice. After each job, Swarm shows a new task for the slot. The file [`examples/linux-jobs.yml`](../examples/linux-jobs.yml) has a job named `clean-check` that fails if anything from an earlier job is still present.
+4. Run a job. Use [`examples/linux-hello.yml`](../examples/linux-hello.yml): it is a complete config, and the [quickstart](quickstart-linux.md#steps) shows it. Run the workflow twice. After each job, Swarm shows a new task for the slot. The file [`examples/linux-jobs.yml`](../examples/linux-jobs.yml) has a job named `clean-check` that fails if anything from an earlier job is still present.
 
 ## Optional: use the setup helper
 
@@ -326,14 +316,14 @@ $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml
 | `--swarm-init` | Runs `docker swarm init` on the loopback address unless Swarm is active, and sets the task history limit to 2 |
 | `--install` | Downloads the runner, verifies the SHA-256 checksum, installs the runner and entrypoint into `--prefix/<version>` (default prefix `/opt/machine-runner-swarm`), and points `--prefix/current` at it. Another `--version` installs next to the others and moves the link, and an installed version is only switched to, which is the rollback. Needs root |
 | `--secret <service>` | Creates the secret `<service>-token` from a token read on stdin |
-| `--deploy` | Runs `docker stack deploy` with each `--stack-file` (default `linux/stack/runners.yaml`) |
+| `--deploy` | Runs `docker stack deploy` with each `--stack-file`. Without one it deploys the shipped `linux/stack/runners.yaml`, so pass your copy from step 6 |
 
-With no step, it runs `--check --install`. Options are `--version`, `--sha256`, `--prefix`, `--stack-file` (repeatable), and `--stack-name`.
+With no step, it runs `--check --install`. The steps always run in the order of the table, whatever order you type them, and the hint that starts with `Next:` prints after every run, even when nothing is left to do. Options are `--version`, `--sha256`, `--prefix`, `--stack-file` (repeatable), and `--stack-name`.
 
 ```bash
 sudo linux/setup.sh --check --swarm-init --install
 sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened   # a hidden prompt asks for each token
-sudo linux/setup.sh --deploy
+sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml
 ```
 
 Create one secret for every service of the stack files you deploy. `--deploy` fails with `secret not found` when one is missing, and `linux-hardened` is in `runners.yaml` too. Every command needs `sudo` or membership of the `docker` group, because each one talks to the Docker daemon, and `--install` needs root. The helper is a bash script with a `#!/usr/bin/env bash` line, so it runs from any shell, including zsh. To script one secret, pipe the token: `printf %s "$TOKEN" | sudo linux/setup.sh --secret linux-default`. Several `--secret` values need a terminal, because stdin carries one token.

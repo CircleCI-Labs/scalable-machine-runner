@@ -1,4 +1,5 @@
-# Example .circleci/config.yml for jobs on the machine-runner-swarm Linux classes.
+# Example .circleci/config.yml for jobs on the machine-runner-swarm Linux classes. For a minimal job that
+# runs as it is, use linux-hello.yml; the jobs here assume project files such as build.gradle and build.sh.
 # Replace my-namespace with your organization's runner namespace. Each resource class is one service
 # in linux/stack/runners.yaml (linux-default is my-namespace/linux-default, and so on). Every job
 # below runs in a brand-new container; nothing from an earlier job is visible.

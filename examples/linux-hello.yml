@@ -1,0 +1,31 @@
+# The smallest complete config for a Linux class of the machine runner swarm.
+#
+# 1. Replace my-namespace with your organization's runner namespace. linux-default is a service in
+#    linux/stack/runners.yaml, and its resource class must exist with that name.
+# 2. Save the file as .circleci/config.yml in a project of the organization, commit it and push.
+# 3. Run the workflow twice. Both runs pass, because every job runs in a new container, so the marker
+#    file that the first run leaves behind is never there for the second.
+#
+# The job has no checkout, so it does not depend on a project's files. Add "- checkout" as the first step to
+# test that the node can reach your VCS host.
+version: 2.1
+
+jobs:
+  hello:
+    machine: true
+    resource_class: my-namespace/linux-default
+    steps:
+      - run:
+          name: Show where this job runs
+          command: |
+            echo "runner: $CIRCLECI_RUNNER_NAME"
+            echo "user:   $(id -un)"
+            head -n 2 /etc/os-release
+            if [ -e /tmp/hello-marker ]; then echo "a file from an earlier job is here: the container was reused"; exit 1; fi
+            touch /tmp/hello-marker
+            echo "clean container: no marker from an earlier job"
+
+workflows:
+  hello:
+    jobs:
+      - hello

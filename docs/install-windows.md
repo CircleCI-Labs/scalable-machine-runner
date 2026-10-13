@@ -11,7 +11,7 @@ This page describes how to deploy CircleCI machine runner 3 as a Docker Swarm st
 > [!NOTE]
 > If you can run Kubernetes, CircleCI recommends [container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/) for containerized jobs. This page is for teams that run Docker Swarm and need a clean Windows container for every job.
 
-The manual steps come first. The optional [setup helper](#optional-use-the-setup-helper) runs most of the same steps.
+The manual steps come first. The optional [setup helper](#optional-use-the-setup-helper) runs most of the same steps. For a first run, [Quickstart on Windows Server](quickstart-windows.md) is shorter.
 
 > [!IMPORTANT]
 > The services run the stock Server Core image, and no image is built. A job that finishes ends its container cleanly. Stopping a busy container from outside kills its job after about 5 seconds, with the exit code 3221225786. This happens on a deploy or update, a scale-down, a node drain, `docker stack rm`, and a restart of Docker. Roll out changes while the class is idle, or rerun the interrupted jobs. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
@@ -330,28 +330,9 @@ The bind source of the runner mount is the junction `C:\machine-runner-swarm\cur
    docker stack ps runners --no-trunc
    ```
 
-2. In the web app, select **Runners** and open the resource class. Each replica shows up in the inventory with a name of the form `<node hostname>-<service>-<slot>`.
+2. Check that the runners connected. `circleci runner instance list --org <org> --resource-class <namespace>/windows-default` lists each replica with the status `online`, and the web app shows the same under **Runners**. A replica has a name of the form `<node hostname>-<service>-<slot>`.
 
-3. Add a job to your config and run it twice.
-
-   ```yaml
-   version: 2.1
-
-   jobs:
-     build:
-       machine: true
-       resource_class: <namespace>/windows-default
-       steps:
-         - checkout
-         - run: echo "computer $COMPUTERNAME, instance $MACHINE_RUNNER_SWARM_INSTANCE_ID"
-
-   workflows:
-     main:
-       jobs:
-         - build
-   ```
-
-   The two runs print different values, because each job runs in a new container. The file [`examples/windows-job.yml`](../examples/windows-job.yml) has more steps.
+3. Run a job. The [quickstart](quickstart-windows.md#steps) has a complete config, and [`examples/windows-job.yml`](../examples/windows-job.yml) has more steps. Run the workflow twice. The two runs print different values for `$MACHINE_RUNNER_SWARM_INSTANCE_ID`, because each job runs in a new container.
 
 ## What jobs can use
 

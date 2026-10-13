@@ -1,12 +1,12 @@
-# scalable-machine-runner: Linux runners as a Docker Swarm stack (one service per resource class).
+# machine-runner-swarm: Linux runners as a Docker Swarm stack (one service per resource class).
 #
-#   sudo linux/setup.sh --install                      # runner + entrypoint into /opt/smr, on every runner node
+#   sudo linux/setup.sh --install                      # runner + entrypoint into /opt/machine-runner-swarm, on every runner node
 #   printf %s "$TOKEN" | linux/setup.sh --secret linux-default      # one secret per class, see below
-#   docker stack deploy -c linux/stack/runners.yaml smr
+#   docker stack deploy -c linux/stack/runners.yaml runners
 #
 # Each service is one CircleCI resource class (linux-default is <namespace>/linux-default) and
-# deploy.replicas is the number of runners. The statically linked runner and smr-entrypoint are mounted
-# read-only from /opt/smr on the host into a STOCK image (cimg/*, Alpine, UBI). The runner runs in
+# deploy.replicas is the number of runners. The statically linked runner and circleci-runner-entrypoint are mounted
+# read-only from /opt/machine-runner-swarm on the host into a STOCK image (cimg/*, Alpine, UBI). The runner runs in
 # single-task mode, so each container runs one job and exits; restart_policy "any" starts a NEW container
 # for the next job, and a job never sees files from an earlier one.
 #
@@ -48,13 +48,13 @@ x-placement: &placement
   constraints:
     - node.platform.os == linux
     # - node.platform.arch == x86_64                # or aarch64
-    # - node.labels.smr.zone == <network zone>      # docker node update --label-add smr.zone=<zone> <node>
+    # - node.labels.machine-runner-swarm.zone == <network zone>      # docker node update --label-add machine-runner-swarm.zone=<zone> <node>
   preferences:
     - spread: node.id
 
 x-runner: &runner
   user: "0"   # the entrypoint starts as root, then runs the runner as uid 2000
-  entrypoint: ["/opt/smr/bin/smr-entrypoint"]
+  entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]
   init: true   # SIGTERM reaches the runner, which drains; stop_grace_period lets a running job finish
   stop_grace_period: 5h5m   # the runner's max_run_time (5h) plus 5 minutes
   ulimits:
@@ -65,8 +65,8 @@ x-runner: &runner
     options: {max-size: 20m, max-file: "3"}
   volumes:
     - type: bind
-      source: /opt/smr   # must exist on every node that can run the service: sudo linux/setup.sh --install
-      target: /opt/smr
+      source: /opt/machine-runner-swarm   # must exist on every node that can run the service: sudo linux/setup.sh --install
+      target: /opt/machine-runner-swarm
       read_only: true
 
 services:
@@ -77,7 +77,7 @@ services:
     environment:
       <<: *env
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-default-{{.Task.Slot}}"   # unique, at most 64 characters
-      SMR_JOB_SUDO: "true"   # jobs keep the image's passwordless sudo (and can then read the runner token)
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"   # jobs keep the image's passwordless sudo (and can then read the runner token)
     secrets:
       - source: linux-default-token
         target: circleci_runner_config.yaml
@@ -102,7 +102,7 @@ services:
     environment:
       <<: *env
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-java-{{.Task.Slot}}"
-      SMR_JOB_SUDO: "true"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
     secrets:
       - source: linux-java-token
         target: circleci_runner_config.yaml
@@ -129,7 +129,7 @@ services:
     environment:
       <<: *env
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-hardened-{{.Task.Slot}}"
-      SMR_JOB_SUDO: "false"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "false"
     secrets:
       - source: linux-hardened-token
         target: circleci_runner_config.yaml

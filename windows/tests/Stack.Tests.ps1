@@ -56,27 +56,27 @@ Describe 'the stack files' {
     }
 
     It 'have no entrypoint script anywhere' {
-        $script:allText | Should -Not -Match 'smr-entrypoint'
+        $script:allText | Should -Not -Match 'circleci-runner-entrypoint'
         $script:allText | Should -Not -Match 'powershell\.exe'
     }
 
     It 'run circleci-runner.exe directly with --config on the secret, from the stock anchor in each file' {
         # custom-image.yaml has only a baked-image service, so it has no stock anchor.
         foreach ($name in 'runners.yaml', 'persistent.yaml', 'docker-build.yaml') {
-            $script:files[$name] | Should -Match "(?m)^x-stock: &stock\r?\n  entrypoint: \['C:\\smr\\bin\\circleci-runner\.exe', machine, '--config', 'C:\\ProgramData\\Docker\\secrets\\circleci_runner_config\.yaml'\]"
+            $script:files[$name] | Should -Match "(?m)^x-stock: &stock\r?\n  entrypoint: \['C:\\machine-runner-swarm\\bin\\circleci-runner\.exe', machine, '--config', 'C:\\ProgramData\\Docker\\secrets\\circleci_runner_config\.yaml'\]"
         }
         foreach ($s in $script:stockServices) { $script:blocks[$s] | Should -Match '<<: \[\*runner, \*stock\]' }
         # A baked image has the runner as its ENTRYPOINT: no entrypoint, no mount and no PATH in its service.
-        $script:blocks['windows-custom'] | Should -Not -Match 'entrypoint|\*stock|PATH:|\*smr-mount|\*git-mount'
-        $script:files['custom-image.yaml'] | Should -Not -Match 'x-stock|x-smr-mount|x-git-mount|x-stock-env'
+        $script:blocks['windows-custom'] | Should -Not -Match 'entrypoint|\*stock|PATH:|\*runner-mount|\*git-mount'
+        $script:files['custom-image.yaml'] | Should -Not -Match 'x-stock|x-runner-mount|x-git-mount|x-stock-env'
     }
 
     It 'mount the runner and Git read-only, Git at the path the task agent hard-codes' -TestCases @(
         @{ Service = 'windows-default' }, @{ Service = 'windows-persistent' }, @{ Service = 'windows-docker-build' }
     ) {
         param($Service)
-        $script:blocks[$Service] | Should -Match '- \*smr-mount\r?\n      - \*git-mount'
-        $script:files[$script:fileOf[$Service]] | Should -Match "(?m)^x-git-mount: &git-mount.*\r?\n  type: bind\r?\n  source: '\`$\{SMR_DIR:-C:\\smr\}\\git'\r?\n  target: 'C:\\Program Files\\Git'\r?\n  read_only: true"
+        $script:blocks[$Service] | Should -Match '- \*runner-mount\r?\n      - \*git-mount'
+        $script:files[$script:fileOf[$Service]] | Should -Match "(?m)^x-git-mount: &git-mount.*\r?\n  type: bind\r?\n  source: '\`$\{MACHINE_RUNNER_SWARM_DIR:-C:\\machine-runner-swarm\}\\git'\r?\n  target: 'C:\\Program Files\\Git'\r?\n  read_only: true"
     }
 
     It 'spell out PATH for stock services: Windows first, then Git cmd, usr\bin and ucrt64\bin' {
@@ -111,9 +111,9 @@ Describe 'the stack files' {
 
     It 'place classes on the matching Windows build, and the optional ones only on labelled nodes' {
         foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Match 'node\.platform\.os == windows' }
-        foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Match 'node\.labels\.windows\.build == ltsc2022' }
-        $script:blocks['windows-docker-build'] | Should -Match 'node\.labels\.smr\.docker-build == true'
-        $script:blocks['windows-persistent'] | Should -Match 'node\.labels\.smr\.class\.windows-persistent == true'
+        foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Match 'node\.labels\.machine-runner-swarm\.windows-build == ltsc2022' }
+        $script:blocks['windows-docker-build'] | Should -Match 'node\.labels\.machine-runner-swarm\.docker-build == true'
+        $script:blocks['windows-persistent'] | Should -Match 'node\.labels\.machine-runner-swarm\.class\.windows-persistent == true'
         $script:blocks['windows-docker-build'] | Should -Match ([regex]::Escape('type: npipe') + '\r?\n        ' + [regex]::Escape("source: '\\.\pipe\docker_engine'"))
     }
 

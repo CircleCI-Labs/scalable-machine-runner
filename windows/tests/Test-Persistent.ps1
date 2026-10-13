@@ -13,11 +13,11 @@
       continuous-mode        the container runs in continuous mode with no idle timeout set
       stays-up               the container is still running (no job, no idle exit) after StayUpSeconds
       volume-survives        after the container is removed, Swarm starts a NEW container (different
-                             COMPUTERNAME and SMR_INSTANCE_ID) and it finds the first container's marker
+                             COMPUTERNAME and MACHINE_RUNNER_SWARM_INSTANCE_ID) and it finds the first container's marker
 
     "The same container across jobs" itself needs real jobs: run the end-to-end with
     CIRCLECI_RUNNER_MODE=continuous in windows\tests\stack.e2e.yaml and expect the two probe jobs to report the
-    SAME SMR_INSTANCE_ID (and to find each other's residue). See docs/ci.md.
+    SAME MACHINE_RUNNER_SWARM_INSTANCE_ID (and to find each other's residue). See docs/ci.md.
 
     Prints "CHECK ..." lines and "RESULT persistent ..."; exits 0 only if everything passed.
 
@@ -36,12 +36,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-Import-Module (Join-Path $here 'SmrTestHelpers.psm1') -Force
-if (-not $Image) { $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SmrWindowsTag) }
+Import-Module (Join-Path $here 'SwarmTestHelpers.psm1') -Force
+if (-not $Image) { $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SwarmWindowsTag) }
 
 function Invoke-Docker {
     param([string[]] $ArgumentList)
-    return (Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList $ArgumentList)
+    return (Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList $ArgumentList)
 }
 
 function Get-ServiceContainer {
@@ -65,23 +65,23 @@ function Get-Identity {
     return $r
 }
 
-$work = Join-Path ([System.IO.Path]::GetTempPath()) "smr-persist-$PID"
+$work = Join-Path ([System.IO.Path]::GetTempPath()) "swarm-persist-$PID"
 $fixtures = Join-Path $work 'fixtures'
-$null = Initialize-SmrFakeRunner -OutputDirectory $fixtures -SourcePath (Join-Path $here 'fixtures\FakeRunner.cs')
+$null = Initialize-SwarmFakeRunner -OutputDirectory $fixtures -SourcePath (Join-Path $here 'fixtures\FakeRunner.cs')
 $swarm = $null
-$stack = "smrpersist$PID"
+$stack = "swarmpersist$PID"
 $service = "${stack}_runner"
-$volume = "smr-persist-cache-$PID"
+$volume = "swarm-persist-cache-$PID"
 try {
-    $swarm = Initialize-SmrSwarm -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
+    $swarm = Initialize-SwarmCluster -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
     $iso = ''
     if ($Isolation -ne 'default') { $iso = "    isolation: $Isolation" }
     $yaml = @(
         'services:', '  runner:', "    image: $Image", $iso,
-        '    entrypoint: [''C:\smr-test\FakeRunner.exe'', machine]',
-        '    environment:', '      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-persistent-{{.Task.Slot}}"', '      SMR_INSTANCE_ID: "{{.Task.ID}}"',
+        '    entrypoint: [''C:\swarm-test\FakeRunner.exe'', machine]',
+        '    environment:', '      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-persistent-{{.Task.Slot}}"', '      MACHINE_RUNNER_SWARM_INSTANCE_ID: "{{.Task.ID}}"',
         '      CIRCLECI_RUNNER_MODE: continuous', '      FAKE_JOB_SECONDS: "3600"', '      FAKE_MARKER_DIR: ''C:\cache''',
-        '    volumes:', '      - type: bind', "        source: '$fixtures'", "        target: 'C:\smr-test'", '        read_only: true',
+        '    volumes:', '      - type: bind', "        source: '$fixtures'", "        target: 'C:\swarm-test'", '        read_only: true',
         '      - type: volume', "        source: $volume", "        target: 'C:\cache'",
         '    deploy:', '      replicas: 1', '      endpoint_mode: dnsrr', '      restart_policy:', '        condition: any', '        delay: 2s',
         'volumes:', "  ${volume}:", "    name: $volume") | Where-Object { $_ -ne '' }
@@ -92,23 +92,23 @@ try {
 
     # --- the first container -----------------------------------------------------------------------
     $first = ''
-    $null = Wait-SmrCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 3 -Condition {
+    $null = Wait-SwarmCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 3 -Condition {
         $ids = @(Get-ServiceContainer -Service $service)
         if ($ids.Count -gt 0 -and (((Invoke-Docker @('logs', $ids[0])).Output -join "`n") -match 'FAKERUNNER markers=')) { $script:first = $ids[0]; $true } else { $false }
     }
     $firstLog = @()
     if ($first) { $firstLog = (Invoke-Docker @('logs', $first)).Output }
     $a = Get-Identity -LogLine $firstLog
-    Write-SmrCheck 'continuous-mode' ($first -ne '' -and $a.Mode -eq 'continuous' -and $a.Idle -eq '') "container=$($first.Substring(0, [Math]::Min(12, $first.Length))) mode=$($a.Mode) idle_timeout='$($a.Idle)' markers_at_start=$($a.Markers.Count)"
+    Write-SwarmCheck 'continuous-mode' ($first -ne '' -and $a.Mode -eq 'continuous' -and $a.Idle -eq '') "container=$($first.Substring(0, [Math]::Min(12, $first.Length))) mode=$($a.Mode) idle_timeout='$($a.Idle)' markers_at_start=$($a.Markers.Count)"
 
     Start-Sleep -Seconds $StayUpSeconds
     $still = @(Get-ServiceContainer -Service $service)
-    Write-SmrCheck 'stays-up' ($first -ne '' -and $still -contains $first) "running_after_${StayUpSeconds}s=$($still -contains $first) containers=$($still.Count)"
+    Write-SwarmCheck 'stays-up' ($first -ne '' -and $still -contains $first) "running_after_${StayUpSeconds}s=$($still -contains $first) containers=$($still.Count)"
 
     # --- remove it: Swarm must start a new container that finds the volume's content ------------------
     $null = Invoke-Docker @('rm', '--force', $first)
     $second = ''
-    $null = Wait-SmrCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 3 -Condition {
+    $null = Wait-SwarmCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 3 -Condition {
         $ids = @(Get-ServiceContainer -Service $service | Where-Object { $_ -ne $first })
         if ($ids.Count -gt 0 -and (((Invoke-Docker @('logs', $ids[0])).Output -join "`n") -match 'FAKERUNNER markers=')) { $script:second = $ids[0]; $true } else { $false }
     }
@@ -116,17 +116,17 @@ try {
     if ($second) { $secondLog = (Invoke-Docker @('logs', $second)).Output }
     $b = Get-Identity -LogLine $secondLog
     $different = ($b.Computer -ne '' -and $b.Computer -ne $a.Computer -and $b.Instance -ne '' -and $b.Instance -ne $a.Instance)
-    Write-SmrCheck 'volume-survives' ($second -ne '' -and $different -and $a.Markers.Count -eq 0 -and $b.Markers.Count -ge 1) `
+    Write-SwarmCheck 'volume-survives' ($second -ne '' -and $different -and $a.Markers.Count -eq 0 -and $b.Markers.Count -ge 1) `
         "new_container=$different markers_seen_by_second=$($b.Markers.Count) first_computer=$($a.Computer) second_computer=$($b.Computer)"
 } finally {
     $null = Invoke-Docker @('stack', 'rm', $stack)
-    $null = Wait-SmrCondition -TimeoutSeconds 90 -IntervalSeconds 3 -Condition { @(Get-ServiceContainer -Service $service).Count -eq 0 }
-    $null = Wait-SmrCondition -TimeoutSeconds 60 -IntervalSeconds 3 -Condition { (Invoke-Docker @('volume', 'rm', $volume)).ExitCode -eq 0 }
+    $null = Wait-SwarmCondition -TimeoutSeconds 90 -IntervalSeconds 3 -Condition { @(Get-ServiceContainer -Service $service).Count -eq 0 }
+    $null = Wait-SwarmCondition -TimeoutSeconds 60 -IntervalSeconds 3 -Condition { (Invoke-Docker @('volume', 'rm', $volume)).ExitCode -eq 0 }
     if ($swarm -and $swarm.Initialised) { $null = Invoke-Docker @('swarm', 'leave', '--force') }
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-$count = Get-SmrCheckCount
+$count = Get-SwarmCheckCount
 $verdict = 'PASS'
 if ($count.Failed -gt 0) { $verdict = 'FAIL' }
 [Console]::Out.WriteLine("RESULT persistent checks=$($count.Checks) failed=$($count.Failed) verdict=$verdict")

@@ -3,10 +3,10 @@
     Job A of the Windows e2e (see docs/ci.md): hosts the runner as a Docker Swarm service.
 
 .DESCRIPTION
-    -Mode Prepare  Stage C:\smr with windows\Setup.ps1 -StageOnly, pull the stock image, build
+    -Mode Prepare  Stage C:\machine-runner-swarm with windows\Setup.ps1 -StageOnly, pull the stock image, build
                    windows\images\stop-timeout from it (stock Server Core plus a registry value that
                    lets a running job finish when the container is stopped), then
-                   `Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the windows.build
+                   `Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the machine-runner-swarm.windows-build
                    node label). The order matters: the network is down for a few seconds after
                    the swarm is created.
     -Mode Run      Deploy the stack with the stop-timeout image and host three single-task jobs:
@@ -24,7 +24,7 @@
     The stack is the shipped one (-StackFile) with the image tag of the host's Windows build
     (-WindowsTag, default ltsc2022; the shipped stack names ltsc2022) and an override layered on
     top: the e2e service runs one replica, every other service none. The runner and Git come
-    from the host through the read-only C:\smr mount the shipped stack already declares.
+    from the host through the read-only C:\machine-runner-swarm mount the shipped stack already declares.
 
     The token comes from E2E_RUNNER_TOKEN_WINDOWS (scalable-machine-runner-e2e context). The
     Swarm secret windows-default-token holds the runner config (api.auth_token). It is written to
@@ -41,7 +41,7 @@ param(
     [string] $Service = 'windows-default',
     [string] $Image = '',
     [string] $WindowsTag = '',
-    [string] $Stack = 'smr',
+    [string] $Stack = 'runners',
     [string] $Root = 'C:\e2e',
     [string] $IdleTimeout = '5m',
     [string] $MaxRunTime = '15m',
@@ -61,7 +61,7 @@ $fullService = "${Stack}_${Service}"
 # The image of the service under test: stock Server Core plus the stop timeout (built by Prepare).
 $stockImage = if ($Image) { $Image } else { $null }
 $tag = if ($WindowsTag) { $WindowsTag } elseif ($env:E2E_WINDOWS_TAG) { $env:E2E_WINDOWS_TAG } else { 'ltsc2022' }
-if (-not $stockImage) { $stockImage = "smr-e2e/servercore-stop:$tag" }
+if (-not $stockImage) { $stockImage = "swarm-e2e/servercore-stop:$tag" }
 $runnerIdle = $IdleTimeout
 $runnerMaxRun = $MaxRunTime
 $deadline = $DeadlineSeconds
@@ -193,19 +193,19 @@ function Invoke-Prepare {
     Write-E2ELog "docker build windows\images\stop-timeout -> $stockImage"
     Invoke-Docker build -f (Join-Path $repo 'windows\images\stop-timeout\Dockerfile') --build-arg "WINDOWS_TAG=$tag" -t $stockImage (Join-Path $repo 'windows\images\stop-timeout') | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure "docker build of windows\images\stop-timeout failed" }
-    # The shipped helper: docker swarm init and the windows.build node label (it stages first and
-    # finds C:\smr staged).
+    # The shipped helper: docker swarm init and the machine-runner-swarm.windows-build node label (it stages first and
+    # finds C:\machine-runner-swarm staged).
     $ip = Get-AdvertiseAddress
     Write-E2ELog "windows\Setup.ps1 -InitSwarm -AdvertiseAddr $ip"
     & (Join-Path $repo 'windows\Setup.ps1') -InitSwarm -AdvertiseAddr $ip
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure "windows\Setup.ps1 -InitSwarm exited $LASTEXITCODE" }
     Invoke-Docker node ls | ForEach-Object { Write-Host $_ }
     Invoke-Docker node inspect self --format '{{json .Spec.Labels}}' | ForEach-Object { Write-Host "node labels: $_" }
-    Get-ChildItem C:\smr -Recurse -Depth 2 | Select-Object -First 40 | ForEach-Object { Write-Host $_.FullName }
-    & C:\smr\bin\circleci-runner.exe --version
+    Get-ChildItem C:\machine-runner-swarm -Recurse -Depth 2 | Select-Object -First 40 | ForEach-Object { Write-Host $_.FullName }
+    & C:\machine-runner-swarm\bin\circleci-runner.exe --version
 }
 function Install-Layout {
-    # Stage C:\smr with the shipped helper (runner, portable Git, ACLs). Stage first: the downloads
+    # Stage C:\machine-runner-swarm with the shipped helper (runner, portable Git, ACLs). Stage first: the downloads
     # must not run right after `docker swarm init`, which rebuilds the host's virtual network.
     $setup = Join-Path $repo 'windows\Setup.ps1'
     if (-not (Test-Path $setup)) { throw "$setup is missing" }
@@ -393,16 +393,16 @@ function Test-Evidence {
         $p = $probes[$n]
         $ev = Get-EvidencePath $p
         $names[$p] = Get-EvidenceField $ev 'hostname'
-        $instances[$p] = Get-EvidenceField $ev 'smr_instance_id'
-        # The stack sets SMR_INSTANCE_ID to the Swarm task ID: each probe ran in the task Swarm started for it.
+        $instances[$p] = Get-EvidenceField $ev 'swarm_instance_id'
+        # The stack sets MACHINE_RUNNER_SWARM_INSTANCE_ID to the Swarm task ID: each probe ran in the task Swarm started for it.
         if ($startList.Count -gt $n) {
-            if (-not $instances[$p] -or $instances[$p] -ne $startList[$n].TaskId) { Write-E2ELog "$p did not run in task $($n + 1) of Swarm (SMR_INSTANCE_ID '$($instances[$p])', task '$($startList[$n].TaskId)')"; $ok = $false }
+            if (-not $instances[$p] -or $instances[$p] -ne $startList[$n].TaskId) { Write-E2ELog "$p did not run in task $($n + 1) of Swarm (MACHINE_RUNNER_SWARM_INSTANCE_ID '$($instances[$p])', task '$($startList[$n].TaskId)')"; $ok = $false }
             # The computer name is the container ID's first 12 characters, in upper case.
             if (-not $names[$p] -or -not $startList[$n].Id.StartsWith($names[$p], [StringComparison]::OrdinalIgnoreCase)) { Write-E2ELog "computer name '$($names[$p])' of $p is not container $($n + 1) of Swarm"; $ok = $false }
         }
     }
     if (@($names.Values | Select-Object -Unique).Count -ne $probes.Count) { Write-E2ELog "the probes must run in different containers (computer names: $($names.Values -join ' '))"; $ok = $false }
-    if (@($instances.Values | Select-Object -Unique).Count -ne $probes.Count) { Write-E2ELog 'SMR_INSTANCE_ID must differ between the probes'; $ok = $false }
+    if (@($instances.Values | Select-Object -Unique).Count -ne $probes.Count) { Write-E2ELog 'MACHINE_RUNNER_SWARM_INSTANCE_ID must differ between the probes'; $ok = $false }
 
     # b3: the stop must not have ended the job. Its container is container 3: it died after the job finished.
     $ev3 = Get-EvidencePath 'b3'

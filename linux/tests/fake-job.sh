@@ -1,5 +1,5 @@
 #!/bin/sh
-# Stand-in for a CircleCI job (installed as /opt/smr/bin/fake-job). Reports the residue that earlier
+# Stand-in for a CircleCI job (installed as /opt/machine-runner-swarm/bin/fake-job). Reports the residue that earlier
 # jobs left in this container, then leaves residue everywhere a real job could: $HOME, /tmp, the
 # runner working directory and (through sudo, when the job has it) /etc.
 # The container identity is a hash of the overlay upperdir, so a reused container is recognised even

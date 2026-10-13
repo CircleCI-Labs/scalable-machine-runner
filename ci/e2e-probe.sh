@@ -7,11 +7,11 @@
 # 1. Report residue that an earlier job left outside the working directory
 #    ($HOME, /tmp, /var/tmp and, through sudo when the image allows it, /etc).
 # 2. With --previous: read that probe's evidence and require that this job runs in a
-#    different container (container ID, SMR_INSTANCE_ID and the overlay upper directory must
+#    different container (container ID, MACHINE_RUNNER_SWARM_INSTANCE_ID and the overlay upper directory must
 #    all differ).
 # 3. Leave residue in the same places for the next job.
 # 4. Try to read the runner token as the job user, without and with sudo, and record the
-#    outcome. With --expect-sudo false (the hardened service, SMR_JOB_SUDO=false) the job
+#    outcome. With --expect-sudo false (the hardened service, MACHINE_RUNNER_SWARM_JOB_SUDO=false) the job
 #    must not be able to read the token and sudo must give no rights.
 # 5. Write evidence for the host job (job A) to /e2e-evidence/PROBE_ID.WORKFLOW_ID.
 #
@@ -39,7 +39,7 @@ case ${expect_sudo} in true | false) ;; *) echo "--expect-sudo must be true or f
 ev_dir=${E2E_EVIDENCE_DIR:-/e2e-evidence}
 token_file=${E2E_TOKEN_FILE:-/run/secrets/circleci_runner_config.yaml}
 wf=${CIRCLE_WORKFLOW_ID:?CIRCLE_WORKFLOW_ID is not set (run this as a CircleCI job)}
-marker_name=.smr-e2e-marker
+marker_name=.swarm-e2e-marker
 failures=()
 
 fail() {
@@ -62,16 +62,16 @@ layer=$(grep ' / / ' /proc/self/mountinfo | grep -oE 'upperdir=[^,]+' | md5sum |
 # Docker bind-mounts /etc/hostname from /var/lib/docker/containers/<container ID>/hostname, so
 # the full container ID is readable inside (the stack sets the hostname to a per-slot name).
 container_id=$(grep -m1 ' /etc/hostname ' /proc/self/mountinfo | grep -oE '/containers/[0-9a-f]{64}/' | cut -d/ -f3 || true)
-instance=${SMR_INSTANCE_ID:-}
+instance=${MACHINE_RUNNER_SWARM_INSTANCE_ID:-}
 job_user=$(id -un 2>/dev/null || echo "?")
 
 echo "probe=${probe} user=${job_user}($(id -u)) hostname=${container} expect_sudo=${expect_sudo}"
-echo "container_id=${container_id:-<unknown>} layer=${layer} smr_instance_id=${instance:-<unset>} workdir=$(pwd)"
+echo "container_id=${container_id:-<unknown>} layer=${layer} swarm_instance_id=${instance:-<unset>} workdir=$(pwd)"
 [ "$(id -u)" -ne 0 ] || fail "the job runs as root; jobs must run as an unprivileged job user"
-# (smr-entrypoint no longer exports SMR_INSTANCE_ID: the container ID and the layer identify a container.)
+# (circleci-runner-entrypoint no longer exports MACHINE_RUNNER_SWARM_INSTANCE_ID: the container ID and the layer identify a container.)
 
 # 1. Residue from an earlier job.
-candidates=("${HOME}/${marker_name}" "/tmp/${marker_name}" "/var/tmp/${marker_name}" "/etc/smr-e2e-marker")
+candidates=("${HOME}/${marker_name}" "/tmp/${marker_name}" "/var/tmp/${marker_name}" "/etc/swarm-e2e-marker")
 residue=()
 for m in "${candidates[@]}"; do
   if [ -e "${m}" ]; then
@@ -89,9 +89,9 @@ if [ -n "${previous}" ]; then
   else
     prev_container=$(sed -n 's/^container_id=//p' "${prev_file}")
     prev_layer=$(sed -n 's/^layer=//p' "${prev_file}")
-    prev_instance=$(sed -n 's/^smr_instance_id=//p' "${prev_file}")
-    echo "previous probe ${previous}: container_id=${prev_container:-<unknown>} layer=${prev_layer} smr_instance_id=${prev_instance}"
-    [ -z "${instance}" ] || [ "${prev_instance}" != "${instance}" ] || fail "same SMR_INSTANCE_ID as ${previous}: the container was reused"
+    prev_instance=$(sed -n 's/^swarm_instance_id=//p' "${prev_file}")
+    echo "previous probe ${previous}: container_id=${prev_container:-<unknown>} layer=${prev_layer} swarm_instance_id=${prev_instance}"
+    [ -z "${instance}" ] || [ "${prev_instance}" != "${instance}" ] || fail "same MACHINE_RUNNER_SWARM_INSTANCE_ID as ${previous}: the container was reused"
     [ -n "${container_id}" ] || fail "cannot read the container ID from /proc/self/mountinfo"
     [ "${prev_container}" != "${container_id}" ] || fail "same container ID as ${previous}: the container was reused"
     [ "${prev_layer}" != "${layer}" ] || fail "same writable layer as ${previous}: the container was reused"
@@ -108,8 +108,8 @@ done
 sudo_works=no
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
   sudo_works=yes
-  if printf '%s %s\n' "${probe}" "${wf}" | sudo -n tee /etc/smr-e2e-marker >/dev/null 2>&1; then
-    planted+=(/etc/smr-e2e-marker)
+  if printf '%s %s\n' "${probe}" "${wf}" | sudo -n tee /etc/swarm-e2e-marker >/dev/null 2>&1; then
+    planted+=(/etc/swarm-e2e-marker)
   fi
 else
   echo "note: no passwordless sudo here; /etc is not exercised"
@@ -198,7 +198,7 @@ tmp="${ev_dir}/.${probe}.${wf}.tmp"
   echo "hostname=${container}"
   echo "container_id=${container_id}"
   echo "layer=${layer}"
-  echo "smr_instance_id=${instance}"
+  echo "swarm_instance_id=${instance}"
   echo "uid=$(id -u)"
   echo "user=${job_user}"
   echo "runner_user=${runner_user:-}"

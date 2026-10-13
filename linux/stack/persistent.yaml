@@ -1,12 +1,12 @@
 # Optional class: a persistent runner. Deploy with an extra -c flag, after editing the hostname below:
-#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml smr
+#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml runners
 # Create the secret first (same format as in runners.yaml): linux-persistent-token.
 #
 # Continuous mode runs many jobs in ONE long-lived container, so state from one job (files, installed
 # tools, processes) is visible to the next, and a job can change what later jobs see. Use it only for
 # trusted projects that need warm caches: give it its own resource class restricted to those projects
 # (config policy), keep production contexts away from it, put cleanup steps at the start of its jobs (the
-# runner does not clean the working directory), and recycle it regularly (docker service update --force smr_linux-persistent; it drains first).
+# runner does not clean the working directory), and recycle it regularly (docker service update --force runners_linux-persistent; it drains first).
 # The named volume lives on ONE node, so the service is pinned to it with node.hostname. Keep the
 # common settings in sync with runners.yaml.
 
@@ -14,7 +14,7 @@ services:
   linux-persistent:
     image: cimg/base:2026.10
     user: "0"
-    entrypoint: ["/opt/smr/bin/smr-entrypoint"]
+    entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]
     init: true
     stop_grace_period: 5h5m
     hostname: "{{.Node.Hostname}}-linux-persistent-{{.Task.Slot}}"
@@ -25,7 +25,7 @@ services:
       # directory ("failed to remove working directory"): jobs on this class clean up after themselves.
       CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"
       CIRCLECI_RUNNER_LOGGING_FORMAT: text
-      SMR_JOB_SUDO: "true"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
     secrets:
       - source: linux-persistent-token
         target: circleci_runner_config.yaml
@@ -42,11 +42,11 @@ services:
       options: {max-size: 20m, max-file: "3"}
     volumes:
       - type: bind
-        source: /opt/smr
-        target: /opt/smr
+        source: /opt/machine-runner-swarm
+        target: /opt/machine-runner-swarm
         read_only: true
       - type: volume
-        source: smr-persistent-home   # caches (~/.gradle, ~/.npm, ...) survive container replacement
+        source: persistent-home   # caches (~/.gradle, ~/.npm, ...) survive container replacement
         target: /home/circleci
     deploy:
       replicas: 1
@@ -64,7 +64,7 @@ networks:
   linux-persistent: {driver: overlay}
 
 volumes:
-  smr-persistent-home: {}
+  persistent-home: {}
 
 secrets:
   linux-persistent-token: {external: true}

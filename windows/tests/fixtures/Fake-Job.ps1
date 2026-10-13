@@ -18,14 +18,14 @@ $fileMarkers = @(
     (Join-Path $env:USERPROFILE '.job-marker'),
     (Join-Path $env:TEMP '.job-marker'),
     'C:\cci\w\.job-marker',
-    'C:\ProgramData\smr-job-marker'
+    'C:\ProgramData\swarm-job-marker'
 )
-$regMarkers = @('HKCU:\Software\SmrJobMarker', 'HKLM:\SOFTWARE\SmrJobMarker')
+$regMarkers = @('HKCU:\Software\SwarmJobMarker', 'HKLM:\SOFTWARE\SwarmJobMarker')
 
 $seen = New-Object System.Collections.Generic.List[string]
 foreach ($f in $fileMarkers) { if (Test-Path -LiteralPath $f) { $seen.Add($f) } }
 foreach ($k in $regMarkers) { if (Test-Path -LiteralPath $k) { $seen.Add($k) } }
-if ([Environment]::GetEnvironmentVariable('SMR_JOB_MARKER', 'Machine')) { $seen.Add('env:Machine\SMR_JOB_MARKER') }
+if ([Environment]::GetEnvironmentVariable('SWARM_TEST_JOB_MARKER', 'Machine')) { $seen.Add('env:Machine\SWARM_TEST_JOB_MARKER') }
 
 $volumeId = $null
 try { $volumeId = (Get-CimInstance -ClassName Win32_Volume -Filter "DriveLetter='C:'" -ErrorAction Stop).DeviceID } catch { $volumeId = $null }
@@ -52,5 +52,5 @@ foreach ($f in $fileMarkers) {
 foreach ($k in $regMarkers) {
     try { New-Item -Path $k -Force -ErrorAction Stop | Out-Null } catch { $null = $_ }
 }
-try { [Environment]::SetEnvironmentVariable('SMR_JOB_MARKER', 'residue', 'Machine') } catch { $null = $_ }
+try { [Environment]::SetEnvironmentVariable('SWARM_TEST_JOB_MARKER', 'residue', 'Machine') } catch { $null = $_ }
 exit 0

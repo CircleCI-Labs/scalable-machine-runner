@@ -1,4 +1,4 @@
-# Scalable machine runner for Docker Swarm
+# Machine runner swarm: CircleCI machine runner 3 on Docker Swarm
 
 Run CircleCI machine runner 3 as Docker Swarm services. Each service is one resource class, `deploy.replicas` sets how many runners it has, and every job runs in a new container.
 
@@ -89,7 +89,7 @@ Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https:
    done
    ```
 
-2. As root, install the runner and the entrypoint into `/opt/smr`.
+2. As root, install the runner and the entrypoint into `/opt/machine-runner-swarm`.
 
    ```bash
    repo=$PWD; v=3.1.12
@@ -99,9 +99,9 @@ Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https:
    curl -fsSLO --proto '=https' --tlsv1.2 "$base/$v/circleci-runner_linux_$arch.tar.gz"
    curl -fsSL --proto '=https' --tlsv1.2 "$base/$v/checksums.txt" | grep "linux_$arch.tar.gz" | sha256sum -c -
    tar -xzf "circleci-runner_linux_$arch.tar.gz" --no-same-owner circleci-runner
-   install -d -m 0755 -o root -g root /opt/smr /opt/smr/bin
-   install -m 0755 -o root -g root circleci-runner "$repo/linux/entrypoint/smr-entrypoint" /opt/smr/bin/
-   echo "$v" > /opt/smr/VERSION
+   install -d -m 0755 -o root -g root /opt/machine-runner-swarm /opt/machine-runner-swarm/bin
+   install -m 0755 -o root -g root circleci-runner "$repo/linux/entrypoint/circleci-runner-entrypoint" /opt/machine-runner-swarm/bin/
+   echo "$v" > /opt/machine-runner-swarm/VERSION
    cd "$repo"
    ```
 
@@ -124,8 +124,8 @@ Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https:
 5. Deploy the stack, and check that the replicas run.
 
    ```bash
-   docker stack deploy -c linux/stack/runners.yaml smr
-   docker stack services smr
+   docker stack deploy -c linux/stack/runners.yaml runners
+   docker stack services runners
    ```
 
 6. Run a job on the class:
@@ -140,7 +140,7 @@ Prerequisites: Docker Engine 24 or later, root access, the [CircleCI CLI](https:
          - run: echo "runner $CIRCLECI_RUNNER_NAME"
    ```
 
-Windows works the same way with `windows/stack/runners.yaml`. Two things differ. Stage `C:\smr` before you start Swarm. Run the stock-image services on the stop-timeout image, so that a stop does not kill a running job. Refer to [Install on Windows Server with Docker Swarm](docs/install-windows.md).
+Windows works the same way with `windows/stack/runners.yaml`. Two things differ. Stage `C:\machine-runner-swarm` before you start Swarm. Run the stock-image services on the stop-timeout image, so that a stop does not kill a running job. Refer to [Install on Windows Server with Docker Swarm](docs/install-windows.md).
 
 ## Supported platforms
 
@@ -165,7 +165,7 @@ Windows works the same way with `windows/stack/runners.yaml`. Two things differ.
 
 - The resource class token is a Swarm secret. It reaches the container as a file, and it is never in an environment variable or a stack file.
 - **Linux default classes** give jobs passwordless sudo, like the Docker executor. A job that uses sudo can read the token. The protection is against accidental exposure.
-- **Linux hardened classes** (`SMR_JOB_SUDO=false`) remove sudo, so the token is unreadable from jobs.
+- **Linux hardened classes** (`MACHINE_RUNNER_SWARM_JOB_SUDO=false`) remove sudo, so the token is unreadable from jobs.
 - **Windows classes** run jobs and the runner as the same account, so a job can read the token. Swarm stores a Windows secret in clear text on the container disk. Treat each class as a trust boundary, and enable BitLocker on the Docker volume.
 - **Docker builds are opt-in.** A job that reaches the Docker engine has root on the node. The build classes run only on dedicated worker nodes.
 - **Persistent classes** give up the clean environment. Use them only for trusted projects.

@@ -7,22 +7,22 @@
 # `docker swarm init` directly, but the same scripts work there too.
 #
 # Sessions: a test script run on its own starts and removes its own DinD containers. run-all.sh
-# starts them once (images are large), exports SMR_SESSION_ACTIVE=1 and the container names, and
+# starts them once (images are large), exports SWARM_TEST_SESSION_ACTIVE=1 and the container names, and
 # every test then only resets the inner Swarm (stack, secrets, containers) before it starts.
 #
-# Environment: SMR_DIND_IMAGE (default docker:29-dind), SMR_CIMG_IMAGE (default cimg/base:2026.10, the
-# image of the stack's classes), SMR_TEST_CACHE (default ~/.cache/smr-tests: the real runner binary),
-# SMR_KEEP=1 (keep DinD containers for debugging).
+# Environment: SWARM_TEST_DIND_IMAGE (default docker:29-dind), SWARM_TEST_CIMG_IMAGE (default cimg/base:2026.10, the
+# image of the stack's classes), SWARM_TEST_CACHE (default ~/.cache/swarm-tests: the real runner binary),
+# SWARM_TEST_KEEP=1 (keep DinD containers for debugging).
 # shellcheck disable=SC2034  # variables are used by the scripts that source this file
 
 tests_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_dir=$(cd "$tests_dir/../.." && pwd)
 stack_dir=$repo_dir/linux/stack
-DIND_IMAGE=${SMR_DIND_IMAGE:-docker:29-dind}
-CIMG_IMAGE=${SMR_CIMG_IMAGE:-cimg/base:2026.10}
-cache_dir=${SMR_TEST_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/smr-tests}
+DIND_IMAGE=${SWARM_TEST_DIND_IMAGE:-docker:29-dind}
+CIMG_IMAGE=${SWARM_TEST_CIMG_IMAGE:-cimg/base:2026.10}
+cache_dir=${SWARM_TEST_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/swarm-tests}
 BASE_SERVICES=(linux-default linux-java linux-hardened)   # the services of runners.yaml
-STACK=smr
+STACK=runners
 SENTINEL_TOKEN=SENTINEL-TOKEN-0123456789abcdef
 
 log() { echo "[$(date +%H:%M:%S)] $*" >&2; }
@@ -89,7 +89,7 @@ dind_load() {
 
 dind_stop_all() {
   local c
-  if [[ ${SMR_KEEP:-} == 1 ]]; then return 0; fi
+  if [[ ${SWARM_TEST_KEEP:-} == 1 ]]; then return 0; fi
   for c in "${dind_containers[@]}"; do docker rm -f -v "$c" >/dev/null 2>&1 || true; done
   for c in "${dind_networks[@]}"; do docker network rm "$c" >/dev/null 2>&1 || true; done
 }
@@ -109,46 +109,46 @@ inner_reset() {
 }
 
 # session_begin [--worker]: one Swarm manager (and optionally a worker) with the CIMG image loaded.
-# Sets SMR_MGR (and SMR_WRK). Registers cleanup.
+# Sets SWARM_TEST_MGR (and SWARM_TEST_WRK). Registers cleanup.
 session_begin() {
   local want_worker=false
   [[ ${1:-} == --worker ]] && want_worker=true
   work=$(mktemp -d)
   trap 'dind_stop_all; rm -rf "$work"' EXIT
-  if [[ ${SMR_SESSION_ACTIVE:-} == 1 ]] && { [[ $want_worker == false ]] || [[ -n ${SMR_WRK:-} ]]; }; then
-    inner_reset "$SMR_MGR"
-    if [[ -n ${SMR_WRK:-} ]]; then
+  if [[ ${SWARM_TEST_SESSION_ACTIVE:-} == 1 ]] && { [[ $want_worker == false ]] || [[ -n ${SWARM_TEST_WRK:-} ]]; }; then
+    inner_reset "$SWARM_TEST_MGR"
+    if [[ -n ${SWARM_TEST_WRK:-} ]]; then
       # a worker cannot see the Swarm: only remove what ran on it
-      idocker "$SMR_WRK" ps -aq | xargs -r docker exec -i "$SMR_WRK" docker rm -f >/dev/null 2>&1 || true
-      idocker "$SMR_WRK" volume ls -q | xargs -r docker exec -i "$SMR_WRK" docker volume rm >/dev/null 2>&1 || true
+      idocker "$SWARM_TEST_WRK" ps -aq | xargs -r docker exec -i "$SWARM_TEST_WRK" docker rm -f >/dev/null 2>&1 || true
+      idocker "$SWARM_TEST_WRK" volume ls -q | xargs -r docker exec -i "$SWARM_TEST_WRK" docker volume rm >/dev/null 2>&1 || true
       # only the placement test wants the worker; the others must not schedule tasks onto it
-      idocker "$SMR_MGR" node update --availability "$([[ $want_worker == true ]] && echo active || echo drain)" "$SMR_WRK" >/dev/null
-      idocker "$SMR_MGR" node update --label-rm smr.docker-build "$SMR_WRK" >/dev/null 2>&1 || true
+      idocker "$SWARM_TEST_MGR" node update --availability "$([[ $want_worker == true ]] && echo active || echo drain)" "$SWARM_TEST_WRK" >/dev/null
+      idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.docker-build "$SWARM_TEST_WRK" >/dev/null 2>&1 || true
     fi
-    idocker "$SMR_MGR" node update --label-rm smr.docker-build "$SMR_MGR" >/dev/null 2>&1 || true
+    idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.docker-build "$SWARM_TEST_MGR" >/dev/null 2>&1 || true
     return 0
   fi
   local id=$$ net
-  SMR_MGR=smr-test-mgr-$id
+  SWARM_TEST_MGR=swarm-test-mgr-$id
   if [[ $want_worker == true ]]; then
-    net=smr-test-net-$id
+    net=swarm-test-net-$id
     docker network create "$net" >/dev/null
     dind_networks+=("$net")
-    SMR_WRK=smr-test-wrk-$id
-    dind_start "$SMR_MGR" "$net"
-    dind_start "$SMR_WRK" "$net"
+    SWARM_TEST_WRK=swarm-test-wrk-$id
+    dind_start "$SWARM_TEST_MGR" "$net"
+    dind_start "$SWARM_TEST_WRK" "$net"
     local ip token
-    ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$net\").IPAddress}}" "$SMR_MGR")
-    idocker "$SMR_MGR" swarm init --advertise-addr "$ip" >/dev/null
-    token=$(idocker "$SMR_MGR" swarm join-token -q worker)
-    idocker "$SMR_WRK" swarm join --token "$token" "$ip:2377" >/dev/null
-    dind_load "$SMR_WRK" "$CIMG_IMAGE"
+    ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$net\").IPAddress}}" "$SWARM_TEST_MGR")
+    idocker "$SWARM_TEST_MGR" swarm init --advertise-addr "$ip" >/dev/null
+    token=$(idocker "$SWARM_TEST_MGR" swarm join-token -q worker)
+    idocker "$SWARM_TEST_WRK" swarm join --token "$token" "$ip:2377" >/dev/null
+    dind_load "$SWARM_TEST_WRK" "$CIMG_IMAGE"
   else
-    dind_start "$SMR_MGR"
-    idocker "$SMR_MGR" swarm init --advertise-addr 127.0.0.1 >/dev/null
+    dind_start "$SWARM_TEST_MGR"
+    idocker "$SWARM_TEST_MGR" swarm init --advertise-addr 127.0.0.1 >/dev/null
   fi
-  dind_load "$SMR_MGR" "$CIMG_IMAGE"
-  idocker "$SMR_MGR" swarm update --task-history-limit 20 >/dev/null
+  dind_load "$SWARM_TEST_MGR" "$CIMG_IMAGE"
+  idocker "$SWARM_TEST_MGR" swarm update --task-history-limit 20 >/dev/null
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -168,27 +168,27 @@ real_runner() {
     docker rm -f "$cid" >/dev/null
     fail "setup.sh --install failed"
   }
-  docker cp "$cid:/opt/smr/bin/circleci-runner" "$bin"
+  docker cp "$cid:/opt/machine-runner-swarm/bin/circleci-runner" "$bin"
   docker rm -f "$cid" >/dev/null
   echo "$bin"
 }
 
-# install_smr NODE real|fake: lay out /opt/smr in the DinD container NODE like linux/setup.sh does.
+# install_swarm NODE real|fake: lay out /opt/machine-runner-swarm in the DinD container NODE like linux/setup.sh does.
 # "fake" puts tests/fake-runner.sh where the runner goes; both modes add fake-job.
-install_smr() {
+install_swarm() {
   local node=$1 kind=$2 stage
   stage=$(mktemp -d)
   mkdir -p "$stage/bin"
-  cp "$repo_dir/linux/entrypoint/smr-entrypoint" "$stage/bin/smr-entrypoint"
+  cp "$repo_dir/linux/entrypoint/circleci-runner-entrypoint" "$stage/bin/circleci-runner-entrypoint"
   cp "$tests_dir/fake-job.sh" "$stage/bin/fake-job"
   case $kind in
     real) cp "$(real_runner)" "$stage/bin/circleci-runner" ;;
     fake) cp "$tests_dir/fake-runner.sh" "$stage/bin/circleci-runner" ;;
-    *) fail "install_smr: unknown kind $kind" ;;
+    *) fail "install_swarm: unknown kind $kind" ;;
   esac
-  docker exec "$node" sh -c 'rm -rf /opt/smr && mkdir -p /opt' >/dev/null
-  tar -C "$stage" --owner=0 --group=0 --mode='u=rwx,go=rx' -cf - . | docker exec -i "$node" sh -c 'mkdir -p /opt/smr && tar -C /opt/smr -xf -'
-  docker exec "$node" chmod 0755 /opt/smr /opt/smr/bin
+  docker exec "$node" sh -c 'rm -rf /opt/machine-runner-swarm && mkdir -p /opt' >/dev/null
+  tar -C "$stage" --owner=0 --group=0 --mode='u=rwx,go=rx' -cf - . | docker exec -i "$node" sh -c 'mkdir -p /opt/machine-runner-swarm && tar -C /opt/machine-runner-swarm -xf -'
+  docker exec "$node" chmod 0755 /opt/machine-runner-swarm /opt/machine-runner-swarm/bin
   rm -rf "$stage"
 }
 
@@ -240,7 +240,7 @@ make_override() {
 }
 
 # deploy_stack NODE OVERRIDE_FILE [STACK_FILE...]: copy the real stack file(s) (default runners.yaml) and
-# OVERRIDE_FILE into NODE and deploy them. $SMR_HOST replaces CHANGE-ME in persistent.yaml, the way
+# OVERRIDE_FILE into NODE and deploy them. $SWARM_TEST_HOST replaces CHANGE-ME in persistent.yaml, the way
 # its comment tells a user to edit it.
 deploy_stack() {
   local node=$1 override=$2 f tmp
@@ -250,7 +250,7 @@ deploy_stack() {
   tmp=$(mktemp -d)
   docker exec "$node" mkdir -p /stack
   for f in "$@"; do
-    sed "s/CHANGE-ME/${SMR_HOST:-CHANGE-ME}/" "$stack_dir/$f" > "$tmp/$f"
+    sed "s/CHANGE-ME/${SWARM_TEST_HOST:-CHANGE-ME}/" "$stack_dir/$f" > "$tmp/$f"
     docker cp "$tmp/$f" "$node:/stack/$f"
     args+=(-c "/stack/$f")
   done
@@ -269,7 +269,7 @@ running_container() { idocker "$1" ps -q --filter "label=com.docker.swarm.servic
 # Print what a human would look at first. Tests set DIAG_NODES.
 diagnostics() {
   local n
-  for n in ${DIAG_NODES:-${SMR_MGR:-}}; do
+  for n in ${DIAG_NODES:-${SWARM_TEST_MGR:-}}; do
     echo "--- diagnostics on $n"
     idocker "$n" service ls 2>&1 | head -n 20
     idocker "$n" service ps --no-trunc "$STACK" 2>&1 | head -n 40 || true

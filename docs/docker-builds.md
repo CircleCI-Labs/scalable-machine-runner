@@ -30,7 +30,7 @@ A service of this class bind-mounts the engine endpoint of the node: `/var/run/d
 Four controls limit the damage:
 
 - **Worker nodes only.** The service runs only where `node.role == worker`. On a Swarm manager the socket also controls the Swarm, so a job can create a service that mounts any secret and read the token of every class. A single-node Swarm has only a manager, so do not use pattern A there.
-- **Labeled nodes only.** The service runs only on nodes that carry `smr.docker-build=true`.
+- **Labeled nodes only.** The service runs only on nodes that carry `machine-runner-swarm.docker-build=true`.
 - **No neighbors.** The engine shows every container on the node. Keep other classes off the node. Refer to [Keep the docker-build node to itself](multi-node.md#keep-the-docker-build-node-to-itself).
 - **Trusted projects only.** Restrict the class with a config policy, and keep production contexts away from it. Refer to [CircleCI-side controls](security.md#circleci-side-controls).
 
@@ -38,21 +38,21 @@ State also persists. The images, containers, volumes, and build cache of the hos
 
 ### Deploy on Linux
 
-1. Join a dedicated worker node and install `/opt/smr` on it. Refer to [Multi-Node Clusters](multi-node.md).
+1. Join a dedicated worker node and install `/opt/machine-runner-swarm` on it. Refer to [Multi-Node Clusters](multi-node.md).
 2. Label the node:
 
    ```console
-   $ docker node update --label-add smr.docker-build=true <worker node>
+   $ docker node update --label-add machine-runner-swarm.docker-build=true <worker node>
    ```
 
 3. Create the resource class `<namespace>/linux-docker-build` and the secret `linux-docker-build-token`. Refer to [Resource Classes](resource-classes.md#define-a-class).
 4. Deploy the overlay file with the main file. Pass the same files on every later deploy.
 
    ```console
-   $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml smr
+   $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml runners
    ```
 
-The file `linux/stack/docker-build.yaml` defines `linux-docker-build`. It mounts the socket, and constrains the service to `node.platform.os == linux`, `node.role == worker`, and `node.labels.smr.docker-build == true`. The entrypoint adds the job user to the group of the socket, so jobs need no sudo to run `docker`. The `cimg/base` image includes the Docker CLI.
+The file `linux/stack/docker-build.yaml` defines `linux-docker-build`. It mounts the socket, and constrains the service to `node.platform.os == linux`, `node.role == worker`, and `node.labels.machine-runner-swarm.docker-build == true`. The entrypoint adds the job user to the group of the socket, so jobs need no sudo to run `docker`. The `cimg/base` image includes the Docker CLI.
 
 Use the class in a job:
 
@@ -76,12 +76,12 @@ The file [`examples/linux-docker-build.yml`](../examples/linux-docker-build.yml)
 
 The overlay file `windows\stack\docker-build.yaml` defines `windows-docker-build`. It mounts the named pipe `\\.\pipe\docker_engine`, which `docker stack deploy` supports, and the host directory `C:\Program Files\Docker` at `C:\docker`, read-only. It appends `C:\docker` to the `PATH`. Adjust the bind source if `docker.exe` lives elsewhere on your nodes.
 
-1. Label the node: `docker node update --label-add smr.docker-build=true <node name>`.
+1. Label the node: `docker node update --label-add machine-runner-swarm.docker-build=true <node name>`.
 2. Create the resource class `<namespace>/windows-docker-build` and the secret `windows-docker-build-token`.
 3. Deploy the overlay file with the main file. Pass the same files on every later deploy.
 
    ```powershell
-   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\docker-build.yaml smr
+   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\docker-build.yaml runners
    ```
 
 Jobs can build Windows images only, because the engine runs in Windows-container mode. Linux images cannot be built there. The file [`examples/windows-docker-build.yml`](../examples/windows-docker-build.yml) has a job. Registry credentials for `docker login` and `docker push` belong in a restricted context.

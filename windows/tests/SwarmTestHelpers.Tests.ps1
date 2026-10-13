@@ -2,10 +2,10 @@
 # PowerShell that those tests run inside containers. Runs on Linux or Windows; needs no Docker.
 
 BeforeAll {
-    Import-Module (Join-Path $PSScriptRoot 'SmrTestHelpers.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot 'SwarmTestHelpers.psm1') -Force
 }
 
-Describe 'Test-SmrProcessIsolation' {
+Describe 'Test-SwarmProcessIsolation' {
     It 'follows Microsoft''s matrix' -TestCases @(
         @{ HostBuild = 20348; ImageBuild = 20348; Expected = $true }
         @{ HostBuild = 26100; ImageBuild = 26100; Expected = $true }
@@ -14,32 +14,32 @@ Describe 'Test-SmrProcessIsolation' {
         @{ HostBuild = 20348; ImageBuild = 17763; Expected = $false }
     ) {
         param($HostBuild, $ImageBuild, $Expected)
-        Test-SmrProcessIsolation -HostBuild $HostBuild -ImageBuild $ImageBuild | Should -Be $Expected
+        Test-SwarmProcessIsolation -HostBuild $HostBuild -ImageBuild $ImageBuild | Should -Be $Expected
     }
 }
 
-Describe 'Get-SmrWindowsTag' {
+Describe 'Get-SwarmWindowsTag' {
     It 'maps the supported builds and refuses others' {
-        Get-SmrWindowsTag -Build 20348 | Should -Be 'ltsc2022'
-        Get-SmrWindowsTag -Build 26100 | Should -Be 'ltsc2025'
-        { Get-SmrWindowsTag -Build 19045 } | Should -Throw '*pass -Image*'
+        Get-SwarmWindowsTag -Build 20348 | Should -Be 'ltsc2022'
+        Get-SwarmWindowsTag -Build 26100 | Should -Be 'ltsc2025'
+        { Get-SwarmWindowsTag -Build 19045 } | Should -Throw '*pass -Image*'
     }
 }
 
-Describe 'ConvertFrom-SmrServiceTaskLine' {
+Describe 'ConvertFrom-SwarmServiceTaskLine' {
     It 'parses docker service ps json lines and ignores everything else' {
         $lines = @(
-            '{"ID":"abc","Name":"smr_windows-default.1","Node":"WIN1","DesiredState":"Running","CurrentState":"Pending 3 seconds ago","Error":"no suitable node (scheduling constraints not satisfied on 1 node)"}',
+            '{"ID":"abc","Name":"runners_windows-default.1","Node":"WIN1","DesiredState":"Running","CurrentState":"Pending 3 seconds ago","Error":"no suitable node (scheduling constraints not satisfied on 1 node)"}',
             'not json',
-            '{"ID":"def","Name":"smr_windows-default.1","Node":"WIN1","DesiredState":"Shutdown","CurrentState":"Failed 10 seconds ago","Error":"task: non-zero exit (80)"}')
-        $t = @(ConvertFrom-SmrServiceTaskLine -Line $lines)
+            '{"ID":"def","Name":"runners_windows-default.1","Node":"WIN1","DesiredState":"Shutdown","CurrentState":"Failed 10 seconds ago","Error":"task: non-zero exit (80)"}')
+        $t = @(ConvertFrom-SwarmServiceTaskLine -Line $lines)
         $t.Count | Should -Be 2
         $t[0].CurrentState | Should -Match '^Pending'
         $t[1].Error | Should -Be 'task: non-zero exit (80)'
     }
 }
 
-Describe 'Measure-SmrFakeJobLine' {
+Describe 'Measure-SwarmFakeJobLine' {
     It 'tells containers apart by host= and counts residue' {
         $lines = @(
             'FAKEJOB layer=aaa host=C1 user=u residue=[]',
@@ -48,71 +48,71 @@ Describe 'Measure-SmrFakeJobLine' {
             'noise')
         $oldOut = [Console]::Out
         [Console]::SetOut((New-Object System.IO.StringWriter))
-        try { $m = Measure-SmrFakeJobLine -ModeName 'unit' -Line $lines } finally { [Console]::SetOut($oldOut) }
+        try { $m = Measure-SwarmFakeJobLine -ModeName 'unit' -Line $lines } finally { [Console]::SetOut($oldOut) }
         $m.Jobs | Should -Be 3
         $m.Distinct | Should -Be 2
         $m.Dirty | Should -Be 1
     }
 }
 
-Describe 'Get-SmrImageBuild' {
+Describe 'Get-SwarmImageBuild' {
     It 'reads the build from docker image inspect' {
-        Mock -ModuleName SmrTestHelpers Invoke-SmrDocker { return @{ ExitCode = 0; Output = @('windows 10.0.20348.5622') } }
-        Get-SmrImageBuild -Image 'x' | Should -Be 20348
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker { return @{ ExitCode = 0; Output = @('windows 10.0.20348.5622') } }
+        Get-SwarmImageBuild -Image 'x' | Should -Be 20348
     }
 
     It 'returns 0 for a missing or non-Windows image' {
-        Mock -ModuleName SmrTestHelpers Invoke-SmrDocker { return @{ ExitCode = 1; Output = @('No such image') } }
-        Get-SmrImageBuild -Image 'x' | Should -Be 0
-        Mock -ModuleName SmrTestHelpers Invoke-SmrDocker { return @{ ExitCode = 0; Output = @('linux 6.1') } }
-        Get-SmrImageBuild -Image 'x' | Should -Be 0
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker { return @{ ExitCode = 1; Output = @('No such image') } }
+        Get-SwarmImageBuild -Image 'x' | Should -Be 0
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker { return @{ ExitCode = 0; Output = @('linux 6.1') } }
+        Get-SwarmImageBuild -Image 'x' | Should -Be 0
     }
 }
 
-Describe 'Initialize-SmrSwarm' {
+Describe 'Initialize-SwarmCluster' {
     It 'does nothing on an active manager' {
-        Mock -ModuleName SmrTestHelpers Invoke-SmrDocker { return @{ ExitCode = 0; Output = @('active true') } }
-        (Initialize-SmrSwarm).Initialised | Should -BeFalse
-        Should -Invoke -ModuleName SmrTestHelpers Invoke-SmrDocker -Times 1
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker { return @{ ExitCode = 0; Output = @('active true') } }
+        (Initialize-SwarmCluster).Initialised | Should -BeFalse
+        Should -Invoke -ModuleName SwarmTestHelpers Invoke-SwarmDocker -Times 1
     }
 
     It 'initialises an inactive engine and says so, so the caller can leave it again' {
-        Mock -ModuleName SmrTestHelpers Invoke-SmrDocker {
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker {
             if ($ArgumentList[0] -eq 'info') { return @{ ExitCode = 0; Output = @('inactive false') } }
             return @{ ExitCode = 0; Output = @('Swarm initialized') }
         }
-        (Initialize-SmrSwarm -AdvertiseAddr '10.0.0.5').Initialised | Should -BeTrue
-        Should -Invoke -ModuleName SmrTestHelpers Invoke-SmrDocker -ParameterFilter { $ArgumentList[0] -eq 'swarm' -and $ArgumentList -contains '10.0.0.5' }
+        (Initialize-SwarmCluster -AdvertiseAddr '10.0.0.5').Initialised | Should -BeTrue
+        Should -Invoke -ModuleName SwarmTestHelpers Invoke-SwarmDocker -ParameterFilter { $ArgumentList[0] -eq 'swarm' -and $ArgumentList -contains '10.0.0.5' }
     }
 
     It 'refuses a worker node' {
-        Mock -ModuleName SmrTestHelpers Invoke-SmrDocker { return @{ ExitCode = 0; Output = @('active false') } }
-        { Initialize-SmrSwarm } | Should -Throw '*worker*'
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker { return @{ ExitCode = 0; Output = @('active false') } }
+        { Initialize-SwarmCluster } | Should -Throw '*worker*'
     }
 }
 
-Describe 'Get-SmrStackEnvironment and the stock mounts' {
+Describe 'Get-SwarmStackEnvironment and the stock mounts' {
     It 'reads the environment the stack gives a stock service, without Swarm templates' {
-        $e = Get-SmrStackEnvironment
+        $e = Get-SwarmStackEnvironment
         $e['CIRCLECI_RUNNER_MODE'] | Should -Be 'single-task'
         $e['CIRCLECI_RUNNER_WORK_DIR'] | Should -Be 'C:\cci\w'
         $e['GIT_CONFIG_COUNT'] | Should -Be '1'
         $e['GIT_CONFIG_KEY_0'] | Should -Be 'core.longpaths'
         $e['PATH'] | Should -BeLike 'C:\Windows\system32;*'
         $e['PATH'] | Should -BeLike '*;C:\Program Files\Git\usr\bin'
-        $e.ContainsKey('SMR_INSTANCE_ID') | Should -BeFalse
+        $e.ContainsKey('MACHINE_RUNNER_SWARM_INSTANCE_ID') | Should -BeFalse
         $e.ContainsKey('CIRCLECI_RUNNER_NAME') | Should -BeFalse
     }
 
     It 'turns it into docker run arguments' {
-        $a = ConvertTo-SmrEnvArgument -Environment @{ B = '2'; A = '1' }
+        $a = ConvertTo-SwarmEnvArgument -Environment @{ B = '2'; A = '1' }
         $a | Should -Be @('--env', 'A=1', '--env', 'B=2')
     }
 
-    It 'mounts the runner at C:\smr and Git where the task agent expects it, read-only' {
-        $m = Get-SmrStockMountArgument -SmrRoot 'D:\smr'
-        $m | Should -Contain 'type=bind,source=D:\smr,target=C:\smr,readonly'
-        $m | Should -Contain 'type=bind,source=D:\smr\git,target=C:\Program Files\Git,readonly'
+    It 'mounts the runner at C:\machine-runner-swarm and Git where the task agent expects it, read-only' {
+        $m = Get-SwarmStockMountArgument -SwarmRoot 'D:\machine-runner-swarm'
+        $m | Should -Contain 'type=bind,source=D:\machine-runner-swarm,target=C:\machine-runner-swarm,readonly'
+        $m | Should -Contain 'type=bind,source=D:\machine-runner-swarm\git,target=C:\Program Files\Git,readonly'
     }
 }
 
@@ -148,7 +148,7 @@ Describe 'Windows-only test scripts' {
     }
 
     It 'prints the RESULT and CHECK lines the CI expectations promise' {
-        foreach ($pair in @(@('Test-Injection.ps1', 'RESULT injection'), @('Test-Ephemerality.ps1', 'Measure-SmrFakeJobLine'), @('SmrTestHelpers.psm1', 'RESULT mode='), @('Test-Exit80.ps1', 'RESULT exit80'),
+        foreach ($pair in @(@('Test-Injection.ps1', 'RESULT injection'), @('Test-Ephemerality.ps1', 'Measure-SwarmFakeJobLine'), @('SwarmTestHelpers.psm1', 'RESULT mode='), @('Test-Exit80.ps1', 'RESULT exit80'),
                 @('Test-Placement.ps1', 'RESULT placement'), @('Test-StopHandling.ps1', 'RESULT stop'), @('Test-Persistent.ps1', 'RESULT persistent'))) {
             (Get-Content -LiteralPath (Join-Path $PSScriptRoot $pair[0]) -Raw) | Should -Match ([regex]::Escape($pair[1]))
         }

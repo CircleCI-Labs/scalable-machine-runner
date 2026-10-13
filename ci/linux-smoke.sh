@@ -9,7 +9,7 @@
 #    through the read-only mount; the entrypoint refuses to start without a runner name (exit 80).
 # 3. The shipped stack, deployed with linux/setup.sh --deploy and a made-up token: the services
 #    linux-default and linux-hardened start a container each, and inside them
-#      - the runner runs as smr-runner and the job user is circleci;
+#      - the runner runs as circleci-runner and the job user is circleci;
 #      - the job user cannot read the token file, nor other users' process environments;
 #      - linux-default keeps sudo (so sudo can read the token: the documented outcome);
 #      - linux-hardened has no sudo at all.
@@ -22,7 +22,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "${here}/.." && pwd)
 setup="${repo}/linux/setup.sh"
 image=${E2E_IMAGE:-cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a}
-stack=smr
+stack=runners
 work=$(mktemp -d)
 failed=0
 
@@ -60,14 +60,14 @@ check swarm-active test "$(docker info --format '{{.Swarm.LocalNodeState}}')" = 
 
 # --- 2. the layout, in a stock image ----------------------------------------------------------
 layout() {
-  [ -x /opt/smr/bin/circleci-runner ] && [ -x /opt/smr/bin/smr-entrypoint ] && [ -s /opt/smr/VERSION ] &&
-    [ -z "$(find /opt/smr ! -user root -o -perm /022)" ]
+  [ -x /opt/machine-runner-swarm/bin/circleci-runner ] && [ -x /opt/machine-runner-swarm/bin/circleci-runner-entrypoint ] && [ -s /opt/machine-runner-swarm/VERSION ] &&
+    [ -z "$(find /opt/machine-runner-swarm ! -user root -o -perm /022)" ]
 }
 check layout-root-owned layout
-mounted() { docker run --rm -v /opt/smr:/opt/smr:ro "${image}" "$@"; }
+mounted() { docker run --rm -v /opt/machine-runner-swarm:/opt/machine-runner-swarm:ro "${image}" "$@"; }
 runner_version() {
   local v
-  v=$(mounted /opt/smr/bin/circleci-runner --version) && echo "${v}" && grep -q "version $(cat /opt/smr/VERSION)" <<< "${v}"
+  v=$(mounted /opt/machine-runner-swarm/bin/circleci-runner --version) && echo "${v}" && grep -q "version $(cat /opt/machine-runner-swarm/VERSION)" <<< "${v}"
 }
 check runner-in-stock-image runner_version
 container_arch() {
@@ -77,7 +77,7 @@ container_arch() {
 check container-arch-matches-host container_arch
 runner_is_native() {
   local info
-  info=$(file -L /opt/smr/bin/circleci-runner 2> /dev/null || true)
+  info=$(file -L /opt/machine-runner-swarm/bin/circleci-runner 2> /dev/null || true)
   echo "${info}"
   case ${arch} in
     x86_64) grep -q 'x86-64' <<< "${info}" ;;
@@ -91,8 +91,8 @@ exit80_without_name() {
   # and the entrypoint passes the code through. (Without a config file the runner exits 1.)
   local rc=0
   printf 'api:\n  auth_token: not-a-real-token\n' > "${work}/config.yaml"
-  docker run --rm --user 0 -v /opt/smr:/opt/smr:ro \
-    -v "${work}/config.yaml:/run/secrets/circleci_runner_config.yaml:ro" "${image}" /opt/smr/bin/smr-entrypoint || rc=$?
+  docker run --rm --user 0 -v /opt/machine-runner-swarm:/opt/machine-runner-swarm:ro \
+    -v "${work}/config.yaml:/run/secrets/circleci_runner_config.yaml:ro" "${image}" /opt/machine-runner-swarm/bin/circleci-runner-entrypoint || rc=$?
   echo "exit ${rc}"
   [ "${rc}" -eq 80 ]
 }
@@ -124,7 +124,7 @@ container_of() {  # container_of SERVICE: wait for a running container, print it
 # Wait until the entrypoint has finished its set-up and started the runner.
 ready() {  # ready CONTAINER
   for _ in $(seq 1 60); do
-    docker logs "$1" 2>&1 | grep -q 'smr-entrypoint: runner=' && return 0
+    docker logs "$1" 2>&1 | grep -q 'circleci-runner-entrypoint: runner=' && return 0
     sleep 2
   done
   docker logs "$1" 2>&1 | tail -n 20
@@ -134,9 +134,9 @@ ready() {  # ready CONTAINER
 for svc in linux-default linux-hardened; do
   cid=$(container_of "${svc}") || { printf 'CHECK %s-container FAIL (no running container)\n' "${svc}"; docker service ps "${stack}_${svc}" --no-trunc | head; failed=$((failed + 1)); continue; }
   check "${svc}-entrypoint-ready" ready "${cid}"
-  docker logs "${cid}" 2>&1 | grep 'smr-entrypoint:' | cut -c1-200 | sed "s/^/    ${svc}: /"
+  docker logs "${cid}" 2>&1 | grep 'circleci-runner-entrypoint:' | cut -c1-200 | sed "s/^/    ${svc}: /"
   runner_user() { docker exec "${cid}" ps -o user= -C circleci-runner | head -n 1 | tr -d ' '; }
-  check "${svc}-runner-user" test "$(runner_user)" = smr-runner
+  check "${svc}-runner-user" test "$(runner_user)" = circleci-runner
   token_denied() { ! docker exec -u circleci "${cid}" sh -c 'cat /run/secrets/circleci_runner_config.yaml' > /dev/null 2>&1; }
   check "${svc}-token-unreadable-by-job-user" token_denied
   environ_foreign() {

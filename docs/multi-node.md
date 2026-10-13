@@ -13,11 +13,11 @@ Start with the single-node steps on [Install on Linux with Docker Swarm](install
 ```mermaid
 flowchart LR
   subgraph nodes["Nodes and their labels"]
-    A["linux-a<br/>linux, x86_64<br/>smr.zone=build"]
-    B["linux-b<br/>linux, aarch64<br/>smr.zone=build"]
-    C["linux-c<br/>linux, x86_64<br/>smr.zone=deploy"]
-    D["linux-d (worker)<br/>linux, x86_64<br/>smr.docker-build=true"]
-    W["win-a<br/>windows<br/>windows.build=ltsc2022"]
+    A["linux-a<br/>linux, x86_64<br/>machine-runner-swarm.zone=build"]
+    B["linux-b<br/>linux, aarch64<br/>machine-runner-swarm.zone=build"]
+    C["linux-c<br/>linux, x86_64<br/>machine-runner-swarm.zone=deploy"]
+    D["linux-d (worker)<br/>linux, x86_64<br/>machine-runner-swarm.docker-build=true"]
+    W["win-a<br/>windows<br/>machine-runner-swarm.windows-build=ltsc2022"]
   end
 
   subgraph services["Services and their constraints"]
@@ -25,7 +25,7 @@ flowchart LR
     S2["linux-arm64<br/>arch == aarch64"]
     S3["linux-deploy<br/>zone == deploy"]
     S4["linux-docker-build<br/>role == worker<br/>docker-build == true"]
-    S5["windows-default<br/>os == windows<br/>windows.build == ltsc2022"]
+    S5["windows-default<br/>os == windows<br/>machine-runner-swarm.windows-build == ltsc2022"]
   end
 
   S1 -.-> A
@@ -43,8 +43,8 @@ A dotted line means that the node satisfies every constraint of the service, so 
 | Node type | Role | Needs |
 |---|---|---|
 | Manager | Holds the cluster state and every secret. Schedules tasks | Docker Engine. Linux managers can manage Windows workers |
-| Linux worker | Runs Linux services | Docker Engine, `/opt/smr` with the build for its architecture |
-| Windows worker | Runs Windows services | Docker Engine in Windows-container mode, `C:\smr`, the `windows.build` label |
+| Linux worker | Runs Linux services | Docker Engine, `/opt/machine-runner-swarm` with the build for its architecture |
+| Windows worker | Runs Windows services | Docker Engine in Windows-container mode, `C:\machine-runner-swarm`, the `machine-runner-swarm.windows-build` label |
 
 ### Managers and quorum
 
@@ -72,7 +72,7 @@ Initialize Swarm on the first manager with an address that the other nodes can r
 $ docker swarm init --advertise-addr <manager IP address>
 ```
 
-If you started with the loopback address, remove the stack with `docker stack rm smr`, run `docker swarm leave --force`, initialize again, and recreate the secrets.
+If you started with the loopback address, remove the stack with `docker stack rm runners`, run `docker swarm leave --force`, initialize again, and recreate the secrets.
 
 Get the join command for each node type on a manager:
 
@@ -96,7 +96,7 @@ $ docker node ls
 On each node:
 
 1. Install Docker Engine and confirm that the clock is synchronized. Refer to [Prepare each node](install-linux.md#2-prepare-each-node).
-2. Install the runner and entrypoint into `/opt/smr`. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint). The directory must exist on every node that can run a service.
+2. Install the runner and entrypoint into `/opt/machine-runner-swarm`. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint). The directory must exist on every node that can run a service.
 3. Open the ports in [Inter-node ports](#inter-node-ports).
 4. Run the join command.
 
@@ -112,10 +112,10 @@ The installation steps on [Install on Linux with Docker Swarm](install-linux.md)
 On each node:
 
 1. Install Docker Engine in Windows-container mode and the Windows Containers feature.
-2. Stage `C:\smr` and pull the images, including your stop-timeout image. Refer to [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git) and [Build the stop-timeout image](install-windows.md#4-build-the-stop-timeout-image). Do this before the join.
+2. Stage `C:\machine-runner-swarm` and pull the images, including your stop-timeout image. Refer to [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git) and [Build the stop-timeout image](install-windows.md#4-build-the-stop-timeout-image). Do this before the join.
 3. Open the ports in [Inter-node ports](#inter-node-ports).
 4. Run the join command.
-5. Label the node from a manager with its build: `docker node update --label-add windows.build=ltsc2022 <node name>`. Use `ltsc2025` on Server 2025.
+5. Label the node from a manager with its build: `docker node update --label-add machine-runner-swarm.windows-build=ltsc2022 <node name>`. Use `ltsc2025` on Server 2025.
 
 The labels are required, because the image build must match the host build. Refer to [Image tags and host builds](install-windows.md#image-tags-and-host-builds).
 
@@ -131,7 +131,7 @@ deploy:
     constraints:
       - node.platform.os == linux
       - node.platform.arch == aarch64
-      - node.labels.smr.zone == build
+      - node.labels.machine-runner-swarm.zone == build
     preferences:
       - spread: node.id
 ```
@@ -153,26 +153,26 @@ Set a label with `docker node update --label-add <key>=<value> <node name>`. Rem
 
 | Label | Value | Used by |
 |---|---|---|
-| `windows.build` | `ltsc2022` or `ltsc2025` | Every Windows service. Matches the image to the host build |
-| `smr.zone` | The name of a network zone | Services that must run in one zone. A commented example sits in the Linux placement block |
-| `smr.docker-build` | `true` | The docker-build services (pattern A). Refer to [Docker Builds](docker-builds.md) |
-| `smr.class.<service>` | `true` | Pins a service to the labeled nodes. `windows-persistent` uses `smr.class.windows-persistent`. `linux-persistent` pins itself with `node.hostname` instead |
+| `machine-runner-swarm.windows-build` | `ltsc2022` or `ltsc2025` | Every Windows service. Matches the image to the host build |
+| `machine-runner-swarm.zone` | The name of a network zone | Services that must run in one zone. A commented example sits in the Linux placement block |
+| `machine-runner-swarm.docker-build` | `true` | The docker-build services (pattern A). Refer to [Docker Builds](docker-builds.md) |
+| `machine-runner-swarm.class.<service>` | `true` | Pins a service to the labeled nodes. `windows-persistent` uses `machine-runner-swarm.class.windows-persistent`. `linux-persistent` pins itself with `node.hostname` instead |
 
-Constraints on labels use the form `node.labels.<key> == <value>`. For example, `node.labels.smr.docker-build == true`.
+Constraints on labels use the form `node.labels.<key> == <value>`. For example, `node.labels.machine-runner-swarm.docker-build == true`.
 
 ### Keep the docker-build node to itself
 
-A job on a docker-build class controls the whole Docker engine of its node, so it can inspect and enter every other container there. Keep other classes off that node by adding `node.labels.smr.docker-build != true` to their constraints.
+A job on a docker-build class controls the whole Docker engine of its node, so it can inspect and enter every other container there. Keep other classes off that node by adding `node.labels.machine-runner-swarm.docker-build != true` to their constraints.
 
 ## Network zones
 
-Use the label `smr.zone` when your nodes sit in different network zones, for example a build network and a deploy network with different firewall rules or egress addresses.
+Use the label `machine-runner-swarm.zone` when your nodes sit in different network zones, for example a build network and a deploy network with different firewall rules or egress addresses.
 
 1. Label each node with its zone:
 
    ```console
-   $ docker node update --label-add smr.zone=build linux-a
-   $ docker node update --label-add smr.zone=deploy linux-c
+   $ docker node update --label-add machine-runner-swarm.zone=build linux-a
+   $ docker node update --label-add machine-runner-swarm.zone=deploy linux-c
    ```
 
 2. Copy a service for each zone, give each copy its own resource class, secret, and name, and add the constraint:
@@ -184,7 +184,7 @@ Use the label `smr.zone` when your nodes sit in different network zones, for exa
        placement:
          constraints:
            - node.platform.os == linux
-           - node.labels.smr.zone == deploy
+           - node.labels.machine-runner-swarm.zone == deploy
    ```
 
 A job picks the zone by picking the resource class. Do not use zones to balance capacity. Use `replicas` and `spread` for that.
@@ -243,7 +243,7 @@ On a Windows host with a single network adapter, an existing `transparent` netwo
 ```console
 $ docker node ls
 $ docker node inspect --format '{{ .Spec.Labels }}' <node name>
-$ docker service ps smr_linux-default
+$ docker service ps runners_linux-default
 ```
 
 The `NODE` column of `docker service ps` shows where each replica runs. A task that stays in `Pending` shows the reason in the `ERROR` column, for example `no suitable node (scheduling constraints not satisfied on 2 nodes)`. Refer to [Troubleshooting](troubleshooting.md#a-task-stays-pending).

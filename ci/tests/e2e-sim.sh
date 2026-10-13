@@ -17,7 +17,7 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "${here}/../.." && pwd)
-name="smr-e2e-sim-$$"
+name="swarm-e2e-sim-$$"
 stock=${E2E_IMAGE:-cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a}
 dind=${E2E_SIM_DIND_IMAGE:-docker:29.9.0-dind@sha256:0b6d18a4a222e71c88be6034926b4f6cde2fc33c2218643d03ccfddc65995470}
 tmp=$(mktemp -d)
@@ -33,10 +33,10 @@ in_vm() { docker exec "${name}" "$@"; }
 cat > "${tmp}/stack.yaml" <<'YAML'
 x-runner: &runner
   image: cimg/base:2026.10
-  entrypoint: ["/opt/smr/bin/smr-entrypoint"]
+  entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]
   user: "0:0"
   volumes:
-    - {type: bind, source: /opt/smr, target: /opt/smr, read_only: true}
+    - {type: bind, source: /opt/machine-runner-swarm, target: /opt/machine-runner-swarm, read_only: true}
     - {type: bind, source: /repo/ci, target: /ci, read_only: true}
   deploy:
     replicas: 1
@@ -47,7 +47,7 @@ services:
     hostname: "{{.Node.Hostname}}-linux-default-{{.Task.Slot}}"
     environment:
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-default-{{.Task.Slot}}"
-      SMR_JOB_SUDO: "true"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
     secrets:
       - {source: linux-default-token, target: circleci_runner_config.yaml, uid: "2000", gid: "2000", mode: 0400}
   linux-hardened:
@@ -55,7 +55,7 @@ services:
     hostname: "{{.Node.Hostname}}-linux-hardened-{{.Task.Slot}}"
     environment:
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-hardened-{{.Task.Slot}}"
-      SMR_JOB_SUDO: "false"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "false"
     secrets:
       - {source: linux-hardened-token, target: circleci_runner_config.yaml, uid: "2000", gid: "2000", mode: 0400}
   linux-java:
@@ -70,32 +70,32 @@ secrets:
   linux-java-token: {external: true}
 YAML
 
-cat > "${tmp}/smr-entrypoint" <<'SH'
+cat > "${tmp}/circleci-runner-entrypoint" <<'SH'
 #!/bin/sh
 # Fake single-task runner: runs the next queued probe as the job user, then exits 0.
 set -eu
 ev=/e2e-evidence
 [ -n "${CIRCLECI_RUNNER_NAME:-}" ] || exit 80
 [ -s /run/secrets/circleci_runner_config.yaml ] || exit 80
-if [ "${SMR_JOB_SUDO:-true}" = false ]; then rm -f /usr/bin/sudo /etc/sudoers.d/*; fi
+if [ "${MACHINE_RUNNER_SWARM_JOB_SUDO:-true}" = false ]; then rm -f /usr/bin/sudo /etc/sudoers.d/*; fi
 wf=$(sed -n 's/^workflow=//p' "${ev}/host")
 instance=$(cat /proc/sys/kernel/random/uuid)
-echo "smr-entrypoint: runner=2000 job=circleci sudo=${SMR_JOB_SUDO:-true} stepdown=sudo instance=${instance}" >&2
+echo "circleci-runner-entrypoint: runner=2000 job=circleci sudo=${MACHINE_RUNNER_SWARM_JOB_SUDO:-true} stepdown=sudo instance=${instance}" >&2
 # A process called circleci-runner that belongs to the runner user, as in the real container.
-id smr-runner > /dev/null 2>&1 || useradd -u 2000 -M -s /usr/sbin/nologin smr-runner
+id circleci-runner > /dev/null 2>&1 || useradd -u 2000 -M -s /usr/sbin/nologin circleci-runner
 cp /bin/sleep /tmp/circleci-runner
-setpriv --reuid=smr-runner --regid=smr-runner --clear-groups /tmp/circleci-runner 60 &
+setpriv --reuid=circleci-runner --regid=circleci-runner --clear-groups /tmp/circleci-runner 60 &
 sleep 2
 for q in b1 b2 b3; do
   [ -e "${ev}/queue/${q}" ] || continue
   # b3 belongs to the hardened service
-  if [ "${q}" = b3 ] && [ "${SMR_JOB_SUDO:-true}" != false ]; then continue; fi
+  if [ "${q}" = b3 ] && [ "${MACHINE_RUNNER_SWARM_JOB_SUDO:-true}" != false ]; then continue; fi
   args=$(cat "${ev}/queue/${q}")
   rm -f "${ev}/queue/${q}"
   rc=0
   # shellcheck disable=SC2086
   setpriv --reuid=circleci --regid=circleci --init-groups \
-    env HOME=/home/circleci CIRCLE_WORKFLOW_ID="${wf}" CIRCLE_JOB=sim SMR_INSTANCE_ID="${instance}" \
+    env HOME=/home/circleci CIRCLE_WORKFLOW_ID="${wf}" CIRCLE_JOB=sim MACHINE_RUNNER_SWARM_INSTANCE_ID="${instance}" \
     /bin/bash /ci/e2e-probe.sh ${args} || rc=$?
   if [ "${rc}" -eq 0 ]; then echo passed > "${ev}/${q}.${wf}.status"; else echo failed > "${ev}/${q}.${wf}.status"; fi
   exit 0
@@ -121,7 +121,7 @@ cat > "${tmp}/circleci-runner" <<'SH'
 #!/bin/sh
 echo "circleci-runner (e2e simulation)"
 SH
-chmod +x "${tmp}/smr-entrypoint" "${tmp}/circleci-runner" "${tmp}/setup.sh"
+chmod +x "${tmp}/circleci-runner-entrypoint" "${tmp}/circleci-runner" "${tmp}/setup.sh"
 
 # --- the VM ------------------------------------------------------------------------------------
 log "starting ${dind%%@*}"
@@ -131,7 +131,7 @@ for _ in $(seq 1 60); do in_vm docker info > /dev/null 2>&1 && break; sleep 1; d
 in_vm docker info > /dev/null || { log "the Docker daemon in the simulation did not start"; exit 1; }
 in_vm apk add --no-cache bash coreutils gawk sudo > /dev/null
 in_vm docker pull -q "${stock}" > /dev/null
-in_vm sh -c 'mkdir -p /opt/smr/bin && cp /sim/smr-entrypoint /sim/circleci-runner /opt/smr/bin/ && chmod 0755 /opt/smr/bin/* && echo sim > /opt/smr/VERSION'
+in_vm sh -c 'mkdir -p /opt/machine-runner-swarm/bin && cp /sim/circleci-runner-entrypoint /sim/circleci-runner /opt/machine-runner-swarm/bin/ && chmod 0755 /opt/machine-runner-swarm/bin/* && echo sim > /opt/machine-runner-swarm/VERSION'
 
 # scenario NAME EXPECTED_EXIT PATTERN [QUEUE_FILE=ARGS ...]
 scenario() {

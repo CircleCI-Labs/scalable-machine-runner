@@ -1,18 +1,18 @@
 <#
 .SYNOPSIS
-    OPTIONAL helper for the Windows runner stack: checks the host, stages C:\smr, labels the node and
+    OPTIONAL helper for the Windows runner stack: checks the host, stages C:\machine-runner-swarm, labels the node and
     creates the token secrets. The Windows docs list the same steps as plain commands.
     Windows PowerShell 5.1, in an elevated prompt on the container host. Safe to run again.
 
 .DESCRIPTION
     1. Preflight, printed as "CHECK <name> PASS|FAIL": administrator, Windows Server build, Docker in
        Windows-container mode, Swarm manager (-InitSwarm -AdvertiseAddr <ip> creates one; the address is required, a plain "docker swarm init" fails on some hosts).
-    2. Stages -InstallDir (default C:\smr): bin\circleci-runner.exe (SHA-256 from CircleCI's release
+    2. Stages -InstallDir (default C:\machine-runner-swarm): bin\circleci-runner.exe (SHA-256 from CircleCI's release
        manifest) and git\ (portable Git for Windows, pinned SHA-256, bash/tar/gzip included). Containers
        read it as themselves, so SYSTEM and Administrators get full control and Authenticated Users
        read and execute; a job cannot modify it. Skipped when the same versions are already there. Done BEFORE
        any swarm init, because the network drops for a few seconds after it.
-    3. Labels the node windows.build=ltsc2022|ltsc2025 (the stack file's placement uses it).
+    3. Labels the node machine-runner-swarm.windows-build=ltsc2022|ltsc2025 (the stack file's placement uses it).
     4. -Class <name>,...: asks for each class's runner token (hidden input) and creates the Swarm secret
        <name>-token. The secret is a minimal runner config file ("api: auth_token: ..."); everything
        else the runner needs is an environment variable in the stack file. Existing secrets are kept.
@@ -30,7 +30,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $InstallDir = 'C:\smr',
+    [string] $InstallDir = 'C:\machine-runner-swarm',
     [string] $RunnerVersion = '3.1.12',
     [switch] $StageOnly,
     [switch] $InitSwarm,
@@ -38,7 +38,7 @@ param(
     [string[]] $Class = @(),
     [switch] $Deploy,
     [string[]] $StackFile = @((Join-Path $PSScriptRoot 'stack\runners.yaml')),
-    [string] $StackName = 'smr',
+    [string] $StackName = 'runners',
     [switch] $Force
 )
 
@@ -162,7 +162,7 @@ if ($MyInvocation.InvocationName -ne '.') {
         for ($i = 0; $i -lt 15 -and -not (Get-DockerInfo).Manager; $i++) { Start-Sleep -Seconds 2 }   # the network blips after init
     }
     $label = Get-BuildLabel -Build ([int](Get-CimInstance -ClassName Win32_OperatingSystem).BuildNumber)
-    $null = Invoke-Docker @('node', 'update', '--label-add', "windows.build=$label", (Get-DockerInfo).NodeId)
+    $null = Invoke-Docker @('node', 'update', '--label-add', "machine-runner-swarm.windows-build=$label", (Get-DockerInfo).NodeId)
     foreach ($c in $Class) { Install-ClassSecret -Name $c }
     if ($Deploy) {
         $r = Invoke-Docker (@('stack', 'deploy') + @($StackFile | ForEach-Object { '-c'; $_ }) + @($StackName))

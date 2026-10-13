@@ -15,39 +15,39 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 session_begin
-create_secrets "$SMR_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" linux-persistent
-export SMR_HOST=$SMR_MGR   # the DinD container's hostname is its name; replaces CHANGE-ME
+create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" linux-persistent
+export SWARM_TEST_HOST=$SWARM_TEST_MGR   # the DinD container's hostname is its name; replaces CHANGE-ME
 
 running_task() { # service -> id of its running task
-  idocker "$SMR_MGR" service ps -q --filter desired-state=running "${STACK}_$1" | head -n 1
+  idocker "$SWARM_TEST_MGR" service ps -q --filter desired-state=running "${STACK}_$1" | head -n 1
 }
 # restart_and_time SERVICE TASK: `docker service update --force` stops TASK (SIGTERM, then SIGKILL after
 # stop_grace_period) and starts a replacement; sets seconds and code (the old task's exit code).
 restart_and_time() {
   local start state
   start=$(date +%s)
-  idocker "$SMR_MGR" service update --force -d "${STACK}_$1" >/dev/null
+  idocker "$SWARM_TEST_MGR" service update --force -d "${STACK}_$1" >/dev/null
   for _ in $(seq 1 120); do
-    state=$(idocker "$SMR_MGR" inspect -f '{{.Status.State}}' "$2")
+    state=$(idocker "$SWARM_TEST_MGR" inspect -f '{{.Status.State}}' "$2")
     case $state in complete | shutdown | failed | rejected) break ;; esac
     sleep 1
   done
   [[ $state == complete || $state == shutdown || $state == failed ]] || fail "$1 did not stop within 120s of SIGTERM (state $state)"
   seconds=$(($(date +%s) - start))
-  code=$(idocker "$SMR_MGR" inspect -f '{{.Status.ContainerStatus.ExitCode}}' "$2")
+  code=$(idocker "$SWARM_TEST_MGR" inspect -f '{{.Status.ContainerStatus.ExitCode}}' "$2")
 }
 
 # --- a running job survives SIGTERM -----------------------------------------------------------
-install_smr "$SMR_MGR" fake
+install_swarm "$SWARM_TEST_MGR" fake
 make_override "$work/ov.yaml" "linux-persistent 1 FAKE_JOB_INTERVAL=1 FAKE_JOB_SLEEP=12"
-deploy_stack "$SMR_MGR" "$work/ov.yaml" runners.yaml persistent.yaml
-wait_for 120 bash -c "docker exec $SMR_MGR docker service logs --raw ${STACK}_linux-persistent 2>/dev/null | grep -q '^FAKEJOB'" ||
+deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml persistent.yaml
+wait_for 120 bash -c "docker exec $SWARM_TEST_MGR docker service logs --raw ${STACK}_linux-persistent 2>/dev/null | grep -q '^FAKEJOB'" ||
   fail "the fake job did not start"
 log "job running; sending SIGTERM through a forced update"
 old_task=$(running_task linux-persistent)
-old_container=$(idocker "$SMR_MGR" inspect -f '{{.Status.ContainerStatus.ContainerID}}' "$old_task")
+old_container=$(idocker "$SWARM_TEST_MGR" inspect -f '{{.Status.ContainerStatus.ContainerID}}' "$old_task")
 restart_and_time linux-persistent "$old_task"
-logs=$(idocker "$SMR_MGR" logs "$old_container" 2>&1)   # the old container only; its replacement starts its own job
+logs=$(idocker "$SWARM_TEST_MGR" logs "$old_container" 2>&1)   # the old container only; its replacement starts its own job
 started=$(grep -c '^FAKEJOB' <<< "$logs" || true)
 ended=$(grep -c '^JOBEND' <<< "$logs" || true)
 order=$(grep -E '^(FAKEJOB|JOBEND|FAKERUNNER draining)' <<< "$logs" | sed -E 's/ .*//' | paste -sd, -)
@@ -59,15 +59,15 @@ echo "RESULT test=drain phase=job jobs_started=$started jobs_finished=$ended exi
 # --- the real runner, idle --------------------------------------------------------------------
 # A tiny fake API (fake-api.py, in a cimg container beside the Swarm) lets the real runner get past
 # its start-up and idle in the claim loop, as it does against runner.circleci.com.
-install_smr "$SMR_MGR" real
-inner_reset "$SMR_MGR"
-create_secrets "$SMR_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
-docker cp "$tests_dir/fake-api.py" "$SMR_MGR:/fake-api.py"
-idocker "$SMR_MGR" run -d --name fake-api --network host -v /fake-api.py:/fake-api.py:ro "$CIMG_IMAGE" python3 /fake-api.py 8099 >/dev/null
-api_ip=$(docker exec "$SMR_MGR" hostname -i | awk '{ print $1 }')
+install_swarm "$SWARM_TEST_MGR" real
+inner_reset "$SWARM_TEST_MGR"
+create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
+docker cp "$tests_dir/fake-api.py" "$SWARM_TEST_MGR:/fake-api.py"
+idocker "$SWARM_TEST_MGR" run -d --name fake-api --network host -v /fake-api.py:/fake-api.py:ro "$CIMG_IMAGE" python3 /fake-api.py 8099 >/dev/null
+api_ip=$(docker exec "$SWARM_TEST_MGR" hostname -i | awk '{ print $1 }')
 make_override "$work/ov.yaml" "linux-default 1 CIRCLECI_RUNNER_API_URL=http://$api_ip:8099"
-deploy_stack "$SMR_MGR" "$work/ov.yaml"
-wait_for 120 bash -c "docker exec $SMR_MGR docker service logs --raw ${STACK}_linux-default 2>&1 | grep -q 'starting agent'" ||
+deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml"
+wait_for 120 bash -c "docker exec $SWARM_TEST_MGR docker service logs --raw ${STACK}_linux-default 2>&1 | grep -q 'starting agent'" ||
   fail "the real runner did not start"
 sleep 8   # past the task agent download, into the claim loop
 restart_and_time linux-default "$(running_task linux-default)"

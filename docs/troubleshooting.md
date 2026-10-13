@@ -9,8 +9,8 @@ page-description: Symptoms, causes, and fixes for the Docker Swarm runner stack 
 This page lists symptoms with their cause and fix. Start with the state of the tasks and the runner output:
 
 ```console
-$ docker stack ps smr --no-trunc
-$ docker service logs --tail 100 smr_<service>
+$ docker stack ps runners --no-trunc
+$ docker service logs --tail 100 runners_<service>
 ```
 
 For the shared CircleCI guidance, refer to [Troubleshoot self-hosted runner](https://circleci.com/docs/guides/execution-runner/troubleshoot-self-hosted-runner/).
@@ -19,7 +19,7 @@ For the shared CircleCI guidance, refer to [Troubleshoot self-hosted runner](htt
 
 ### A task stays pending
 
-The `ERROR` column of `docker service ps --no-trunc smr_<service>` shows `no suitable node`, and the task stays in the `Pending` state.
+The `ERROR` column of `docker service ps --no-trunc runners_<service>` shows `no suitable node`, and the task stays in the `Pending` state.
 
 **Cause.** No node satisfies the task.
 
@@ -29,7 +29,7 @@ The `ERROR` column of `docker service ps --no-trunc smr_<service>` shows `no sui
 **Fix.** Compare the constraints of the service with the labels of the nodes.
 
 ```console
-$ docker service inspect --format '{{ json .Spec.TaskTemplate.Placement }}' smr_<service>
+$ docker service inspect --format '{{ json .Spec.TaskTemplate.Placement }}' runners_<service>
 $ docker node inspect --format '{{ .Description.Hostname }} {{ .Spec.Labels }}' $(docker node ls -q)
 ```
 
@@ -48,9 +48,9 @@ Add the missing label with `docker node update --label-add`, lower `replicas`, o
 | `runner.name must contain only letters, numbers, .()_-, and spaces` | The name has other characters, or exceeds 64 characters because of a long hostname or class name |
 | `--runner.mode must be one of "continuous","single-task"` | `CIRCLECI_RUNNER_MODE` has another value |
 | `error parsing config file`, or a missing file (exit code 1) | The secret is not valid YAML, or it is not attached with the target `circleci_runner_config.yaml` |
-| `smr-entrypoint: error: ...` | The entrypoint found a missing prerequisite. Refer to the Linux entries below |
+| `circleci-runner-entrypoint: error: ...` | The entrypoint found a missing prerequisite. Refer to the Linux entries below |
 
-**Fix.** Correct the stack file or the secret, and deploy again. To stop the loop meanwhile, run `docker service scale smr_<service>=0`.
+**Fix.** Correct the stack file or the secret, and deploy again. To stop the loop meanwhile, run `docker service scale runners_<service>=0`.
 
 The restart delay is a pause between starts, not a back-off. Swarm creates the replacement task at once and starts its container after the delay, so the containers start 10 to 12 seconds apart. A `max_attempts` value in `restart_policy` would end the loop, but then the runner never recovers by itself after you fix the cause, so the stack does not set it. Alert on exit code 80 instead.
 
@@ -110,19 +110,19 @@ Swarm commands such as `docker stack deploy` fail on a worker.
 
 ### Error: bind source path does not exist
 
-A task is rejected with `invalid mount config for type "bind": bind source path does not exist: /opt/smr`.
+A task is rejected with `invalid mount config for type "bind": bind source path does not exist: /opt/machine-runner-swarm`.
 
-**Cause.** The node has no `/opt/smr` directory.
+**Cause.** The node has no `/opt/machine-runner-swarm` directory.
 
 **Fix.** Install the runner and the entrypoint on that node. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint).
 
 ### Error: must be owned by root and not group/world writable
 
-The container exits with code 80 and a message such as `/opt/smr/bin/circleci-runner must be owned by root and not group/world writable`.
+The container exits with code 80 and a message such as `/opt/machine-runner-swarm/bin/circleci-runner must be owned by root and not group/world writable`.
 
 **Cause.** The entrypoint refuses to run a runner that the job user or the runner user can replace.
 
-**Fix.** On the node, run `sudo chown -R root:root /opt/smr` and `sudo chmod -R go-w /opt/smr`.
+**Fix.** On the node, run `sudo chown -R root:root /opt/machine-runner-swarm` and `sudo chmod -R go-w /opt/machine-runner-swarm`.
 
 ### Error: jobs cannot be stepped down in this image
 
@@ -148,17 +148,17 @@ Every task fails. The runner log shows `failed to remove working directory befor
 
 **Fix.** Set `CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"`, or remove the variable so that the entrypoint default applies, and deploy again. A single-task container is discarded after the job, so nothing is lost. In a persistent class, start every job with a step that removes what an earlier job left. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
 
-### Permission denied on /opt/smr with SELinux
+### Permission denied on /opt/machine-runner-swarm with SELinux
 
-On RHEL, a task fails or the runner reports `Permission denied` for files under `/opt/smr` while SELinux is enforcing.
+On RHEL, a task fails or the runner reports `Permission denied` for files under `/opt/machine-runner-swarm` while SELinux is enforcing.
 
-**Cause.** The Docker daemon has SELinux support enabled, and the files in `/opt/smr` have a type that containers may not read. This repository's CI does not run on RHEL, so verify the fix on your host.
+**Cause.** The Docker daemon has SELinux support enabled, and the files in `/opt/machine-runner-swarm` have a type that containers may not read. This repository's CI does not run on RHEL, so verify the fix on your host.
 
 **Fix.** Label the directory for containers.
 
 ```console
-$ sudo semanage fcontext -a -t container_file_t '/opt/smr(/.*)?'
-$ sudo restorecon -Rv /opt/smr
+$ sudo semanage fcontext -a -t container_file_t '/opt/machine-runner-swarm(/.*)?'
+$ sudo restorecon -Rv /opt/machine-runner-swarm
 ```
 
 Keep SELinux enforcing. Do not disable it to work around the error.
@@ -201,7 +201,7 @@ A task is rejected with `The container operating system does not match the host 
 
 **Cause.** The image build does not match the host build. A Server 2022 host runs only `ltsc2022` images.
 
-**Fix.** Use an image tag that the host can run, and label the node with the matching `windows.build` value. Refer to [Image tags and host builds](install-windows.md#image-tags-and-host-builds).
+**Fix.** Use an image tag that the host can run, and label the node with the matching `machine-runner-swarm.windows-build` value. Refer to [Image tags and host builds](install-windows.md#image-tags-and-host-builds).
 
 ### The runner never claims a job
 
@@ -211,16 +211,16 @@ The container runs and logs the start-up lines, but the runner never claims a jo
 
 **Fix.** Never set `user:` in a Windows service, and never change `USER` in a derived image.
 
-### Access is denied on C:\smr
+### Access is denied on C:\machine-runner-swarm
 
-Starting `C:\smr\bin\circleci-runner.exe` in a container fails with `Access is denied`, or reading `C:\smr\VERSION` fails on the host.
+Starting `C:\machine-runner-swarm\bin\circleci-runner.exe` in a container fails with `Access is denied`, or reading `C:\machine-runner-swarm\VERSION` fails on the host.
 
-**Cause.** Files under `C:\smr` have no usable access control list. The recursive `icacls` call can leave files with an empty list.
+**Cause.** Files under `C:\machine-runner-swarm` have no usable access control list. The recursive `icacls` call can leave files with an empty list.
 
 **Fix.** Let every file inherit the access of the directory.
 
 ```powershell
-icacls 'C:\smr\*' /reset /T /C /Q
+icacls 'C:\machine-runner-swarm\*' /reset /T /C /Q
 ```
 
 ### Error: could not find the system's IP address
@@ -233,7 +233,7 @@ icacls 'C:\smr\*' /reset /T /C /Q
 
 Outbound connections fail with `Unable to connect to the remote server` or `no such host` for a few seconds after you create the swarm.
 
-**Fix.** Stage `C:\smr`, pull the images, and build the stop-timeout image first, and run `docker swarm init` last. `Setup.ps1` stages before it starts Swarm.
+**Fix.** Stage `C:\machine-runner-swarm`, pull the images, and build the stop-timeout image first, and run `docker swarm init` last. `Setup.ps1` stages before it starts Swarm.
 
 ### Windows container exits with code 3221225786 after a stop
 
@@ -277,7 +277,7 @@ You run `C:\Program Files\Git\usr\bin\tar.exe` in a container with a backslash p
 
 The build of the baked image, or of an image derived from it, stops with `PsExec64.exe must not be on PATH in the image`.
 
-**Cause.** With `PsExec64.exe` on the `PATH` of the container, the task agent switches to a desktop wrapper that containers cannot run. The check runs only when an image is built, and only the `PATH` of the image counts. A `PsExec64.exe` on the `PATH` of the host does not matter, and neither the manual staging of `C:\smr` nor `Setup.ps1` checks for it.
+**Cause.** With `PsExec64.exe` on the `PATH` of the container, the task agent switches to a desktop wrapper that containers cannot run. The check runs only when an image is built, and only the `PATH` of the image counts. A `PsExec64.exe` on the `PATH` of the host does not matter, and neither the manual staging of `C:\machine-runner-swarm` nor `Setup.ps1` checks for it.
 
 **Fix.** Pass a `BASE_IMAGE` that does not have `PsExec64.exe` on its `PATH`.
 
@@ -306,8 +306,8 @@ Gather the output of these commands. Remove tokens before you share it.
 ```console
 $ docker version
 $ docker node ls
-$ docker stack ps smr --no-trunc
-$ docker service logs --tail 200 smr_<service>
+$ docker stack ps runners --no-trunc
+$ docker service logs --tail 200 runners_<service>
 ```
 
-Include the contents of `/opt/smr/VERSION` or `C:\smr\VERSION`, and open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).
+Include the contents of `/opt/machine-runner-swarm/VERSION` or `C:\machine-runner-swarm\VERSION`, and open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).

@@ -8,7 +8,7 @@
 #   run-all.sh token drain  only these tests ("bats" is the unit-test matrix)
 #
 # Needs: Docker (the host's engine is not switched to Swarm mode), network access for images and the
-# runner download. Env: see lib.sh (SMR_DIND_IMAGE, SMR_CIMG_IMAGE, SMR_TEST_CACHE, SMR_KEEP).
+# runner download. Env: see lib.sh (SWARM_TEST_DIND_IMAGE, SWARM_TEST_CIMG_IMAGE, SWARM_TEST_CACHE, SWARM_TEST_KEEP).
 set -uo pipefail
 # shellcheck source=linux/tests/lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -23,7 +23,7 @@ for t in "${tests[@]}"; do
 done
 if [[ $needs_session == true ]]; then
   session_begin --worker
-  export SMR_SESSION_ACTIVE=1 SMR_MGR SMR_WRK
+  export SWARM_TEST_SESSION_ACTIVE=1 SWARM_TEST_MGR SWARM_TEST_WRK
 fi
 
 failed=()

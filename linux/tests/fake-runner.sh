@@ -1,6 +1,6 @@
 #!/bin/sh
-# Stand-in for circleci-runner in the Swarm tests (installed as /opt/smr/bin/circleci-runner next to
-# the real smr-entrypoint). It runs the fake job through CIRCLECI_RUNNER_COMMAND_PREFIX exactly as
+# Stand-in for circleci-runner in the Swarm tests (installed as /opt/machine-runner-swarm/bin/circleci-runner next to
+# the real circleci-runner-entrypoint). It runs the fake job through CIRCLECI_RUNNER_COMMAND_PREFIX exactly as
 # the real runner runs the task agent, so the step-down (sudo or setpriv) is exercised for real.
 #   single-task: one job, then exit 0 (like the real runner), so Swarm starts a new container
 #   continuous:  a job every FAKE_JOB_INTERVAL seconds (default 2) until SIGTERM
@@ -15,7 +15,7 @@ run_job() {
     set -f
     # shellcheck disable=SC2046
     set -- $(printf '%s' "${CIRCLECI_RUNNER_COMMAND_PREFIX:-}" | sed -e 's/^\["//' -e 's/"\]$//' -e 's/","/\n/g')
-    exec "$@" /opt/smr/bin/fake-job
+    exec "$@" /opt/machine-runner-swarm/bin/fake-job
   )
 }
 

@@ -7,7 +7,7 @@
 .DESCRIPTION
     1. Report residue that an earlier job left outside the working directory:
        files in %USERPROFILE%, %TEMP%, C:\ProgramData and C:\Users\Public, the
-       registry key HKLM:\SOFTWARE\SmrE2E and the machine environment variable SMR_E2E.
+       registry key HKLM:\SOFTWARE\SwarmE2E and the machine environment variable SWARM_TEST_E2E.
     2. If -Previous is given, read that probe's evidence and require a different
        container: the computer name must differ. Swarm does not set a hostname for a
        Windows task, so the computer name is the container ID. (The C: volume serial
@@ -63,22 +63,22 @@ if (-not (Test-Path $hostFile) -or ((Get-EvidenceField $hostFile 'workflow') -ne
 
 # Container identity: the computer name is the container ID.
 $container = [string] $env:COMPUTERNAME
-$instance = [string] $env:SMR_INSTANCE_ID
+$instance = [string] $env:MACHINE_RUNNER_SWARM_INSTANCE_ID
 $principal = [Security.Principal.WindowsIdentity]::GetCurrent()
 $identity = $principal.Name
 $elevated = ([Security.Principal.WindowsPrincipal] $principal).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 Write-Host "probe=$Probe user=$identity administrator=$elevated computername=$container"
-Write-Host "smr_instance_id=$instance workdir=$((Get-Location).Path)"
-# The stack sets SMR_INSTANCE_ID to the Swarm task ID, and the runner passes it on to jobs.
-if (-not $instance) { Add-Failure 'SMR_INSTANCE_ID is not set in the job environment (the stack file sets it to the task ID)' }
+Write-Host "swarm_instance_id=$instance workdir=$((Get-Location).Path)"
+# The stack sets MACHINE_RUNNER_SWARM_INSTANCE_ID to the Swarm task ID, and the runner passes it on to jobs.
+if (-not $instance) { Add-Failure 'MACHINE_RUNNER_SWARM_INSTANCE_ID is not set in the job environment (the stack file sets it to the task ID)' }
 
 # 1. Residue from an earlier job.
-$markerName = '.smr-e2e-marker'
+$markerName = '.swarm-e2e-marker'
 $candidates = @(
     (Join-Path $env:USERPROFILE $markerName),
     (Join-Path $env:TEMP $markerName),
-    'C:\ProgramData\smr-e2e-marker',
-    'C:\Users\Public\smr-e2e-marker'
+    'C:\ProgramData\swarm-e2e-marker',
+    'C:\Users\Public\swarm-e2e-marker'
 )
 $residue = @()
 foreach ($m in $candidates) {
@@ -87,15 +87,15 @@ foreach ($m in $candidates) {
         Write-Host "STALE STATE: $m exists (written by: $(Get-Content -LiteralPath $m -TotalCount 1))"
     }
 }
-$regKey = 'HKLM:\SOFTWARE\SmrE2E'
+$regKey = 'HKLM:\SOFTWARE\SwarmE2E'
 if (Test-Path -LiteralPath $regKey) {
     $residue += $regKey
     Write-Host "STALE STATE: registry key $regKey exists"
 }
-$machineVar = [Environment]::GetEnvironmentVariable('SMR_E2E', 'Machine')
+$machineVar = [Environment]::GetEnvironmentVariable('SWARM_TEST_E2E', 'Machine')
 if ($machineVar) {
-    $residue += 'env:SMR_E2E(Machine)'
-    Write-Host "STALE STATE: machine environment variable SMR_E2E=$machineVar"
+    $residue += 'env:SWARM_TEST_E2E(Machine)'
+    Write-Host "STALE STATE: machine environment variable SWARM_TEST_E2E=$machineVar"
 }
 if ($residue.Count -gt 0) { Add-Failure "residue from an earlier job: $($residue -join ' ')" }
 
@@ -106,9 +106,9 @@ if ($Previous) {
         Add-Failure "no evidence from previous probe $Previous ($prevFile)"
     } else {
         $prevContainer = Get-EvidenceField $prevFile 'hostname'
-        $prevInstance = Get-EvidenceField $prevFile 'smr_instance_id'
-        Write-Host "previous probe ${Previous}: computername=$prevContainer smr_instance_id=$prevInstance"
-        if ($instance -and ($prevInstance -eq $instance)) { Add-Failure "same SMR_INSTANCE_ID as ${Previous}: the container was reused" }
+        $prevInstance = Get-EvidenceField $prevFile 'swarm_instance_id'
+        Write-Host "previous probe ${Previous}: computername=$prevContainer swarm_instance_id=$prevInstance"
+        if ($instance -and ($prevInstance -eq $instance)) { Add-Failure "same MACHINE_RUNNER_SWARM_INSTANCE_ID as ${Previous}: the container was reused" }
         if ($prevContainer -eq $container) { Add-Failure "same computer name (container ID) as ${Previous}: the container was reused" }
     }
 }
@@ -131,10 +131,10 @@ try {
     Write-Host "note: cannot write ${regKey}: $($_.Exception.Message)"
 }
 try {
-    [Environment]::SetEnvironmentVariable('SMR_E2E', "$Probe $wf", 'Machine')
-    $planted += 'env:SMR_E2E(Machine)'
+    [Environment]::SetEnvironmentVariable('SWARM_TEST_E2E', "$Probe $wf", 'Machine')
+    $planted += 'env:SWARM_TEST_E2E(Machine)'
 } catch {
-    Write-Host "note: cannot set the machine variable SMR_E2E: $($_.Exception.Message)"
+    Write-Host "note: cannot set the machine variable SWARM_TEST_E2E: $($_.Exception.Message)"
 }
 if ($planted.Count -lt 2) { Add-Failure "could not plant residue (planted: $($planted -join ' '))" }
 Write-Host "planted residue: $($planted -join ' ')"
@@ -178,7 +178,7 @@ $tmp = Join-Path $EvidenceDir ".$Probe.$wf.tmp"
     "workflow=$wf",
     "job=$env:CIRCLE_JOB build=$env:CIRCLE_BUILD_NUM",
     "hostname=$container",
-    "smr_instance_id=$instance",
+    "swarm_instance_id=$instance",
     "user=$identity",
     "administrator=$elevated",
     "os=$osText",

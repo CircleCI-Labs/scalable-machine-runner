@@ -115,7 +115,7 @@ A clean environment means that a job starts in a container created from the imag
 | Users, groups, and sudo rules created by an earlier job | The kernel: all containers on a node share it |
 | On Windows, the registry, the user profile, `%TEMP%`, and `C:\ProgramData` | Data of finished containers that Swarm has not yet pruned from the node disk |
 
-The host directory with the runner (`/opt/smr` on Linux, `C:\smr` on Windows) is mounted read-only, so a job cannot change what the next job runs.
+The host directory with the runner (`/opt/machine-runner-swarm` on Linux, `C:\machine-runner-swarm` on Windows) is mounted read-only, so a job cannot change what the next job runs.
 
 The working directory needs no cleanup in a single-task class, because the container is discarded. On Linux, the runner does not clean it at all. The runner user cannot remove files that the job user owns, so the stack sets `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` to `"false"`. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
 
@@ -125,17 +125,17 @@ Containers are not a virtual machine boundary. Read [Security](security.md) befo
 
 Inside each Linux container, two accounts exist:
 
-- **The runner user** `smr-runner` (uid 2000) runs `circleci-runner` and owns the token file. It has no sudo rights and cannot write to `/opt/smr`.
-- **The job user** runs every job step. It is `circleci` in the `cimg` images, or the account you name with `SMR_JOB_USER`.
+- **The runner user** `circleci-runner` (uid 2000) runs `circleci-runner` and owns the token file. It has no sudo rights and cannot write to `/opt/machine-runner-swarm`.
+- **The job user** runs every job step. It is `circleci` in the `cimg` images, or the account you name with `MACHINE_RUNNER_SWARM_JOB_USER`.
 
 The runner steps each job down to the job user with `command_prefix`: `sudo -niHu <job user> --`, or `setpriv` when the image has no sudo. The token is never in the job environment, and the secret file is readable only by the runner user and root.
 
-What happens next depends on one setting, `SMR_JOB_SUDO`.
+What happens next depends on one setting, `MACHINE_RUNNER_SWARM_JOB_SUDO`.
 
 | Class type | Setting | Jobs have sudo | Can a job read the token |
 |---|---|---|---|
-| Default (`linux-default`, `linux-java`) | `SMR_JOB_SUDO: "true"` | Yes, passwordless, as in the Docker executor | Yes, if the job uses sudo |
-| Hardened (`linux-hardened`) | `SMR_JOB_SUDO: "false"` | No | No |
+| Default (`linux-default`, `linux-java`) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"` | Yes, passwordless, as in the Docker executor | Yes, if the job uses sudo |
+| Hardened (`linux-hardened`) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` | No | No |
 
 **The default class.** Jobs keep the passwordless sudo that many orgs and orbs expect, for example `sudo apt-get install`. This protects the token from accidental exposure, because a job cannot read it as the job user and the token is not in the environment. It does not protect the token from a job that deliberately uses sudo. Root can read the secret file and can also become the runner user. The test `linux/tests/token.sh` measures this result.
 
@@ -145,14 +145,14 @@ Choose the hardened class for shared or regulated work. Choose the default class
 
 ### What the Linux entrypoint does
 
-The entrypoint `smr-entrypoint` starts as root, prepares the container, and then runs the runner as the runner user. It never reads the token. In order, it:
+The entrypoint `circleci-runner-entrypoint` starts as root, prepares the container, and then runs the runner as the runner user. It never reads the token. In order, it:
 
-1. Checks that `/opt/smr`, `/opt/smr/bin`, and the runner are owned by root and not writable by the group or others.
+1. Checks that `/opt/machine-runner-swarm`, `/opt/machine-runner-swarm/bin`, and the runner are owned by root and not writable by the group or others.
 2. Looks for the tools it needs. `sudo` or util-linux `setpriv` steps jobs down, and `setpriv` or `su` starts the runner. Without them it exits with code 80. Refer to [What an image needs](images.md#what-an-image-needs).
-3. Creates the users with `useradd` or `adduser`: `smr-runner` with uid and gid 2000, and the job user when the image has none. It does not edit `/etc/passwd` by hand, because sudo refuses a user that has no `passwd` and no `shadow` entry.
-4. With `SMR_JOB_SUDO=false`, removes the job user from the `sudo`, `wheel`, and `admin` groups, and deletes the sudoers rules whose first entry is the user, one of its groups, its numeric ID, or `ALL`. It then runs `sudo -l -U <job user>`, and the container exits with code 80 unless the answer is that the user is not allowed to run sudo. A rule that comes through an alias, or from a list where the user is not first, such as `other,circleci ALL=...`, therefore stops the container and does not stay unnoticed.
+3. Creates the users with `useradd` or `adduser`: `circleci-runner` with uid and gid 2000, and the job user when the image has none. It does not edit `/etc/passwd` by hand, because sudo refuses a user that has no `passwd` and no `shadow` entry.
+4. With `MACHINE_RUNNER_SWARM_JOB_SUDO=false`, removes the job user from the `sudo`, `wheel`, and `admin` groups, and deletes the sudoers rules whose first entry is the user, one of its groups, its numeric ID, or `ALL`. It then runs `sudo -l -U <job user>`, and the container exits with code 80 unless the answer is that the user is not allowed to run sudo. A rule that comes through an alias, or from a list where the user is not first, such as `other,circleci ALL=...`, therefore stops the container and does not stay unnoticed.
 5. Sets `CIRCLECI_RUNNER_COMMAND_PREFIX`. A value in the service environment does not override it.
-   - With sudo, the prefix is `["sudo","-niHu","<job user>","--"]`. The file `/etc/sudoers.d/90-smr-runner` lets uid 2000 run commands as the job user only, keeps the `PATH` of the image, and keeps the environment variables of the image.
+   - With sudo, the prefix is `["sudo","-niHu","<job user>","--"]`. The file `/etc/sudoers.d/90-circleci-runner` lets uid 2000 run commands as the job user only, keeps the `PATH` of the image, and keeps the environment variables of the image.
    - Without sudo, the prefix is a `setpriv` command that gives the job no capabilities. The runner holds `CAP_SETUID` and `CAP_SETGID` as ambient capabilities only to call it.
 6. Creates the directories: the task agent directory, owned by uid 2000, and the working directory with its parent `/var/opt/circleci`, owned by the job user.
 7. Adds the job user to the group of `/var/run/docker.sock` when the class mounts the socket and the group is not root. Refer to [Docker Builds](docker-builds.md).
@@ -166,11 +166,11 @@ With sudo, a job gets the environment variables of the image, such as `PATH`, `J
 
 Windows containers have no step-down. The runner and the jobs run as `ContainerAdministrator`, because the runner needs the symbolic link privilege of that account to install the task agent. A job can therefore read the secret file that holds the token. The token is not in the job environment.
 
-Treat each Windows resource class as a trust boundary: use one token for each class, restrict who can use the class, and rotate tokens. The Linux variables `SMR_JOB_SUDO` and `SMR_JOB_USER` do not exist on Windows, and Windows ignores them. Refer to [Token model on each OS](security.md#token-model-on-each-os).
+Treat each Windows resource class as a trust boundary: use one token for each class, restrict who can use the class, and rotate tokens. The Linux variables `MACHINE_RUNNER_SWARM_JOB_SUDO` and `MACHINE_RUNNER_SWARM_JOB_USER` do not exist on Windows, and Windows ignores them. Refer to [Token model on each OS](security.md#token-model-on-each-os).
 
 ## Placement
 
-Services carry constraints and nodes advertise capabilities. The built-in properties are `node.platform.os` and `node.platform.arch`. This repository adds the node labels `smr.zone`, `smr.docker-build`, `windows.build`, and `smr.class.<service>`. Refer to [Multi-Node Clusters](multi-node.md).
+Services carry constraints and nodes advertise capabilities. The built-in properties are `node.platform.os` and `node.platform.arch`. This repository adds the node labels `machine-runner-swarm.zone`, `machine-runner-swarm.docker-build`, `machine-runner-swarm.windows-build`, and `machine-runner-swarm.class.<service>`. Refer to [Multi-Node Clusters](multi-node.md).
 
 ## Why Swarm and not plain Compose
 

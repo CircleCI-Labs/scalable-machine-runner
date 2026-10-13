@@ -10,7 +10,7 @@ This repository publishes no images. The stack files run stock images and add th
 
 ## Linux: stock images with the mounted runner
 
-The statically linked runner binary and `smr-entrypoint` live on the host in `/opt/smr`. The stack mounts that directory read-only at the same path in every container, and sets `entrypoint: ["/opt/smr/bin/smr-entrypoint"]` and `user: "0"`. The entrypoint starts as root, prepares the users, and then runs the runner as `smr-runner`.
+The statically linked runner binary and `circleci-runner-entrypoint` live on the host in `/opt/machine-runner-swarm`. The stack mounts that directory read-only at the same path in every container, and sets `entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]` and `user: "0"`. The entrypoint starts as root, prepares the users, and then runs the runner as `circleci-runner`.
 
 The result is that the image contains none of the runner. You can use `cimg/base` or `cimg/openjdk:21.0` unmodified, and a new runner version needs no image rebuild.
 
@@ -28,8 +28,8 @@ The shipped file uses these images:
 |---|---|
 | Linux, any C library | The runner is statically linked. It runs unmodified in `cimg/base`, `cimg/openjdk`, Alpine, and UBI minimal |
 | `sudo`, or util-linux `setpriv` | Steps each job down to the job user |
-| `setpriv` or `su` | Starts the runner as `smr-runner` |
-| `useradd` or `adduser` | Creates `smr-runner`, and the job user when the image has none |
+| `setpriv` or `su` | Starts the runner as `circleci-runner` |
+| `useradd` or `adduser` | Creates `circleci-runner`, and the job user when the image has none |
 | `sed`, `grep`, `stat`, `install`, `getent`, `id`, `cut`, `tr`, `chmod`, `env` | Used by the entrypoint. BusyBox and coreutils both provide them |
 
 The `cimg` images have everything. Alpine has only the BusyBox `su`, and UBI minimal has neither `sudo` nor `setpriv`. The tests run the entrypoint in `cimg/base` 2026.10, `cimg/openjdk` 21.0, Alpine 3 (with sudo and with `setpriv`), and UBI 9 minimal. Add the packages in a derived image:
@@ -42,7 +42,7 @@ The `cimg` images have everything. Alpine has only the BusyBox `su`, and UBI min
 
 The entrypoint exits with code 80 and a message that names the packages when the tools are missing. The unit tests of the entrypoint cover the `setpriv` path. The end-to-end CI jobs run real jobs through the sudo path only, because the CI image has sudo.
 
-The job user is `circleci` by default. Set `SMR_JOB_USER` to another existing account, such as the default account of a different image. If the account does not exist, the entrypoint creates it with uid 2001, and gives it passwordless sudo while `SMR_JOB_SUDO` is `true` and the image has sudo. The image environment variables, such as `PATH`, `JAVA_HOME`, `LANG`, and proxy variables, reach the jobs. The runner token does not.
+The job user is `circleci` by default. Set `MACHINE_RUNNER_SWARM_JOB_USER` to another existing account, such as the default account of a different image. If the account does not exist, the entrypoint creates it with uid 2001, and gives it passwordless sudo while `MACHINE_RUNNER_SWARM_JOB_SUDO` is `true` and the image has sudo. The image environment variables, such as `PATH`, `JAVA_HOME`, `LANG`, and proxy variables, reach the jobs. The runner token does not.
 
 ### Pin the image
 
@@ -79,14 +79,14 @@ The Dockerfile ends with `USER circleci`, which only affects a plain `docker run
 
 ### The baked variant
 
-The target `baked` puts the runner and the entrypoint inside the image, for hosts where you cannot mount `/opt/smr`. Build it from the root of the repository, because it copies `linux/setup.sh` and `linux/entrypoint/smr-entrypoint`:
+The target `baked` puts the runner and the entrypoint inside the image, for hosts where you cannot mount `/opt/machine-runner-swarm`. Build it from the root of the repository, because it copies `linux/setup.sh` and `linux/entrypoint/circleci-runner-entrypoint`:
 
 ```console
 $ docker build -f linux/images/example/Dockerfile --target baked \
     -t registry.example.com/ci/linux-pg:1-baked .
 ```
 
-The build downloads the runner and verifies its SHA-256 checksum, as `setup.sh` does on a host. A service that uses the baked image keeps the same `entrypoint`, and needs no `/opt/smr` volume. The trade-off is a rebuild for every runner version.
+The build downloads the runner and verifies its SHA-256 checksum, as `setup.sh` does on a host. A service that uses the baked image keeps the same `entrypoint`, and needs no `/opt/machine-runner-swarm` volume. The trade-off is a rebuild for every runner version.
 
 ## Windows: stock Server Core with mounts
 
@@ -94,10 +94,10 @@ The default Windows service runs the unmodified Microsoft Server Core image, for
 
 | Host path | Container path | Content |
 |---|---|---|
-| `C:\smr` | `C:\smr` | `bin\circleci-runner.exe` and `VERSION` |
-| `C:\smr\git` | `C:\Program Files\Git` | Portable Git for Windows: `git`, `bash`, `sh`, `tar`, `gzip`, `ssh` |
+| `C:\machine-runner-swarm` | `C:\machine-runner-swarm` | `bin\circleci-runner.exe` and `VERSION` |
+| `C:\machine-runner-swarm\git` | `C:\Program Files\Git` | Portable Git for Windows: `git`, `bash`, `sh`, `tar`, `gzip`, `ssh` |
 
-The runner is the main process of the container. The service sets `entrypoint` to `C:\smr\bin\circleci-runner.exe machine --config C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`. The service also sets the full `PATH`, because a `PATH` in the service environment replaces the one of the image. Git for Windows appears after the Windows directories, so the Windows `find`, `sort`, and `tar` stay first. The runner passes its environment to the task agent, and the task agent passes it to every step, so jobs see this `PATH`.
+The runner is the main process of the container. The service sets `entrypoint` to `C:\machine-runner-swarm\bin\circleci-runner.exe machine --config C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`. The service also sets the full `PATH`, because a `PATH` in the service environment replaces the one of the image. Git for Windows appears after the Windows directories, so the Windows `find`, `sort`, and `tar` stay first. The runner passes its environment to the task agent, and the task agent passes it to every step, so jobs see this `PATH`.
 
 The system Git configuration is in the read-only Git mount, so the service sets Git options through the environment: `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0`, and `GIT_CONFIG_VALUE_0` enable `core.longpaths`. `GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=never` stop the prompts of the Git Credential Manager, which nothing in a container can answer.
 
@@ -116,7 +116,7 @@ Nano Server is not supported. Windows images must match the host build. Refer to
 
 When Docker stops a container, Windows sends the shutdown event to it, and the runner drains on that event. On Server Core, Windows then waits only the time in the registry value `HKLM\SYSTEM\CurrentControlSet\Control\WaitToKillServiceTimeout` before it ends the processes. The default is 5 seconds, whatever `docker stop -t` or `stop_grace_period` says. No setting in the stack file changes this limit, so the fix is in the image.
 
-The image `windows/images/stop-timeout` is the stock Server Core image plus that one value. Everything else stays stock, so the service still mounts `C:\smr` and Git and sets its `PATH`. Build it for each tag that you run. The build context is the directory of the Dockerfile.
+The image `windows/images/stop-timeout` is the stock Server Core image plus that one value. Everything else stays stock, so the service still mounts `C:\machine-runner-swarm` and Git and sets its `PATH`. Build it for each tag that you run. The build context is the directory of the Dockerfile.
 
 ```powershell
 docker build -f windows/images/stop-timeout/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 `
@@ -140,12 +140,12 @@ For how stops and rolling updates behave, and for what to do on the plain image,
 
 ## Windows: the baked image
 
-The baked image holds the runner and Git inside the image, at the same paths as the mounts. Use it when you want one self-contained artifact, when you add tools on top, or when a host cannot hold `C:\smr`. The runner is its `ENTRYPOINT` with the same `--config` path, so a service that uses it needs no mounts, no `PATH`, and no `entrypoint`. The build puts Git on the machine `PATH`, enables `core.longpaths` in the system Git configuration, and removes the credential helper.
+The baked image holds the runner and Git inside the image, at the same paths as the mounts. Use it when you want one self-contained artifact, when you add tools on top, or when a host cannot hold `C:\machine-runner-swarm`. The runner is its `ENTRYPOINT` with the same `--config` path, so a service that uses it needs no mounts, no `PATH`, and no `entrypoint`. The build puts Git on the machine `PATH`, enables `core.longpaths` in the system Git configuration, and removes the credential helper.
 
 Build it from the root of the repository. The build context is the `windows` directory.
 
 ```powershell
-docker build -f windows/images/servercore/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 -t smr-windows-servercore:ltsc2022 windows
+docker build -f windows/images/servercore/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 -t machine-runner-swarm-windows-servercore:ltsc2022 windows
 ```
 
 | Build argument | Default | Purpose |
@@ -173,8 +173,8 @@ The file [`windows/images/example/Dockerfile`](../windows/images/example/Dockerf
 Build the baked image first, then the example:
 
 ```powershell
-docker build -f windows/images/servercore/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 -t smr-windows-servercore:ltsc2022 windows
-docker build -f windows/images/example/Dockerfile --build-arg BASE_IMAGE=smr-windows-servercore:ltsc2022 -t smr-windows-example:ltsc2022 windows
+docker build -f windows/images/servercore/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 -t machine-runner-swarm-windows-servercore:ltsc2022 windows
+docker build -f windows/images/example/Dockerfile --build-arg BASE_IMAGE=machine-runner-swarm-windows-servercore:ltsc2022 -t machine-runner-swarm-windows-example:ltsc2022 windows
 ```
 
 Push the result to a registry that every Windows node can pull from, because Swarm does not share local images. Then set the image of the `windows-custom` service in `windows\stack\custom-image.yaml`, an optional overlay file, and create the resource class and the secret `windows-custom-token` for it. Deploy it with `-c windows\stack\runners.yaml -c windows\stack\custom-image.yaml`. The file [`examples/windows-custom-image.yml`](../examples/windows-custom-image.yml) shows a job on that class. Rebuild the image when the base image or a tool changes.

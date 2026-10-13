@@ -2,7 +2,7 @@
 #
 # The service (linux/stack/docker-build.yaml) bind-mounts the HOST Docker socket, which is root-equivalent on that node: any job on
 # this class can control the host's Docker engine (start privileged containers, read the host's
-# files, read other jobs' data). Use a dedicated worker node labelled smr.docker-build=true, give
+# files, read other jobs' data). Use a dedicated worker node labelled machine-runner-swarm.docker-build=true, give
 # the class to trusted projects only (config policy), and keep production contexts off it.
 # Alternatives that do not hand out the engine: a rootless BuildKit daemon on the host (mount only its
 # socket), or daemonless builds with Kaniko or Buildah inside an ordinary job.

@@ -2,17 +2,17 @@
 # install.sh: linux/setup.sh --install in a throw-away root container (the host is not touched).
 # Needs network access to the CircleCI release bucket. Checks:
 #   - the pinned version is downloaded, verified (SHA-256, --version) and installed root-owned, nothing
-#     in /opt/smr is writable by group or others
+#     in /opt/machine-runner-swarm is writable by group or others
 #   - a second run is idempotent (no download) and refreshes a changed entrypoint
 #   - a wrong SHA-256 is refused and installs nothing
 #   - another version needs --sha256 (taken here from that release's checksums.txt)
 #   - a non-root user is refused
 #   - the function can be sourced and called on its own
 #
-# Usage: install.sh        Env: SMR_CIMG_IMAGE (default cimg/base:2026.10)
+# Usage: install.sh        Env: SWARM_TEST_CIMG_IMAGE (default cimg/base:2026.10)
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/../.." && pwd)
-image=${SMR_CIMG_IMAGE:-cimg/base:2026.10}
+image=${SWARM_TEST_CIMG_IMAGE:-cimg/base:2026.10}
 
 out=$(docker run --rm --user 0 -v "$repo:/src:ro" "$image" bash -c '
 set -uo pipefail
@@ -21,20 +21,20 @@ r() { echo "RESULT test=install $*"; }
 fail() { echo "FAIL: $*"; exit 1; }
 perms_ok() { [ -z "$(find "$1" ! -user root -o -perm /022)" ]; }
 
-bash linux/setup.sh --install --prefix /opt/smr > /tmp/first.log 2>&1 || { cat /tmp/first.log; fail "first install"; }
-ver=$(/opt/smr/bin/circleci-runner --version | head -n 1)
-perms_ok /opt/smr || fail "files in /opt/smr are not root-owned or are group/world writable"
-[ "$(stat -c "%a %U" /opt/smr/bin/circleci-runner)" = "755 root" ] || fail "runner mode"
-[ "$(cat /opt/smr/VERSION)" = 3.1.12 ] || fail "VERSION file"
+bash linux/setup.sh --install --prefix /opt/machine-runner-swarm > /tmp/first.log 2>&1 || { cat /tmp/first.log; fail "first install"; }
+ver=$(/opt/machine-runner-swarm/bin/circleci-runner --version | head -n 1)
+perms_ok /opt/machine-runner-swarm || fail "files in /opt/machine-runner-swarm are not root-owned or are group/world writable"
+[ "$(stat -c "%a %U" /opt/machine-runner-swarm/bin/circleci-runner)" = "755 root" ] || fail "runner mode"
+[ "$(cat /opt/machine-runner-swarm/VERSION)" = 3.1.12 ] || fail "VERSION file"
 r step=install version=\"$ver\" owner=root mode=755 writable_by_others=no
 
-bash linux/setup.sh --install --prefix /opt/smr > /tmp/second.log 2>&1 || fail "second install"
+bash linux/setup.sh --install --prefix /opt/machine-runner-swarm > /tmp/second.log 2>&1 || fail "second install"
 ! grep -q downloading /tmp/second.log || fail "second run downloaded again"
 r step=idempotent downloaded_again=no
 
-cp -r linux /tmp/linux2 && echo "# changed" >> /tmp/linux2/entrypoint/smr-entrypoint
-bash /tmp/linux2/setup.sh --install --prefix /opt/smr > /dev/null 2>&1 || fail "entrypoint refresh"
-tail -n 1 /opt/smr/bin/smr-entrypoint | grep -q "# changed" || fail "the entrypoint was not refreshed"
+cp -r linux /tmp/linux2 && echo "# changed" >> /tmp/linux2/entrypoint/circleci-runner-entrypoint
+bash /tmp/linux2/setup.sh --install --prefix /opt/machine-runner-swarm > /dev/null 2>&1 || fail "entrypoint refresh"
+tail -n 1 /opt/machine-runner-swarm/bin/circleci-runner-entrypoint | grep -q "# changed" || fail "the entrypoint was not refreshed"
 r step=entrypoint_refresh updated=yes
 
 rm -rf /tmp/bad
@@ -55,8 +55,8 @@ su -s /bin/bash tester -c "bash /src/linux/setup.sh --install --prefix /tmp/nonr
 grep -q "needs root" /tmp/nonroot.log || fail "no root message"
 r step=non_root refused=yes
 
-bash -c ". linux/setup.sh; smr_install_runner 3.1.12 /tmp/sourced >/dev/null 2>&1 && echo called" | grep -q called || fail "sourced call"
-[ -x /tmp/sourced/bin/smr-entrypoint ] || fail "sourced call installed nothing"
+bash -c ". linux/setup.sh; swarm_install_runner 3.1.12 /tmp/sourced >/dev/null 2>&1 && echo called" | grep -q called || fail "sourced call"
+[ -x /tmp/sourced/bin/circleci-runner-entrypoint ] || fail "sourced call installed nothing"
 r step=sourced_function ok=yes
 echo ALLOK
 ' 2>&1) || { printf '%s\n' "$out"; echo "FAIL: install test"; exit 1; }

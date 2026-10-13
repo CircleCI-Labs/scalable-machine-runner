@@ -1,4 +1,4 @@
-# Example .circleci/config.yml for jobs on the scalable-machine-runner Linux classes.
+# Example .circleci/config.yml for jobs on the machine-runner-swarm Linux classes.
 # Replace my-namespace with your organization's runner namespace. Each resource class is one service
 # in linux/stack/runners.yaml (linux-default is my-namespace/linux-default, and so on). Every job
 # below runs in a brand-new container; nothing from an earlier job is visible.

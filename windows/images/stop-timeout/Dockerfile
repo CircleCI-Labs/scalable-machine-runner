@@ -2,7 +2,7 @@
 #
 # STOCK Windows Server Core plus ONE registry value: how long Windows waits for the processes of a container
 # when the container is told to stop, so that a running job can finish. Use it as the image of the stock-image
-# services in windows/stack/*.yaml (they still mount C:\smr and Git); the baked image has the same value built in.
+# services in windows/stack/*.yaml (they still mount C:\machine-runner-swarm and Git); the baked image has the same value built in.
 #
 # Why: HCS shuts a Server Core container down by sending CTRL_SHUTDOWN_EVENT and then waits for
 # HKLM\SYSTEM\CurrentControlSet\Control\WaitToKillServiceTimeout, five seconds by default, before it kills the

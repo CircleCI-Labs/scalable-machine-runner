@@ -1,5 +1,5 @@
 ---
-page-title: Releasing scalable-machine-runner
+page-title: Releasing machine-runner-swarm
 page-audience: developer
 page-description: How a merge to main becomes a signed GitHub release, how maintainers enable publishing, and how to recover from a failed release.
 ---
@@ -57,8 +57,8 @@ git-cliff writes the notes of the new version for the body of the GitHub release
 
 | Asset | Content |
 |---|---|
-| `scalable-machine-runner-<version>.tar.gz` | `README.md`, `LICENSE`, `SECURITY.md`, `VERSION`, the generated `CHANGELOG.md`, `docs/`, `examples/`, `linux/` and `windows/` |
-| `scalable-machine-runner-<version>.zip` | The same files, for Windows users |
+| `machine-runner-swarm-<version>.tar.gz` | `README.md`, `LICENSE`, `SECURITY.md`, `VERSION`, the generated `CHANGELOG.md`, `docs/`, `examples/`, `linux/` and `windows/` |
+| `machine-runner-swarm-<version>.zip` | The same files, for Windows users |
 | `SHA256SUMS` | The SHA-256 checksum of both bundles |
 | `SHA256SUMS.sigstore.json` | The cosign bundle: signature, certificate, and transparency log entry |
 

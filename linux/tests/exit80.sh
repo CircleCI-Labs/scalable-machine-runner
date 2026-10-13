@@ -19,18 +19,18 @@ set -euo pipefail
 WAIT=${WAIT:-45}
 
 session_begin
-install_smr "$SMR_MGR" real
+install_swarm "$SWARM_TEST_MGR" real
 
 # observe CASE: sets tasks, bad_codes, min_gap, gaps for the tasks of linux-default so far.
 observe() {
   local ids id code created prev=0 ts state
   tasks=0 bad_codes=0 min_gap=999999 gaps=
-  ids=$(idocker "$SMR_MGR" service ps -q "${STACK}_linux-default")
+  ids=$(idocker "$SWARM_TEST_MGR" service ps -q "${STACK}_linux-default")
   for id in $ids; do
     tasks=$((tasks + 1))
-    code=$(idocker "$SMR_MGR" inspect -f '{{.Status.ContainerStatus.ExitCode}}' "$id" 2> /dev/null || echo none)
+    code=$(idocker "$SWARM_TEST_MGR" inspect -f '{{.Status.ContainerStatus.ExitCode}}' "$id" 2> /dev/null || echo none)
     # a task that is still starting or running has no exit code yet
-    state=$(idocker "$SMR_MGR" inspect -f '{{.Status.State}}' "$id")
+    state=$(idocker "$SWARM_TEST_MGR" inspect -f '{{.Status.State}}' "$id")
     if [[ $state == failed || $state == complete || $state == shutdown ]]; then
       [[ $code == 80 ]] || bad_codes=$((bad_codes + 1))
     fi
@@ -44,23 +44,23 @@ observe() {
       [[ $((created - prev)) -lt $min_gap ]] && min_gap=$((created - prev))
     fi
     prev=$created
-  done < <(idocker "$SMR_MGR" service logs -t --raw "${STACK}_linux-default" 2>&1 | grep -E 'circleci-runner: error' | cut -d' ' -f1 | sort)
+  done < <(idocker "$SWARM_TEST_MGR" service logs -t --raw "${STACK}_linux-default" 2>&1 | grep -E 'circleci-runner: error' | cut -d' ' -f1 | sort)
   [[ $min_gap -ne 999999 ]] || min_gap=0
 }
 
 run_case() { # name token-value ENV...
   local name=$1 token=$2 env_spec=$3 started
-  inner_reset "$SMR_MGR"
-  create_secrets "$SMR_MGR" "$token" "${BASE_SERVICES[@]}"
+  inner_reset "$SWARM_TEST_MGR"
+  create_secrets "$SWARM_TEST_MGR" "$token" "${BASE_SERVICES[@]}"
   make_override "$work/ov.yaml" "linux-default 1 $env_spec"
   started=$(date +%s)
-  deploy_stack "$SMR_MGR" "$work/ov.yaml"
+  deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml"
   log "case $name: observing for ${WAIT}s"
   sleep "$WAIT"
   observe
   local elapsed=$(($(date +%s) - started))
   local logs
-  logs=$(service_logs "$SMR_MGR" linux-default | grep -E 'circleci-runner: error' | sort | uniq -c | head -n 3 | tr '\n' ';' | cut -c1-300)
+  logs=$(service_logs "$SWARM_TEST_MGR" linux-default | grep -E 'circleci-runner: error' | sort | uniq -c | head -n 3 | tr '\n' ';' | cut -c1-300)
   echo "RESULT test=exit80 case=$name tasks=$tasks seconds=$elapsed restart_delay=10s min_gap=${min_gap}s gaps=${gaps%,} tasks_not_exit_80=$bad_codes"
   echo "       message: $logs"
   # Without a delay a 1s-per-container loop would create ~$WAIT tasks. With delay 10s: about WAIT/10 + 1.
@@ -72,8 +72,8 @@ run_case() { # name token-value ENV...
 run_case empty-token "" ""
 run_case bad-setting "$SENTINEL_TOKEN" "CIRCLECI_RUNNER_LOGGING_LEVEL=bogus"
 
-inner_reset "$SMR_MGR"
-out=$(idocker "$SMR_MGR" run --rm --user 0 --entrypoint /opt/smr/bin/smr-entrypoint -v /opt/smr:/opt/smr:ro \
+inner_reset "$SWARM_TEST_MGR"
+out=$(idocker "$SWARM_TEST_MGR" run --rm --user 0 --entrypoint /opt/machine-runner-swarm/bin/circleci-runner-entrypoint -v /opt/machine-runner-swarm:/opt/machine-runner-swarm:ro \
   -e CIRCLECI_RUNNER_NAME=x "$CIMG_IMAGE" 2>&1) && rc=0 || rc=$?
 echo "RESULT test=exit80 case=no-config-file exit=$rc message=\"$(grep -o 'circleci-runner: error.*' <<< "$out" | cut -c1-120)\""
 [[ $rc -eq 1 ]] || fail "a missing config file should make the runner exit 1, got $rc"

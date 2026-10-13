@@ -43,8 +43,8 @@ With process isolation, the image build must match the host build. Label every n
 
 | Host | Images it can run | Node label |
 |---|---|---|
-| Windows Server 2022 | `ltsc2022` only | `windows.build=ltsc2022` |
-| Windows Server 2025 | `ltsc2025` and `ltsc2022` | `windows.build=ltsc2025` |
+| Windows Server 2022 | `ltsc2022` only | `machine-runner-swarm.windows-build=ltsc2022` |
+| Windows Server 2025 | `ltsc2025` and `ltsc2022` | `machine-runner-swarm.windows-build=ltsc2025` |
 
 A mismatch fails with the error `0xc0370101`. The shipped file targets `ltsc2022`.
 
@@ -54,7 +54,7 @@ If you install self-hosted runners through the web app, an organization admin mu
 
 ## Get the files
 
-Clone the repository at a release tag, or extract a release bundle. Paths on this page are relative to the root of either. The [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) has the `scalable-machine-runner-<version>.zip` bundle for Windows, and the Linux page lists [every file of a release](install-linux.md#get-the-files).
+Clone the repository at a release tag, or extract a release bundle. Paths on this page are relative to the root of either. The [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) has the `machine-runner-swarm-<version>.zip` bundle for Windows, and the Linux page lists [every file of a release](install-linux.md#get-the-files).
 
 ```powershell
 git clone --branch <release-tag> https://github.com/CircleCI-Labs/scalable-machine-runner.git
@@ -70,7 +70,7 @@ CircleCI signs the file `SHA256SUMS` of each release with the OIDC token of the 
    ```powershell
    $version = '0.1.0'
    $base = "https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download/v$version"
-   foreach ($file in "scalable-machine-runner-$version.zip", 'SHA256SUMS', 'SHA256SUMS.sigstore.json') {
+   foreach ($file in "machine-runner-swarm-$version.zip", 'SHA256SUMS', 'SHA256SUMS.sigstore.json') {
      Invoke-WebRequest -Uri "$base/$file" -OutFile $file
    }
    ```
@@ -86,7 +86,7 @@ CircleCI signs the file `SHA256SUMS` of each release with the OIDC token of the 
 1. Compare the checksum of the bundle with the line in `SHA256SUMS`.
 
    ```powershell
-   $zip = "scalable-machine-runner-$version.zip"
+   $zip = "machine-runner-swarm-$version.zip"
    $expected = ((Select-String -Path SHA256SUMS -Pattern ([regex]::Escape($zip))).Line -split '\s+')[0]
    $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash
    if ($actual -ne $expected) { throw "SHA-256 mismatch for $zip" } else { "$zip OK" }
@@ -128,33 +128,33 @@ Run these steps in an elevated PowerShell on every host. Do them before you star
 
 ## 3. Stage the runner and Git
 
-The stack mounts the host directory `C:\smr` read-only into every container, and mounts `C:\smr\git` at `C:\Program Files\Git`. The stock Server Core image therefore needs no changes. No entrypoint script exists on Windows, because `circleci-runner.exe` is the main process of the container.
+The stack mounts the host directory `C:\machine-runner-swarm` read-only into every container, and mounts `C:\machine-runner-swarm\git` at `C:\Program Files\Git`. The stock Server Core image therefore needs no changes. No entrypoint script exists on Windows, because `circleci-runner.exe` is the main process of the container.
 
 | Path | Content |
 |---|---|
-| `C:\smr\bin\circleci-runner.exe` | Machine runner 3 binary |
-| `C:\smr\git\` | Portable Git for Windows, with `git`, `bash`, `sh`, `tar`, `gzip`, and `ssh` |
-| `C:\smr\VERSION` | The runner and Git versions |
+| `C:\machine-runner-swarm\bin\circleci-runner.exe` | Machine runner 3 binary |
+| `C:\machine-runner-swarm\git\` | Portable Git for Windows, with `git`, `bash`, `sh`, `tar`, `gzip`, and `ssh` |
+| `C:\machine-runner-swarm\VERSION` | The runner and Git versions |
 
 The task agent runs `C:\Program Files\Git\usr\bin\tar.exe` for workspaces, and it runs steps with `bash`. MinGit has no `tar`, `gzip`, or `bash`, so the stack uses PortableGit. The download is about 60 MB, and the unpacked tree is about 406 MB in 9,600 files.
 
 The task agent starts `tar.exe` with `--force-local`, from the root of the drive, and with forward-slash operands that are relative to that root. For example, it passes `foo/bar` for `C:\foo\bar`. A backslash operand makes the tar of Git fail with `Cannot stat`, so use the forward-slash form when you test `tar` by hand.
 
-Run the following in an elevated PowerShell. It downloads each file, verifies its SHA-256 checksum, and fills `C:\smr`. The Git and 7-Zip checksums are the values pinned in `windows\Setup.ps1`, and the runner checksum comes from the CircleCI release manifest.
+Run the following in an elevated PowerShell. It downloads each file, verifies its SHA-256 checksum, and fills `C:\machine-runner-swarm`. The Git and 7-Zip checksums are the values pinned in `windows\Setup.ps1`, and the runner checksum comes from the CircleCI release manifest.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$smr = 'C:\smr'
+$swarm = 'C:\machine-runner-swarm'
 $runnerVersion = '3.1.12'
 $gitVersion = '2.56.0.2'
 $gitTag = 'v2.56.0.windows.2'
 $gitSha = '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b'
 $sevenZipVersion = '26.04'
 $sevenZipSha = '256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282'
-$work = Join-Path $env:TEMP 'smr-stage'
-New-Item -ItemType Directory -Force "$smr\bin", "$smr\git", $work | Out-Null
+$work = Join-Path $env:TEMP 'swarm-stage'
+New-Item -ItemType Directory -Force "$swarm\bin", "$swarm\git", $work | Out-Null
 
 function Get-Verified($uri, $file, $sha) {
   Invoke-WebRequest -Uri $uri -OutFile $file -UseBasicParsing
@@ -167,25 +167,25 @@ $manifest = (Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing).Content | Con
 $entry = $manifest.releases.$runnerVersion.windows.amd64
 $runnerUrl = "https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/$runnerVersion/circleci-runner_windows_amd64.tar.gz"
 Get-Verified $runnerUrl "$work\runner.tar.gz" $entry.sha256
-& "$env:SystemRoot\System32\tar.exe" -xzf "$work\runner.tar.gz" -C "$smr\bin"
+& "$env:SystemRoot\System32\tar.exe" -xzf "$work\runner.tar.gz" -C "$swarm\bin"
 
 # Portable Git, unpacked with the standalone 7-Zip extractor
 Get-Verified "https://github.com/ip7z/7zip/releases/download/$sevenZipVersion/7zr.exe" "$work\7zr.exe" $sevenZipSha
 Get-Verified "https://github.com/git-for-windows/git/releases/download/$gitTag/PortableGit-$gitVersion-64-bit.7z.exe" "$work\pgit.exe" $gitSha
-& "$work\7zr.exe" x -y "-o$smr\git" "$work\pgit.exe"
+& "$work\7zr.exe" x -y "-o$swarm\git" "$work\pgit.exe"
 
 # Git's post-install scripts, once, so the tree is ready to mount read-only
-& "$smr\git\usr\bin\bash.exe" --norc -c 'export PATH=/usr/bin:/ucrt64/bin:/mingw64/bin:/cmd:$PATH; export SYSCONFDIR=/etc; for p in $(export LC_COLLATE=C; echo /etc/post-install/*.post); do test -e "$p" && . "$p"; done'
-Remove-Item "$smr\git\post-install.bat" -ErrorAction SilentlyContinue
-Set-Content "$smr\VERSION" "runner=$runnerVersion", "git=$gitVersion" -Encoding ASCII
+& "$swarm\git\usr\bin\bash.exe" --norc -c 'export PATH=/usr/bin:/ucrt64/bin:/mingw64/bin:/cmd:$PATH; export SYSCONFDIR=/etc; for p in $(export LC_COLLATE=C; echo /etc/post-install/*.post); do test -e "$p" && . "$p"; done'
+Remove-Item "$swarm\git\post-install.bat" -ErrorAction SilentlyContinue
+Set-Content "$swarm\VERSION" "runner=$runnerVersion", "git=$gitVersion" -Encoding ASCII
 Remove-Item $work -Recurse -Force
 ```
 
-The script uses the `tar.exe` in `System32` on purpose. A GNU `tar` from another Git on the `PATH` of the host reads `C:\smr\bin` as a remote host name.
+The script uses the `tar.exe` in `System32` on purpose. A GNU `tar` from another Git on the `PATH` of the host reads `C:\machine-runner-swarm\bin` as a remote host name.
 
 A `PsExec64.exe` on the `PATH` of the host does not matter. The stack sets the `PATH` of the containers in full, so the host `PATH` never reaches them. Only an image build checks for it.
 
-### Set the access rights on C:\smr
+### Set the access rights on C:\machine-runner-swarm
 
 Containers with process isolation open the bind mounts as an identity that does not exist on the host. Microsoft says to grant access to Authenticated Users. `Setup.ps1` sets these rights, and you set them by hand as follows.
 
@@ -196,19 +196,19 @@ Containers with process isolation open the bind mounts as an identity that does 
 | `Authenticated Users` | Read and execute |
 
 ```powershell
-icacls C:\smr /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX'
-icacls 'C:\smr\*' /reset /T /C /Q
+icacls C:\machine-runner-swarm /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX'
+icacls 'C:\machine-runner-swarm\*' /reset /T /C /Q
 ```
 
 The first command sets the rights on the directory only, and cuts the inheritance from `C:\`. The second command resets every file below it to inherit them. Do not combine the two with `/T` in one call, because that leaves the files with an empty access list, and the container then fails with `Access is denied`.
 
-A job cannot change the files. Authenticated Users can read and run them but not write, and the mounts are read-only. Hyper-V isolation opens bind mounts as `LocalSystem` instead, and this repository does not test it. Windows can bind-mount only directories, which is why `C:\smr` and `C:\smr\git` are directories and the runner config is a Swarm secret and not a mounted file.
+A job cannot change the files. Authenticated Users can read and run them but not write, and the mounts are read-only. Hyper-V isolation opens bind mounts as `LocalSystem` instead, and this repository does not test it. Windows can bind-mount only directories, which is why `C:\machine-runner-swarm` and `C:\machine-runner-swarm\git` are directories and the runner config is a Swarm secret and not a mounted file.
 
 Check the result. The first command prints the runner version, and the second prints the Git version.
 
 ```powershell
-C:\smr\bin\circleci-runner.exe --version
-C:\smr\git\cmd\git.exe --version
+C:\machine-runner-swarm\bin\circleci-runner.exe --version
+C:\machine-runner-swarm\git\cmd\git.exe --version
 ```
 
 Repeat this step on every Windows host. The directory must exist on each host that can run a service.
@@ -248,15 +248,15 @@ The network of the host drops for a few seconds after this command, so run it af
 Label the node with its Windows build. Use `ltsc2025` on Server 2025.
 
 ```powershell
-docker node update --label-add windows.build=ltsc2022 <node name>
+docker node update --label-add machine-runner-swarm.windows-build=ltsc2022 <node name>
 ```
 
 The optional classes need one more label each. Add it to the nodes that run them:
 
 | Class | Label |
 |---|---|
-| `windows-docker-build` | `smr.docker-build=true` |
-| `windows-persistent` | `smr.class.windows-persistent=true` |
+| `windows-docker-build` | `machine-runner-swarm.docker-build=true` |
+| `windows-persistent` | `machine-runner-swarm.class.windows-persistent=true` |
 
 ## 6. Create the secrets
 
@@ -276,7 +276,7 @@ $class = 'windows-default'
 $secure = Read-Host -Prompt "Runner token for $class" -AsSecureString
 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try { $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-$file = Join-Path $env:TEMP 'smr-runner-config.yaml'
+$file = Join-Path $env:TEMP 'circleci-runner-config.yaml'
 [IO.File]::WriteAllText($file, "api:`n  auth_token: $token`n", (New-Object Text.UTF8Encoding($false)))
 docker secret create "$class-token" $file
 Remove-Item -LiteralPath $file -Force
@@ -297,7 +297,7 @@ Copy `windows\stack\runners.yaml`, and keep the copy under version control. Revi
 
 - Set `image:` of each stock-image service to your stop-timeout image from step 4.
 - `runners.yaml` needs only the secret `windows-default-token`. Each overlay file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
-- For Server 2025 nodes, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.windows.build == ltsc2025`.
+- For Server 2025 nodes, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-build == ltsc2025`.
 
 The optional classes are overlay files. Add each with another `-c` flag, and pass the same set of files on every deploy. Each overlay repeats the anchors of `runners.yaml`, because an anchor does not reach into another file. When you change a common setting, change it in every file that you use.
 
@@ -313,24 +313,24 @@ For the keys that Windows honours and the keys that it ignores, refer to [Stack 
 ## 8. Deploy the stack
 
 ```powershell
-docker stack deploy -c windows\stack\runners.yaml smr
+docker stack deploy -c windows\stack\runners.yaml runners
 ```
 
 To add the optional classes, pass their files after `runners.yaml` with more `-c` flags, for example your own image on top of the baked runner image:
 
 ```powershell
-docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml smr
+docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml runners
 ```
 
-The bind source of the runner mount is `${SMR_DIR:-C:\smr}`. Set `SMR_DIR` before the deploy to use another directory, which [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images) uses for rolling updates.
+The bind source of the runner mount is `${MACHINE_RUNNER_SWARM_DIR:-C:\machine-runner-swarm}`. Set `MACHINE_RUNNER_SWARM_DIR` before the deploy to use another directory, which [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images) uses for rolling updates.
 
 ## Verify the deployment
 
 1. List the services and tasks.
 
    ```powershell
-   docker stack services smr
-   docker stack ps smr --no-trunc
+   docker stack services runners
+   docker stack ps runners --no-trunc
    ```
 
 2. In the web app, select **Runners** and open the resource class. Each replica shows up in the inventory with a name of the form `<node hostname>-<service>-<slot>`.
@@ -346,7 +346,7 @@ The bind source of the runner mount is `${SMR_DIR:-C:\smr}`. Set `SMR_DIR` befor
        resource_class: <namespace>/windows-default
        steps:
          - checkout
-         - run: echo "computer $COMPUTERNAME, instance $SMR_INSTANCE_ID"
+         - run: echo "computer $COMPUTERNAME, instance $MACHINE_RUNNER_SWARM_INSTANCE_ID"
 
    workflows:
      main:
@@ -366,25 +366,25 @@ The bind source of the runner mount is `${SMR_DIR:-C:\smr}`. Set `SMR_DIR` befor
 - The stack enables Git long paths through the environment. The Windows registry value `LongPathsEnabled` is not set. A job that needs long paths for other tools sets the value itself, or runs on a baked image that sets it.
 - Not supported: desktop or UI automation, Docker commands in jobs (except the opt-in docker-build class), and service containers.
 - Not tested: `add_ssh_keys`, Hyper-V isolation, group managed service accounts, and proxies.
-- The variables `SMR_JOB_SUDO` and `SMR_JOB_USER` of the Linux entrypoint do not exist on Windows, and Windows ignores them. There is no step-down.
+- The variables `MACHINE_RUNNER_SWARM_JOB_SUDO` and `MACHINE_RUNNER_SWARM_JOB_USER` of the Linux entrypoint do not exist on Windows, and Windows ignores them. There is no step-down.
 
 ## Optional: use the setup helper
 
-`windows\Setup.ps1` stages `C:\smr`, starts Swarm on request, labels the node, creates the secrets, and deploys, with checks. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <name> PASS` or `FAIL` for each preflight check: administrator, Windows Server build, Windows-container mode, and Swarm manager.
+`windows\Setup.ps1` stages `C:\machine-runner-swarm`, starts Swarm on request, labels the node, creates the secrets, and deploys, with checks. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <name> PASS` or `FAIL` for each preflight check: administrator, Windows Server build, Windows-container mode, and Swarm manager.
 
 The helper always stages before it starts Swarm. It ignores a `PsExec64.exe` on the host `PATH`. It does not build the stop-timeout image, and it does not add the labels of the optional classes.
 
 | Parameter | Effect |
 |---|---|
-| `-InstallDir` | Directory to stage. The default is `C:\smr` |
+| `-InstallDir` | Directory to stage. The default is `C:\machine-runner-swarm` |
 | `-RunnerVersion` | Runner version. The default is `3.1.12`. The checksum comes from the CircleCI release manifest |
 | `-StageOnly` | Stops after staging. Needs no Docker |
 | `-InitSwarm -AdvertiseAddr <ip>` | Creates a Swarm when none exists. The address is required, and the helper waits until the node is a manager |
 | `-Class <name>,<name>` | Asks for each token with hidden input and creates the secret `<name>-token`. An existing secret stays unchanged |
-| `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, default `windows\stack\runners.yaml`) and `-StackName` (default `smr`) |
+| `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, default `windows\stack\runners.yaml`) and `-StackName` (default `runners`) |
 | `-Force` | Stages again even when the same versions are present |
 
-The helper labels the node `windows.build=ltsc2022` or `ltsc2025` from the host build. It supports Server 2022 and 2025 only, so on Server 2019 use the manual steps.
+The helper labels the node `machine-runner-swarm.windows-build=ltsc2022` or `ltsc2025` from the host build. It supports Server 2022 and 2025 only, so on Server 2019 use the manual steps.
 
 Run it after you build the stop-timeout image. The example uses your copy of the stack file, because you set its `image:` to your stop-timeout image.
 
@@ -394,7 +394,7 @@ Run it after you build the stop-timeout image. The example uses your copy of the
 
 ## Upgrade
 
-Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images). Do not overwrite `C:\smr` while containers use it, because Windows cannot replace files that are in use.
+Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images). Do not overwrite `C:\machine-runner-swarm` while containers use it, because Windows cannot replace files that are in use.
 
 ## Stop and uninstall
 
@@ -402,7 +402,7 @@ Refer to [Uninstall](operations.md#uninstall). Every stop of a service, includin
 
 ## Troubleshooting
 
-Refer to [Troubleshooting](troubleshooting.md#windows). The most common problems are an image tag that does not match the host build, missing access rights on `C:\smr`, and a job that ends about 5 seconds after a stop. A task also stays pending when no node carries the `windows.build` label.
+Refer to [Troubleshooting](troubleshooting.md#windows). The most common problems are an image tag that does not match the host build, missing access rights on `C:\machine-runner-swarm`, and a job that ends about 5 seconds after a stop. A task also stays pending when no node carries the `machine-runner-swarm.windows-build` label.
 
 ## Additional resources
 

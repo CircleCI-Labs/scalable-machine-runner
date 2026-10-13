@@ -1,19 +1,19 @@
 # escape=`
 #
-# BAKED ALTERNATIVE. The default is the stock Server Core image plus a read-only mount of C:\smr
+# BAKED ALTERNATIVE. The default is the stock Server Core image plus a read-only mount of C:\machine-runner-swarm
 # (see windows/stack/runners.yaml); use this image when you want one self-contained artifact, for
 # example to add tooling on top, or to run on a host that cannot hold
-# the C:\smr directory.
+# the C:\machine-runner-swarm directory.
 #
 # CircleCI machine runner 3 in a Windows Server Core container, at the same paths as the stock
-# variant: C:\smr\bin\circleci-runner.exe and C:\Program Files\Git, with Git on the machine PATH.
+# variant: C:\machine-runner-swarm\bin\circleci-runner.exe and C:\Program Files\Git, with Git on the machine PATH.
 # The runner is the ENTRYPOINT, with the same config file path as the stock variant, so the same stack
-# keys work: no entrypoint script, no C:\smr mount and no PATH setting. The token comes from the Swarm
+# keys work: no entrypoint script, no C:\machine-runner-swarm mount and no PATH setting. The token comes from the Swarm
 # secret (target circleci_runner_config.yaml), settings from environment variables.
 #
 # Build (the build context is the windows directory):
 #   docker build -f windows/images/servercore/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 `
-#     -t smr-windows-servercore:ltsc2022 windows
+#     -t machine-runner-swarm-windows-servercore:ltsc2022 windows
 #
 # WINDOWS_TAG must match the container host for process isolation:
 #   Windows Server 2022 host -> ltsc2022
@@ -50,13 +50,13 @@ ARG SEVENZIP_SHA256=256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276
 # job after about five seconds. Use at least max_run_time plus the drain margin. See stop-timeout/Dockerfile.
 ARG SHUTDOWN_TIMEOUT_SECONDS=18300
 
-LABEL org.opencontainers.image.title="scalable-machine-runner (Windows Server Core, baked)" `
+LABEL org.opencontainers.image.title="machine-runner-swarm (Windows Server Core, baked)" `
       org.opencontainers.image.description="CircleCI machine runner 3, single-task, one fresh container per job (Docker Swarm)" `
       org.opencontainers.image.source="https://github.com/CircleCI-Labs/scalable-machine-runner" `
       org.opencontainers.image.licenses="MIT" `
-      com.circleci.smr.runner-version="${RUNNER_VERSION}" `
-      com.circleci.smr.git-version="${GIT_VERSION}" `
-      com.circleci.smr.base-image="${BASE_IMAGE}"
+      machine-runner-swarm.runner-version="${RUNNER_VERSION}" `
+      machine-runner-swarm.git-version="${GIT_VERSION}" `
+      machine-runner-swarm.base-image="${BASE_IMAGE}"
 
 SHELL ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
 
@@ -72,4 +72,4 @@ RUN C:/build/install-runner.ps1 -RunnerVersion $env:RUNNER_VERSION -RunnerSha256
     if ($LASTEXITCODE -ne 0) { throw 'reg add failed' }
 
 # No HEALTHCHECK: the runner has no health endpoint. Swarm replaces the container when it exits.
-ENTRYPOINT ["C:\\smr\\bin\\circleci-runner.exe", "machine", "--config", "C:\\ProgramData\\Docker\\secrets\\circleci_runner_config.yaml"]
+ENTRYPOINT ["C:\\machine-runner-swarm\\bin\\circleci-runner.exe", "machine", "--config", "C:\\ProgramData\\Docker\\secrets\\circleci_runner_config.yaml"]

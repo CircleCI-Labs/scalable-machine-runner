@@ -1,5 +1,5 @@
 # Optional class: image builds with the HOST Docker engine ("pattern A"). Deploy with an extra -c flag:
-#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml smr
+#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml runners
 # Create the secret first (same format as in runners.yaml): linux-docker-build-token.
 #
 #   !!! The Docker socket is ROOT-EQUIVALENT on its node. A job that can use it can start a privileged
@@ -8,7 +8,7 @@
 #   !!! so a job could read the tokens of every class.
 #
 # It only schedules where BOTH constraints hold, so label a worker node first:
-#   docker node update --label-add smr.docker-build=true <worker-node>
+#   docker node update --label-add machine-runner-swarm.docker-build=true <worker-node>
 # The job user can use the socket through its group (the entrypoint adds it); jobs need no sudo for docker.
 # Alternatives that do not hand out the engine: a rootless BuildKit daemon on the host (mount only its
 # socket), or daemonless builds (Kaniko, Buildah) inside an ordinary job. Keep the common settings in
@@ -24,14 +24,14 @@ services:
   linux-docker-build:
     image: cimg/base:2026.10   # includes the Docker CLI
     user: "0"
-    entrypoint: ["/opt/smr/bin/smr-entrypoint"]
+    entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]
     init: true
     stop_grace_period: 5h5m
     hostname: "{{.Node.Hostname}}-linux-docker-build-{{.Task.Slot}}"
     environment:
       <<: *env
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-docker-build-{{.Task.Slot}}"
-      SMR_JOB_SUDO: "true"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
     secrets:
       - source: linux-docker-build-token
         target: circleci_runner_config.yaml
@@ -48,8 +48,8 @@ services:
       options: {max-size: 20m, max-file: "3"}
     volumes:
       - type: bind
-        source: /opt/smr
-        target: /opt/smr
+        source: /opt/machine-runner-swarm
+        target: /opt/machine-runner-swarm
         read_only: true
       - type: bind
         source: /var/run/docker.sock   # root-equivalent, see above
@@ -65,7 +65,7 @@ services:
         constraints:
           - node.platform.os == linux
           - node.role == worker
-          - node.labels.smr.docker-build == true
+          - node.labels.machine-runner-swarm.docker-build == true
 
 networks:
   linux-docker-build: {driver: overlay}

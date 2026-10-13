@@ -139,7 +139,7 @@ main() {
   [ -z "${CIRCLE_SHA1:-}" ] || [ "${CIRCLE_SHA1}" = "${sha}" ] || die "checked out ${sha}, but the pipeline is for ${CIRCLE_SHA1}"
   rm -rf "${out}"; mkdir -p "${out}"
   choose_version
-  name="scalable-machine-runner-${version#v}"
+  name="machine-runner-swarm-${version#v}"
   build
   if [ "${RELEASE_SKIP_SIGN:-}" = 1 ]; then say "Signing skipped (RELEASE_SKIP_SIGN=1)"; else sign_and_verify; fi
   publish

@@ -10,15 +10,15 @@
 #
 # Build the baked image first, then this one (the build context is the windows directory):
 #   docker build -f windows/images/servercore/Dockerfile --build-arg WINDOWS_TAG=ltsc2022 `
-#     -t smr-windows-servercore:ltsc2022 windows
+#     -t machine-runner-swarm-windows-servercore:ltsc2022 windows
 #   docker build -f windows/images/example/Dockerfile `
-#     --build-arg BASE_IMAGE=smr-windows-servercore:ltsc2022 -t smr-windows-example:ltsc2022 windows
+#     --build-arg BASE_IMAGE=machine-runner-swarm-windows-servercore:ltsc2022 -t machine-runner-swarm-windows-example:ltsc2022 windows
 #
 # It is the windows-custom service in windows/stack/custom-image.yaml, an optional overlay file: deploy it with
-#   docker stack deploy -c windows/stack/runners.yaml -c windows/stack/custom-image.yaml smr
+#   docker stack deploy -c windows/stack/runners.yaml -c windows/stack/custom-image.yaml runners
 # Push the image to a registry that every Windows node can pull from. Rebuild it when the base image or the tool changes.
 
-ARG BASE_IMAGE=smr-windows-servercore:ltsc2022
+ARG BASE_IMAGE=machine-runner-swarm-windows-servercore:ltsc2022
 # hadolint ignore=DL3006
 FROM ${BASE_IMAGE}
 
@@ -26,8 +26,8 @@ FROM ${BASE_IMAGE}
 ARG NODE_VERSION=24.21.0
 ARG NODE_SHA256=158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541
 
-LABEL org.opencontainers.image.title="scalable-machine-runner (Windows Server Core, example with Node.js)" `
-      com.circleci.smr.node-version="${NODE_VERSION}"
+LABEL org.opencontainers.image.title="machine-runner-swarm (Windows Server Core, example with Node.js)" `
+      machine-runner-swarm.node-version="${NODE_VERSION}"
 
 SHELL ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
 

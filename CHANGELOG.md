@@ -1,4 +1,4 @@
-# Scalable machine runner changelog
+# Machine runner swarm changelog
 
 Release notes live in [GitHub Releases](https://github.com/CircleCI-Labs/scalable-machine-runner/releases). A CircleCI job writes them for every release from the [Conventional Commits](https://www.conventionalcommits.org/) on `main`, with the rules in [`cliff.toml`](cliff.toml). Nobody edits this file by hand, and the release job never commits to `main`. Each release bundle contains a `CHANGELOG.md` with the notes of every release, and you can create the same text with `git cliff`.
 

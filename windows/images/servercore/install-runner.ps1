@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Puts circleci-runner.exe and portable Git for Windows into place. Used by the baked-image
-    Dockerfile at build time, and by windows\Setup.ps1 to stage the C:\smr directory on a host.
+    Dockerfile at build time, and by windows\Setup.ps1 to stage the C:\machine-runner-swarm directory on a host.
 
 .DESCRIPTION
     Every download is pinned and verified with SHA-256 before it is used; nothing is piped into a
@@ -28,7 +28,7 @@ param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string] $GitSha256,
     [Parameter(Mandatory = $true)][string] $SevenZipVersion,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string] $SevenZipSha256,
-    [string] $RunnerDir = 'C:\smr\bin',
+    [string] $RunnerDir = 'C:\machine-runner-swarm\bin',
     [string] $GitDir = 'C:\Program Files\Git',
     [switch] $SetMachinePath,
     [string] $RunnerBaseUrl = 'https://circleci-binary-releases.s3.amazonaws.com/circleci-runner'
@@ -38,7 +38,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-$tmp = Join-Path $env:TEMP 'smr-install'
+$tmp = Join-Path $env:TEMP 'swarm-install'
 
 function Get-VerifiedDownload {
     param([string] $Uri, [string] $OutFile, [string] $Sha256)
@@ -112,7 +112,7 @@ Invoke-Native -FilePath (Join-Path $RunnerDir 'circleci-runner.exe') -ArgumentLi
 Invoke-Native -FilePath (Join-Path $GitDir 'cmd\git.exe') -ArgumentList @('--version')
 Invoke-Native -FilePath (Join-Path $GitDir 'usr\bin\bash.exe') -ArgumentList @('-c', 'echo bash-ok')
 # The task agent switches to a PsExec/RDP desktop wrapper when PsExec64.exe is on ITS PATH, and that wrapper needs an
-# interactive desktop, which containers do not have. Only an image build can put it there: a host that stages C:\smr
+# interactive desktop, which containers do not have. Only an image build can put it there: a host that stages C:\machine-runner-swarm
 # often has Sysinternals on its own PATH (CircleCI's Windows images do), which does not reach the containers.
 if ($SetMachinePath -and (Get-Command 'PsExec64.exe' -ErrorAction SilentlyContinue)) { throw 'PsExec64.exe must not be on PATH in the image' }
 

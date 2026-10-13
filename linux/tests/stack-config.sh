@@ -32,7 +32,7 @@ for s in "${services[@]}"; do
     continue
   fi
   check "$s" 'user: "0"' '^    user: "0"$'
-  check "$s" 'entrypoint /opt/smr/bin/smr-entrypoint' '^      - /opt/smr/bin/smr-entrypoint$'
+  check "$s" 'entrypoint /opt/machine-runner-swarm/bin/circleci-runner-entrypoint' '^      - /opt/machine-runner-swarm/bin/circleci-runner-entrypoint$'
   check "$s" 'init: true' '^    init: true$'
   check "$s" 'stop_grace_period 5h5m' '^    stop_grace_period: 5h5m0s$'
   check "$s" 'restart_policy condition any' '^        condition: any$'
@@ -51,7 +51,7 @@ for s in "${services[@]}"; do
   check "$s" 'secret uid 2000 (the runner)' '^        uid: "2000"$'
   check "$s" 'secret gid 2000' '^        gid: "2000"$'
   check "$s" 'secret mode 0400' '^        mode: 256$'
-  check "$s" 'the read-only /opt/smr bind' '^        read_only: true$'
+  check "$s" 'the read-only /opt/machine-runner-swarm bind' '^        read_only: true$'
   check "$s" 'its own network' "^      $s: null$"
   if grep -q 'privileged\|security_opt' <<< "$block"; then
     echo "  $s: uses a key Swarm ignores"
@@ -61,22 +61,22 @@ for s in "${services[@]}"; do
 done
 
 block=$(service_block linux-default)
-check linux-default 'SMR_JOB_SUDO "true"' '^      SMR_JOB_SUDO: "true"$'
+check linux-default 'MACHINE_RUNNER_SWARM_JOB_SUDO "true"' '^      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"$'
 check linux-default 'single-task mode' '^      CIRCLECI_RUNNER_MODE: single-task$'
 check linux-default 'an idle timeout' '^      CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h$'
 check linux-default 'working-directory cleanup off' '^      CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"$'
 check linux-default 'a spread preference' '^          - spread: node.id$'
 block=$(service_block linux-hardened)
-check linux-hardened 'SMR_JOB_SUDO "false"' '^      SMR_JOB_SUDO: "false"$'
+check linux-hardened 'MACHINE_RUNNER_SWARM_JOB_SUDO "false"' '^      MACHINE_RUNNER_SWARM_JOB_SUDO: "false"$'
 check linux-hardened 'cap_drop ALL' '^      - ALL$'
 block=$(service_block linux-persistent)
 check linux-persistent 'continuous mode' '^      CIRCLECI_RUNNER_MODE: continuous$'
 check linux-persistent 'working-directory cleanup off' '^      CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"$'
-check linux-persistent 'a named volume' '^        source: smr-persistent-home$'
+check linux-persistent 'a named volume' '^        source: persistent-home$'
 check linux-persistent 'a node.hostname constraint' '^          - node.hostname == '
 block=$(service_block linux-docker-build)
 check linux-docker-build 'the docker.sock bind' '^        source: /var/run/docker.sock$'
-check linux-docker-build 'the smr.docker-build label constraint' '^          - node.labels.smr.docker-build == true$'
+check linux-docker-build 'the machine-runner-swarm.docker-build label constraint' '^          - node.labels.machine-runner-swarm.docker-build == true$'
 check linux-docker-build 'the worker role constraint' '^          - node.role == worker$'
 
 echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml services=${#services[@]} problems=$problems"

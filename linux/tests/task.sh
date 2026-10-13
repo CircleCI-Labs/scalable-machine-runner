@@ -21,24 +21,24 @@ set -euo pipefail
 TIMEOUT=${TIMEOUT:-120}
 
 session_begin
-install_smr "$SMR_MGR" real
-export SMR_HOST=$SMR_MGR   # the DinD container's hostname is its name; replaces CHANGE-ME
-docker cp "$tests_dir/fake-api.py" "$SMR_MGR:/fake-api.py"
-api_ip=$(docker exec "$SMR_MGR" hostname -i | awk '{ print $1 }')
+install_swarm "$SWARM_TEST_MGR" real
+export SWARM_TEST_HOST=$SWARM_TEST_MGR   # the DinD container's hostname is its name; replaces CHANGE-ME
+docker cp "$tests_dir/fake-api.py" "$SWARM_TEST_MGR:/fake-api.py"
+api_ip=$(docker exec "$SWARM_TEST_MGR" hostname -i | awk '{ print $1 }')
 api="CIRCLECI_RUNNER_API_URL=http://$api_ip:8099"
 
 # phase NAME TASKS "SERVICE REPLICAS [ENV...]" [STACK_FILE...]: deploy, wait for the service's logs
 phase() {
   local name=$1 tasks=$2 spec=$3
   shift 3
-  inner_reset "$SMR_MGR"
-  create_secrets "$SMR_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" linux-persistent
-  idocker "$SMR_MGR" run -d --name fake-api --network host -v /fake-api.py:/fake-api.py:ro "$CIMG_IMAGE" python3 /fake-api.py 8099 "$tasks" >/dev/null
+  inner_reset "$SWARM_TEST_MGR"
+  create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" linux-persistent
+  idocker "$SWARM_TEST_MGR" run -d --name fake-api --network host -v /fake-api.py:/fake-api.py:ro "$CIMG_IMAGE" python3 /fake-api.py 8099 "$tasks" >/dev/null
   make_override "$work/ov.yaml" "$spec $api"
-  deploy_stack "$SMR_MGR" "$work/ov.yaml" "${@:-runners.yaml}"
+  deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" "${@:-runners.yaml}"
   svc=${spec%% *}
 }
-task_lines() { service_logs "$SMR_MGR" "$svc" | grep -a '^TASK ' || true; }
+task_lines() { service_logs "$SWARM_TEST_MGR" "$svc" | grep -a '^TASK ' || true; }
 wait_tasks() { # N
   local i
   for ((i = 0; i < TIMEOUT; i++)); do
@@ -56,16 +56,16 @@ for class in default hardened; do
   [[ $line == *"user=circleci home=/home/circleci workdir=/var/opt/circleci/workdir residue=0"* ]] || fail "linux-$class: the agent did not run as circleci in the working directory"
   [[ $line == *"config=denied token_env=0"* ]] || fail "linux-$class: the agent can reach the token"
   if [[ $class == default ]]; then [[ $line == *"sudo=yes"* ]] || fail "linux-default: the job lost sudo"; else [[ $line == *"sudo=no"* ]] || fail "linux-hardened: the job has sudo"; fi
-  service_logs "$SMR_MGR" "$svc" | grep -aq 'result=success' || fail "linux-$class: the runner did not finish the task successfully"
+  service_logs "$SWARM_TEST_MGR" "$svc" | grep -aq 'result=success' || fail "linux-$class: the runner did not finish the task successfully"
 done
 
 phase cleanup 1 "linux-default 1 CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true"
 for ((i = 0; i < TIMEOUT; i++)); do
-  if service_logs "$SMR_MGR" "$svc" | grep -aq 'failed to remove working directory'; then break; fi
+  if service_logs "$SWARM_TEST_MGR" "$svc" | grep -aq 'failed to remove working directory'; then break; fi
   sleep 1
 done
-service_logs "$SMR_MGR" "$svc" | grep -aq 'failed to remove working directory' || fail "cleanup=true did not fail the way CI saw it"
-msg=$(service_logs "$SMR_MGR" "$svc" | grep -a 'failed to remove working directory' | head -n 1 | grep -ao 'failed to remove working directory[^"]*' | cut -c1-150)
+service_logs "$SWARM_TEST_MGR" "$svc" | grep -aq 'failed to remove working directory' || fail "cleanup=true did not fail the way CI saw it"
+msg=$(service_logs "$SWARM_TEST_MGR" "$svc" | grep -a 'failed to remove working directory' | head -n 1 | grep -ao 'failed to remove working directory[^"]*' | cut -c1-150)
 tasks=$(task_lines | wc -l)
 echo "RESULT test=task step=cleanup=true tasks_run=$tasks error=\"$msg\""
 [[ $tasks -eq 0 ]] || fail "a task ran although the working directory could not be cleaned"
@@ -75,6 +75,6 @@ wait_tasks 2
 mapfile -t lines < <(task_lines | head -n 2)
 printf 'RESULT test=task step=persistent %s\n' "${lines[@]}"
 [[ ${lines[0]} == *"residue=0"* && ${lines[1]} != *"residue=0"* ]] || fail "the second task of a persistent runner should see the first one's files"
-if service_logs "$SMR_MGR" "$svc" | grep -aq 'failed to remove'; then fail "a persistent runner failed to clean up"; fi
+if service_logs "$SWARM_TEST_MGR" "$svc" | grep -aq 'failed to remove'; then fail "a persistent runner failed to clean up"; fi
 
 pass "the real runner runs tasks as the job user through sudo -niHu; cleanup=true cannot work with a stepped-down job, so it defaults to false; a persistent runner keeps files between tasks and does not fail"

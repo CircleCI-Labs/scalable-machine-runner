@@ -2,7 +2,7 @@
 # Job A of the Linux e2e (see docs/ci.md): hosts the runner as a Docker Swarm service.
 #
 #   ci/e2e-host.sh prepare   linux/setup.sh --swarm-init --install: a single-node swarm and the
-#                            host layout under /opt/smr
+#                            host layout under /opt/machine-runner-swarm
 #   ci/e2e-host.sh run       deploy the shipped stack and host probes b1 and b2 on service
 #                            linux-default (jobs keep sudo), then probe b3 on service
 #                            linux-hardened (no sudo), and print the verdict
@@ -19,7 +19,7 @@
 #
 # The stack is the shipped one (E2E_STACK_FILE) with an override layered on top: the active
 # service runs one replica of a pinned stock image, every other service has none. The runner
-# binary and the entrypoint come from the host through the read-only /opt/smr mount that the
+# binary and the entrypoint come from the host through the read-only /opt/machine-runner-swarm mount that the
 # shipped stack declares. Both services carry the same e2e class token; only one is deployed
 # at a time, so a probe is always claimed by the service it was written for.
 #
@@ -32,7 +32,7 @@
 #   E2E_HARDENED_SERVICE    service for b3 (default linux-hardened)
 #   E2E_IMAGE               stock image for the active service (default: pinned cimg/base)
 #   E2E_SETUP               the helper (default linux/setup.sh; the simulation substitutes a fake)
-#   E2E_STACK               stack name (default smr, as in the docs)
+#   E2E_STACK               stack name (default runners, as in the docs)
 #   E2E_ROOT                evidence and logs, stored as artifacts (default /tmp/e2e)
 #   E2E_IDLE_TIMEOUT        runner idle_timeout (default 5m: every claim happens within seconds)
 #   E2E_MAX_RUN_TIME        runner max_run_time (default 10m)
@@ -52,7 +52,7 @@ service=${E2E_SERVICE:-linux-default}
 hardened=${E2E_HARDENED_SERVICE:-linux-hardened}
 image=${E2E_IMAGE:-cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a}
 setup=${E2E_SETUP:-${repo}/linux/setup.sh}
-stack=${E2E_STACK:-smr}
+stack=${E2E_STACK:-swarm}
 idle=${E2E_IDLE_TIMEOUT:-5m}
 max_run=${E2E_MAX_RUN_TIME:-10m}
 deadline_s=${E2E_DEADLINE_SECONDS:-2400}
@@ -82,8 +82,8 @@ prepare() {
   log "sudo $(rel "${setup}") --swarm-init --install"
   sudo "${setup}" --swarm-init --install
   docker node ls
-  ls -l /opt/smr /opt/smr/bin
-  /opt/smr/bin/circleci-runner --version
+  ls -l /opt/machine-runner-swarm /opt/machine-runner-swarm/bin
+  /opt/machine-runner-swarm/bin/circleci-runner --version
 }
 
 # ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ wait_probe() {
     if [ "${lines}" -gt "${printed}" ]; then
       # The full runner log is an artifact; print what explains a failure.
       sed -n "$((printed + 1)),${lines}p" "${service_log}" |
-        grep -E 'smr-entrypoint:|rror|denied|401|could not|failed' | cut -c1-260 | sed 's/^/  runner: /' | tail -n 8 || true
+        grep -E 'circleci-runner-entrypoint:|rror|denied|401|could not|failed' | cut -c1-260 | sed 's/^/  runner: /' | tail -n 8 || true
       printed=${lines}
     fi
     token_rejected && die "the runner token was rejected (401). Rotate E2E_RUNNER_TOKEN_LINUX in the context."
@@ -310,8 +310,8 @@ verify() {
   log "step-down used by the entrypoint: ${stepdown:-none}"
   [ "${stepdown}" = stepdown=sudo ] || { log "expected every container to step jobs down with sudo (got: ${stepdown:-none})"; ok=0; }
   for p in b1 b2 b3; do
-    [ "$(field "$(evidence ${p})" user)" = circleci ] && [ "$(field "$(evidence ${p})" runner_user)" = smr-runner ] ||
-      { log "${p}: expected job user circleci and runner user smr-runner"; ok=0; }
+    [ "$(field "$(evidence ${p})" user)" = circleci ] && [ "$(field "$(evidence ${p})" runner_user)" = circleci-runner ] ||
+      { log "${p}: expected job user circleci and runner user circleci-runner"; ok=0; }
     [ "$(field "$(evidence ${p})" token_env)" = absent ] && [ "$(field "$(evidence ${p})" token_ps)" = absent ] ||
       { log "${p}: the token is in the job environment or on a command line"; ok=0; }
   done
@@ -355,14 +355,14 @@ sweep() {
   fi
   log "sweep: starting a throwaway runner (idle_timeout 2m) so a queued probe is claimed and fails fast"
   export CIRCLECI_RUNNER_API_AUTH_TOKEN="${E2E_RUNNER_TOKEN_LINUX}"
-  timeout 420 docker run --rm --name "smr-e2e-sweeper-${build}" \
+  timeout 420 docker run --rm --name "swarm-e2e-sweeper-${build}" \
     -e CIRCLECI_RUNNER_API_AUTH_TOKEN \
     -e "CIRCLECI_RUNNER_NAME=e2e-sweeper-${build}" \
     -e CIRCLECI_RUNNER_MODE=single-task \
     -e CIRCLECI_RUNNER_IDLE_TIMEOUT=2m \
     -e CIRCLECI_RUNNER_MAX_RUN_TIME=5m \
     "${sweeper_image}" > "${log_dir}/sweeper.log" 2>&1 || true
-  docker rm -f "smr-e2e-sweeper-${build}" > /dev/null 2>&1 || true
+  docker rm -f "swarm-e2e-sweeper-${build}" > /dev/null 2>&1 || true
   tail -n 6 "${log_dir}/sweeper.log" | cut -c1-200 || true
   log "sweep: done. If a probe is still queued, cancel workflow ${wf} in the UI."
   return 0

@@ -22,7 +22,7 @@ This page describes how to move an existing setup. It covers Linux hosts, which 
 | `deploy.replicas` | `deploy.replicas`, with placement, reservations, and limits |
 | Token in a `.env` file as `CIRCLECI_RUNNER_API_AUTH_TOKEN`, visible in `docker inspect` | Swarm secret `<service>-token`, which holds a runner config file |
 | The same `CIRCLECI_RUNNER_NAME` for every replica | `{{.Node.Hostname}}-<service>-{{.Task.Slot}}`, unique for each replica |
-| Dockerfiles that build the runner into an Ubuntu, `cimg`, or `runner-agent` image | A stock image with the runner mounted from `/opt/smr`. Refer to [Images](images.md) |
+| Dockerfiles that build the runner into an Ubuntu, `cimg`, or `runner-agent` image | A stock image with the runner mounted from `/opt/machine-runner-swarm`. Refer to [Images](images.md) |
 | Runner logs written to a mounted file in the `machine` service | Logs on stdout, read with `docker service logs` |
 | `CIRCLECI_RUNNER_MODE` and `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` in the service environment | The same variables, in the stack file. Cleanup is `"false"` on Linux |
 | Jobs with `resource_class: <namespace>/<class>` | No change |
@@ -32,7 +32,7 @@ Your job configs do not change. Your resource classes and tokens can stay.
 ## Migrate
 
 1. **Decide how to name the classes.** A Swarm service must have the name of its resource class. To keep your resource classes and tokens, name each service after the class that it replaces, for example `base`. To start with new classes, create them as described in [Create the resource classes](install-linux.md#1-create-the-resource-classes).
-2. **Prepare the host.** Docker Engine is already there. Install the runner and the entrypoint into `/opt/smr`, and start Swarm. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint) and [Start Swarm](install-linux.md#4-start-swarm).
+2. **Prepare the host.** Docker Engine is already there. Install the runner and the entrypoint into `/opt/machine-runner-swarm`, and start Swarm. Refer to [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint) and [Start Swarm](install-linux.md#4-start-swarm).
 3. **Create the secrets.** Use the token of each class. It is the value of `CIRCLECI_RUNNER_API_AUTH_TOKEN` in your old `.env` file. Create one secret for each service, as in [Create the secrets](install-linux.md#5-create-the-secrets).
 4. **Choose the images.** The old `convenience` service maps to `cimg/base`, or to another `cimg` image. The old `base` service maps to a stock image that has the tools you need. If your Dockerfiles installed extra tools, move them into an image that you derive. Refer to [Linux: bring your own image](images.md#linux-bring-your-own-image).
 5. **Edit the stack file.** Rename or copy the services, set the replica counts you used before, and keep only the services you need. The old `machine` service becomes `linux/stack/persistent.yaml`. Refer to [Resource Classes](resource-classes.md).

@@ -6,33 +6,33 @@ page-description: Check status and logs, upgrade the runner and images with roll
 
 # Operations
 
-This page describes the day-to-day tasks for a running stack: checking status, upgrading, rotating tokens, patching nodes, and uninstalling. The commands use the stack name `smr` and the service names of the shipped files. Run them on a manager node.
+This page describes the day-to-day tasks for a running stack: checking status, upgrading, rotating tokens, patching nodes, and uninstalling. The commands use the stack name `runners` and the service names of the shipped files. Run them on a manager node.
 
 ## Check status and logs
 
 List the services and the replicas that run:
 
 ```console
-$ docker stack services smr
+$ docker stack services runners
 ```
 
 List the tasks, including the finished ones that Swarm keeps for a short time. The `ERROR` column shows why a task failed or stays pending.
 
 ```console
-$ docker stack ps smr --no-trunc
-$ docker service ps --no-trunc smr_linux-default
+$ docker stack ps runners --no-trunc
+$ docker service ps --no-trunc runners_linux-default
 ```
 
-Read the runner output of a service. On Linux, the entrypoint prints one line that starts with `smr-entrypoint:`.
+Read the runner output of a service. On Linux, the entrypoint prints one line that starts with `circleci-runner-entrypoint:`.
 
 ```console
-$ docker service logs --tail 100 --follow smr_linux-default
+$ docker service logs --tail 100 --follow runners_linux-default
 ```
 
 Healthy single-task replicas show a steady stream of tasks that end in `Complete`, because every finished job ends a task. A task that ends in `Failed` with `task: non-zero exit` needs attention. Alert on these signals:
 
 - Tasks that end with a non-zero exit code, including 80 and 1. Code 143 is the exception: a replica that gets SIGTERM while it still retries to reach CircleCI at start-up exits with 143, and needs no action.
-- Log lines that start with `circleci-runner: error` or `smr-entrypoint: error`, and lines that contain `401`.
+- Log lines that start with `circleci-runner: error` or `circleci-runner-entrypoint: error`, and lines that contain `401`.
 - Tasks that stay `Pending`.
 
 In the web app, select **Runners** to see the replicas of each class in the inventory. A name that you do not recognize means that someone else holds a token of that class.
@@ -43,10 +43,10 @@ Swarm replaces containers one at a time. The stack files set `update_config` to 
 
 ### Upgrade the runner on Linux
 
-The runner binary lives on the host in `/opt/smr`, not in the images.
+The runner binary lives on the host in `/opt/machine-runner-swarm`, not in the images.
 
 1. Pick the new version. Use the latest `3.1.x` or later, and never a version below 3.1.12. The [runner changelog](https://circleci.com/changelog/runner/) lists releases.
-2. On every node, install the new version into `/opt/smr`. Repeat the commands of [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint) with the new `v`, or use the helper with the checksum from the release's `checksums.txt`:
+2. On every node, install the new version into `/opt/machine-runner-swarm`. Repeat the commands of [Install the runner and the entrypoint](install-linux.md#3-install-the-runner-and-the-entrypoint) with the new `v`, or use the helper with the checksum from the release's `checksums.txt`:
 
    ```console
    $ sudo linux/setup.sh --install --version <new version> --sha256 <hash>
@@ -57,13 +57,13 @@ The runner binary lives on the host in `/opt/smr`, not in the images.
 3. Check the version on each node:
 
    ```console
-   $ /opt/smr/bin/circleci-runner --version
+   $ /opt/machine-runner-swarm/bin/circleci-runner --version
    ```
 
 4. Replace the containers. Idle replicas exit after `CIRCLECI_RUNNER_IDLE_TIMEOUT` and pick up the new binary without help. To roll a service now, force an update:
 
    ```console
-   $ docker service update --force smr_linux-default
+   $ docker service update --force runners_linux-default
    ```
 
 5. To roll back, install the previous version on every node and force the update again.
@@ -73,23 +73,23 @@ The runner binary lives on the host in `/opt/smr`, not in the images.
 > [!IMPORTANT]
 > A rolling update stops containers, and a stock Server Core container ends about 5 seconds after a stop. On the plain Microsoft image, every update kills the running jobs of the replica that it replaces. Run stock-image services on the stop-timeout image, or change a service only while its class runs no job. Refer to [Windows drain](#windows-drain).
 
-Windows cannot replace files that a running container uses, so never overwrite `C:\smr`. Stage the new version in a new directory on every Windows node, then point the stack at it.
+Windows cannot replace files that a running container uses, so never overwrite `C:\machine-runner-swarm`. Stage the new version in a new directory on every Windows node, then point the stack at it.
 
-1. Stage the new directory with the steps of [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git), with `$smr = 'C:\smr-<new version>'` and the new runner version. The helper does the same:
-
-   ```powershell
-   .\windows\Setup.ps1 -InstallDir C:\smr-<new version> -RunnerVersion <new version> -StageOnly
-   ```
-
-2. Deploy with `SMR_DIR` set, and with the same `-c` files as before. Swarm performs a rolling update, one replica at a time.
+1. Stage the new directory with the steps of [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git), with `$swarm = 'C:\machine-runner-swarm-<new version>'` and the new runner version. The helper does the same:
 
    ```powershell
-   $env:SMR_DIR = 'C:\smr-<new version>'
-   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.yaml smr
+   .\windows\Setup.ps1 -InstallDir C:\machine-runner-swarm-<new version> -RunnerVersion <new version> -StageOnly
    ```
 
-3. Set `SMR_DIR` again on every later deploy, or edit the default in your copy of the file.
-4. To roll back, deploy again with the previous `SMR_DIR`.
+2. Deploy with `MACHINE_RUNNER_SWARM_DIR` set, and with the same `-c` files as before. Swarm performs a rolling update, one replica at a time.
+
+   ```powershell
+   $env:MACHINE_RUNNER_SWARM_DIR = 'C:\machine-runner-swarm-<new version>'
+   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.yaml runners
+   ```
+
+3. Set `MACHINE_RUNNER_SWARM_DIR` again on every later deploy, or edit the default in your copy of the file.
+4. To roll back, deploy again with the previous `MACHINE_RUNNER_SWARM_DIR`.
 5. Delete the old directory when no container uses it.
 
 ### Update the images
@@ -98,13 +98,13 @@ Windows cannot replace files that a running container uses, so never overwrite `
 - **Your own images.** Rebuild, push, change the tag, and deploy. Rebuild on a schedule, for example monthly, and when the base image or a tool changes.
 - **Windows base images.** Microsoft republishes the Server Core tags each Patch Tuesday. Pin by digest, and rebuild the stop-timeout image and the baked image after each update. Both set the registry value with `reg add`. If you change the build, never use `New-Item -Force` on an existing registry key, because it deletes the values in the key.
 
-For a single service, you can also run `docker service update --image <new image> smr_<service>`. Record the change in your stack file, so that the next deploy does not undo it.
+For a single service, you can also run `docker service update --image <new image> runners_<service>`. Record the change in your stack file, so that the next deploy does not undo it.
 
 ### Upgrade to a new release of this repository
 
 1. Read the [changelog](../CHANGELOG.md). Entries marked `[BREAKING]` say what to change.
 2. Compare your stack file with the file of the new release, and merge the differences.
-3. Install the new `smr-entrypoint` on every Linux node. The install step copies the runner and the entrypoint together. A new release can change the entrypoint, and the stack runs the copy in `/opt/smr`.
+3. Install the new `circleci-runner-entrypoint` on every Linux node. The install step copies the runner and the entrypoint together. A new release can change the entrypoint, and the stack runs the copy in `/opt/machine-runner-swarm`.
 4. Run `docker stack deploy` with the same set of `-c` files as before.
 
 ## Rotate a runner token
@@ -131,7 +131,7 @@ Swarm secrets are immutable. To rotate a token, create a second secret and swap 
    $ docker service update \
        --secret-rm linux-default-token \
        --secret-add source=linux-default-token-v2,target=circleci_runner_config.yaml,uid=2000,gid=2000,mode=0400 \
-       smr_linux-default
+       runners_linux-default
    ```
 
    On Windows, secrets have no `uid`, `gid`, or `mode`:
@@ -140,13 +140,13 @@ Swarm secrets are immutable. To rotate a token, create a second secret and swap 
    docker service update `
      --secret-rm windows-default-token `
      --secret-add source=windows-default-token-v2,target=circleci_runner_config.yaml `
-     smr_windows-default
+     runners_windows-default
    ```
 
 4. Wait until the update completes. The state is `completed`:
 
    ```console
-   $ docker service inspect --format '{{.UpdateStatus.State}}' smr_linux-default
+   $ docker service inspect --format '{{.UpdateStatus.State}}' runners_linux-default
    ```
 
 5. Record the new name in your stack file: change `source:` and the entry under the top-level `secrets:`. A later `docker stack deploy` from the old file then does not revert the swap.
@@ -221,10 +221,10 @@ The first call returns `running_runner_tasks`, and the second returns `unclaimed
 A forced update replaces every replica of a service, one at a time and with a drain. Use it to pick up a new runner binary on the host, or to reset a persistent class.
 
 ```console
-$ docker service update --force smr_linux-persistent
+$ docker service update --force runners_linux-persistent
 ```
 
-A persistent class keeps state between jobs, and recycling removes only the container filesystem. The named volume survives, so `/home/circleci` on Linux and `C:\cache` on Windows keep their files. To reset the volume as well, scale the service to 0. Then run `docker volume rm smr_smr-persistent-home` (Linux) or `docker volume rm smr_windows-persistent-cache` (Windows) on the node that holds the volume, and scale the service back up.
+A persistent class keeps state between jobs, and recycling removes only the container filesystem. The named volume survives, so `/home/circleci` on Linux and `C:\cache` on Windows keep their files. To reset the volume as well, scale the service to 0. Then run `docker volume rm runners_persistent-home` (Linux) or `docker volume rm runners_windows-persistent-cache` (Windows) on the node that holds the volume, and scale the service back up.
 
 On Linux, the runner of a persistent class does not clean its working directory. The runner user cannot remove files that the job user owns, so the stack sets `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` to `"false"`. Files from one job stay for the next job until the container is replaced. Start every job on that class with a step that removes what an earlier job left, and recycle the class on a schedule. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
 
@@ -245,27 +245,27 @@ On a node that runs a docker-build class, jobs also leave images, volumes, and b
 1. Remove the stack. Swarm sends SIGTERM to the tasks, so running jobs get the grace period to finish.
 
    ```console
-   $ docker stack rm smr
+   $ docker stack rm runners
    ```
 
 2. Remove the secrets, and the volumes of persistent classes.
 
    ```console
    $ docker secret rm linux-default-token linux-java-token linux-hardened-token
-   $ docker volume rm smr_smr-persistent-home
+   $ docker volume rm runners_persistent-home
    ```
 
-   The volume of the Windows persistent class is `smr_windows-persistent-cache`.
+   The volume of the Windows persistent class is `runners_windows-persistent-cache`.
 
 3. Remove the nodes from the Swarm. Run `docker swarm leave` on each worker, then `docker swarm leave --force` on the last manager.
 4. Remove the host files:
 
    ```console
-   $ sudo rm -rf /opt/smr
+   $ sudo rm -rf /opt/machine-runner-swarm
    ```
 
    ```powershell
-   Remove-Item C:\smr -Recurse -Force
+   Remove-Item C:\machine-runner-swarm -Recurse -Force
    ```
 
 5. Remove the images that you no longer need with `docker image rm`.

@@ -49,8 +49,8 @@ Each [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/r
 
 | File | Content |
 |---|---|
-| `scalable-machine-runner-<version>.tar.gz` | The bundle for Linux: the stack files, the entrypoint, the setup scripts, the documentation, and the examples, without the tests |
-| `scalable-machine-runner-<version>.zip` | The same bundle for Windows |
+| `machine-runner-swarm-<version>.tar.gz` | The bundle for Linux: the stack files, the entrypoint, the setup scripts, the documentation, and the examples, without the tests |
+| `machine-runner-swarm-<version>.zip` | The same bundle for Windows |
 | `SHA256SUMS` | The SHA-256 checksum of both bundles |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of `SHA256SUMS` |
 
@@ -65,7 +65,7 @@ CircleCI signs `SHA256SUMS` with the OIDC token of the CircleCI job that makes t
    ```bash
    version=0.1.0
    base="https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download/v${version}"
-   curl -fsSLO "${base}/scalable-machine-runner-${version}.tar.gz"
+   curl -fsSLO "${base}/machine-runner-swarm-${version}.tar.gz"
    curl -fsSLO "${base}/SHA256SUMS"
    curl -fsSLO "${base}/SHA256SUMS.sigstore.json"
    ```
@@ -147,20 +147,20 @@ A single node needs no firewall change. Multi-node clusters open the ports in [I
    $ timedatectl show -p NTPSynchronized --value
    ```
 
-3. Keep SELinux enforcing. If SELinux denies the container access to `/opt/smr`, refer to [Permission denied on /opt/smr with SELinux](troubleshooting.md#permission-denied-on-optsmr-with-selinux).
+3. Keep SELinux enforcing. If SELinux denies the container access to `/opt/machine-runner-swarm`, refer to [Permission denied on /opt/machine-runner-swarm with SELinux](troubleshooting.md#permission-denied-on-optmachine-runner-swarm-with-selinux).
 
 > [!NOTE]
 > CI does not run on RHEL, so these steps follow Docker's documentation and have not been exercised in this repository.
 
 ## 3. Install the runner and the entrypoint
 
-The stack mounts the host directory `/opt/smr` read-only into every container. It holds the statically linked runner and the entrypoint, so a stock image needs no rebuild when the runner version changes.
+The stack mounts the host directory `/opt/machine-runner-swarm` read-only into every container. It holds the statically linked runner and the entrypoint, so a stock image needs no rebuild when the runner version changes.
 
 | Path | Content |
 |---|---|
-| `/opt/smr/bin/circleci-runner` | Machine runner 3 binary |
-| `/opt/smr/bin/smr-entrypoint` | Entrypoint script from `linux/entrypoint/smr-entrypoint` |
-| `/opt/smr/VERSION` | Runner version |
+| `/opt/machine-runner-swarm/bin/circleci-runner` | Machine runner 3 binary |
+| `/opt/machine-runner-swarm/bin/circleci-runner-entrypoint` | Entrypoint script from `linux/entrypoint/circleci-runner-entrypoint` |
+| `/opt/machine-runner-swarm/VERSION` | Runner version |
 
 Run the following as root from the root of the repository. It downloads the runner, verifies its SHA-256 checksum against the file that CircleCI publishes, and installs both files.
 
@@ -179,12 +179,12 @@ curl -fsSL --proto '=https' --tlsv1.2 "$base/$v/checksums.txt" \
   | grep "circleci-runner_linux_$arch.tar.gz" | sha256sum -c -
 tar -xzf "circleci-runner_linux_$arch.tar.gz" --no-same-owner circleci-runner
 ./circleci-runner --version
-install -d -m 0755 -o root -g root /opt/smr /opt/smr/bin
-install -m 0755 -o root -g root circleci-runner "$repo/linux/entrypoint/smr-entrypoint" /opt/smr/bin/
-echo "$v" > /opt/smr/VERSION
+install -d -m 0755 -o root -g root /opt/machine-runner-swarm /opt/machine-runner-swarm/bin
+install -m 0755 -o root -g root circleci-runner "$repo/linux/entrypoint/circleci-runner-entrypoint" /opt/machine-runner-swarm/bin/
+echo "$v" > /opt/machine-runner-swarm/VERSION
 ```
 
-The entrypoint refuses to start a container when `/opt/smr`, `/opt/smr/bin`, or the runner binary is not owned by root or is writable by the group or others. Use runner version 3.1.12 or later, which fixes the enforcement of `max_run_time`.
+The entrypoint refuses to start a container when `/opt/machine-runner-swarm`, `/opt/machine-runner-swarm/bin`, or the runner binary is not owned by root or is writable by the group or others. Use runner version 3.1.12 or later, which fixes the enforcement of `max_run_time`.
 
 Repeat this step on every node. The directory must exist on each node that can run a service, otherwise the task fails with `bind source path does not exist`. Install the build that matches the architecture of the node.
 
@@ -256,13 +256,13 @@ An overlay file repeats the common service settings of `runners.yaml`, because Y
 ## 7. Deploy the stack
 
 ```console
-$ docker stack deploy -c linux/stack/runners.yaml smr
+$ docker stack deploy -c linux/stack/runners.yaml runners
 ```
 
 To add the optional classes, pass their files with more `-c` flags:
 
 ```console
-$ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml smr
+$ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml runners
 ```
 
 ## Verify the deployment
@@ -270,17 +270,17 @@ $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml
 1. List the services. Each shows the running and desired replicas.
 
    ```console
-   $ docker stack services smr
+   $ docker stack services runners
    ID             NAME                 MODE         REPLICAS   IMAGE
-   ...            smr_linux-default    replicated   2/2        cimg/base:2026.10
-   ...            smr_linux-java       replicated   1/1        cimg/openjdk:21.0
-   ...            smr_linux-hardened   replicated   1/1        cimg/base:2026.10
+   ...            runners_linux-default    replicated   2/2        cimg/base:2026.10
+   ...            runners_linux-java       replicated   1/1        cimg/openjdk:21.0
+   ...            runners_linux-hardened   replicated   1/1        cimg/base:2026.10
    ```
 
 2. Check the tasks of a service. A task in the `Running` state is a runner that polls CircleCI.
 
    ```console
-   $ docker service ps smr_linux-default
+   $ docker service ps runners_linux-default
    ```
 
 3. In the web app, select **Runners** and open the resource class. Each replica shows up in the inventory with a name of the form `<node hostname>-<service>-<slot>`, for example `node1-linux-default-1`.
@@ -314,7 +314,7 @@ $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml
 |---|---|
 | `--check` | Preflight: Linux, amd64 or arm64, Docker running and 24 or later, Swarm state, NTP |
 | `--swarm-init` | Runs `docker swarm init` on the loopback address unless Swarm is active, and sets the task history limit to 2 |
-| `--install` | Downloads the runner, verifies the SHA-256 checksum, and installs the runner and entrypoint into `--prefix` (default `/opt/smr`). Needs root |
+| `--install` | Downloads the runner, verifies the SHA-256 checksum, and installs the runner and entrypoint into `--prefix` (default `/opt/machine-runner-swarm`). Needs root |
 | `--secret <service>` | Creates the secret `<service>-token` from a token read on stdin |
 | `--deploy` | Runs `docker stack deploy` with each `--stack-file` (default `linux/stack/runners.yaml`) |
 
@@ -327,14 +327,14 @@ linux/setup.sh --secret linux-java        # a hidden prompt asks for the token
 linux/setup.sh --deploy
 ```
 
-The helper pins the SHA-256 checksums of runner version 3.1.12 for amd64 and arm64. For another version, pass `--version X.Y.Z --sha256 <hash>` with the hash from the `checksums.txt` of that release. The helper does not look up the latest version. It installs a pinned version, so that it knows the checksum before the download. Set `SMR_DOWNLOAD_BASE_URL` to an HTTPS mirror for hosts without internet access. The mirror must use the same layout: `<base>/<version>/circleci-runner_linux_<arch>.tar.gz`.
+The helper pins the SHA-256 checksums of runner version 3.1.12 for amd64 and arm64. For another version, pass `--version X.Y.Z --sha256 <hash>` with the hash from the `checksums.txt` of that release. The helper does not look up the latest version. It installs a pinned version, so that it knows the checksum before the download. Set `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` to an HTTPS mirror for hosts without internet access. The mirror must use the same layout: `<base>/<version>/circleci-runner_linux_<arch>.tar.gz`.
 
-The helper accepts a token that has only letters, digits, `.`, `_`, and `-`, and it keeps an existing secret unchanged. To replace a token, refer to [Rotate a runner token](operations.md#rotate-a-runner-token). The preflight warns when the clock is not NTP-synchronized. The helper does not label nodes. For a docker-build class, run `docker node update --label-add smr.docker-build=true <worker node>` yourself.
+The helper accepts a token that has only letters, digits, `.`, `_`, and `-`, and it keeps an existing secret unchanged. To replace a token, refer to [Rotate a runner token](operations.md#rotate-a-runner-token). The preflight warns when the clock is not NTP-synchronized. The helper does not label nodes. For a docker-build class, run `docker node update --label-add machine-runner-swarm.docker-build=true <worker node>` yourself.
 
 To install the runner without any other step, source the script:
 
 ```bash
-. linux/setup.sh && smr_install_runner 3.1.12 /opt/smr
+. linux/setup.sh && swarm_install_runner 3.1.12 /opt/machine-runner-swarm
 ```
 
 ## Upgrade
@@ -347,7 +347,7 @@ Refer to [Uninstall](operations.md#uninstall).
 
 ## Troubleshooting
 
-Refer to [Troubleshooting](troubleshooting.md). The most common problems on a first install are a missing secret, a missing `/opt/smr` on a node, and a task that stays pending because no node matches its constraints.
+Refer to [Troubleshooting](troubleshooting.md). The most common problems on a first install are a missing secret, a missing `/opt/machine-runner-swarm` on a node, and a task that stays pending because no node matches its constraints.
 
 ## Additional resources
 

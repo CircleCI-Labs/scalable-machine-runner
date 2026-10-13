@@ -4,7 +4,7 @@
 // SIGTERM and drains), it keeps working when it is told to stop, and exits 0 when the job is done.
 //
 // It prints what a job could see, never the token itself:
-//   FAKERUNNER identity computer=<COMPUTERNAME> instance=<SMR_INSTANCE_ID> mode=<..> idle_timeout=<..> token_in_env=<True|False>
+//   FAKERUNNER identity computer=<COMPUTERNAME> instance=<MACHINE_RUNNER_SWARM_INSTANCE_ID> mode=<..> idle_timeout=<..> token_in_env=<True|False>
 //   FAKERUNNER config=<path of --config> config_has_token=<True|False>   (whether the file can be read and has an auth_token)
 // and, when FAKE_MARKER_DIR is set, lists the marker files left there by earlier containers and adds one:
 //   FAKERUNNER markers=<names, comma separated>
@@ -48,7 +48,7 @@ public static class FakeRunner
         SetConsoleCtrlHandler(keepAlive, true);
         Console.Out.WriteLine("FAKERUNNER started args=" + string.Join(" ", args) + " job_seconds=" + seconds);
         Console.Out.WriteLine("FAKERUNNER identity computer=" + Environment.GetEnvironmentVariable("COMPUTERNAME")
-            + " instance=" + Environment.GetEnvironmentVariable("SMR_INSTANCE_ID")
+            + " instance=" + Environment.GetEnvironmentVariable("MACHINE_RUNNER_SWARM_INSTANCE_ID")
             + " mode=" + Environment.GetEnvironmentVariable("CIRCLECI_RUNNER_MODE")
             + " idle_timeout=" + Environment.GetEnvironmentVariable("CIRCLECI_RUNNER_IDLE_TIMEOUT")
             + " token_in_env=" + !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CIRCLECI_RUNNER_API_AUTH_TOKEN")));

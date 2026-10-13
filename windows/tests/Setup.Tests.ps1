@@ -87,10 +87,10 @@ Describe 'Protect-Directory' {
     It 'sets the ACL on the directory only, then resets every child to inherit it' {
         $script:calls = New-Object System.Collections.Generic.List[string]
         Mock Invoke-Acl { $script:calls.Add(($args -join ' ')) }
-        Protect-Directory -Dir 'S:\smr'
+        Protect-Directory -Dir 'S:\machine-runner-swarm'
         $script:calls.Count | Should -Be 2
-        $script:calls[0] | Should -Match '^S:\\smr /inheritance:r /grant:r \*S-1-5-18:\(OI\)\(CI\)F \*S-1-5-32-544:\(OI\)\(CI\)F \*S-1-5-11:\(OI\)\(CI\)RX$'
+        $script:calls[0] | Should -Match '^S:\\machine-runner-swarm /inheritance:r /grant:r \*S-1-5-18:\(OI\)\(CI\)F \*S-1-5-32-544:\(OI\)\(CI\)F \*S-1-5-11:\(OI\)\(CI\)RX$'
         $script:calls[0] | Should -Not -Match '/T'
-        $script:calls[1] | Should -Be 'S:\smr\* /reset /T /C /Q'
+        $script:calls[1] | Should -Be 'S:\machine-runner-swarm\* /reset /T /C /Q'
     }
 }

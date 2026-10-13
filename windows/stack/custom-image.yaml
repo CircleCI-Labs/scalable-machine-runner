@@ -1,5 +1,5 @@
 # Optional class: your own image on top of the baked runner image. Deploy with an extra -c flag:
-#   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml smr
+#   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml runners
 # Create the secret first (the runner config with the token, as in runners.yaml): windows-custom-token.
 # Replace the image below with yours: windows\images\example\Dockerfile adds Node.js to the baked image and shows the pattern.
 # A baked image carries the runner, Git, PATH and ENTRYPOINT, so this service has no mount, no PATH and no entrypoint.
@@ -15,7 +15,7 @@ x-runner-env: &runner-env
   CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
   # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
   # HTTPS_PROXY / NO_PROXY: set here when the host needs a proxy (jobs inherit the runner's environment)
-  SMR_INSTANCE_ID: "{{.Task.ID}}"           # lets a job tell which container it ran in
+  MACHINE_RUNNER_SWARM_INSTANCE_ID: "{{.Task.ID}}"           # lets a job tell which container it ran in
   # Git for Windows ships Git Credential Manager; nothing in a container can answer its prompts.
   GIT_TERMINAL_PROMPT: "0"
   GCM_INTERACTIVE: never
@@ -34,7 +34,7 @@ x-runner-deploy: &runner-deploy
     failure_action: pause
 
 x-runner: &runner
-  isolation: process                        # the image build must match the host (windows.build label)
+  isolation: process                        # the image build must match the host (machine-runner-swarm.windows-build label)
   stop_grace_period: 5h5m                   # runner max_run_time (5h) plus 5 minutes to drain
   logging:
     driver: json-file                       # rotation; "local" also works on Windows
@@ -42,13 +42,13 @@ x-runner: &runner
       max-size: 20m
       max-file: "3"
   labels:
-    io.circleci.smr.role: runner
+    machine-runner-swarm.role: runner
 
 services:
   # Build your image (it starts FROM the baked image) and push it to a registry every Windows node can pull from.
   windows-custom:
     <<: *runner
-    image: registry.example.com/ci/smr-windows-example:ltsc2022   # replace with your image
+    image: registry.example.com/ci/machine-runner-swarm-windows-example:ltsc2022   # replace with your image
     environment:
       <<: *runner-env
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-custom-{{.Task.Slot}}"
@@ -65,7 +65,7 @@ services:
       placement:
         constraints:
           - node.platform.os == windows
-          - node.labels.windows.build == ltsc2022
+          - node.labels.machine-runner-swarm.windows-build == ltsc2022
         preferences:
           - spread: node.id
 

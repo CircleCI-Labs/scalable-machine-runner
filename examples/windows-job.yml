@@ -21,7 +21,7 @@ jobs:
       - run:
           name: Bash step (the default shell)
           command: |
-            echo "container $COMPUTERNAME, instance $SMR_INSTANCE_ID, runner $CIRCLECI_RUNNER_NAME"
+            echo "container $COMPUTERNAME, instance $MACHINE_RUNNER_SWARM_INSTANCE_ID, runner $CIRCLECI_RUNNER_NAME"
             git --version
             uname -a
       - run:

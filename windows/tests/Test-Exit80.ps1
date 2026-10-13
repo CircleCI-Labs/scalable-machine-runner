@@ -26,7 +26,7 @@
 [CmdletBinding()]
 param(
     [string] $Image,
-    [string] $SmrRoot = 'C:\smr',
+    [string] $SwarmRoot = 'C:\machine-runner-swarm',
     [switch] $Baked,
     [int] $DelaySeconds = 10,
     [int] $ObserveSeconds = 60,
@@ -37,43 +37,43 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-Import-Module (Join-Path $here 'SmrTestHelpers.psm1') -Force
-if (-not $Image) { $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SmrWindowsTag) }
+Import-Module (Join-Path $here 'SwarmTestHelpers.psm1') -Force
+if (-not $Image) { $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SwarmWindowsTag) }
 
 function Invoke-Docker {
     param([string[]] $ArgumentList)
-    return (Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList $ArgumentList)
+    return (Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList $ArgumentList)
 }
 
 $iso = @()
 if ($Isolation -ne 'default') { $iso = @("--isolation=$Isolation") }
 $mounts = @()
-if (-not $Baked) { $mounts = Get-SmrStockMountArgument -SmrRoot $SmrRoot }
-$runner = 'C:\smr\bin\circleci-runner.exe'
-$tok = 'smr-exit80-not-a-real-token-0000'
+if (-not $Baked) { $mounts = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot }
+$runner = 'C:\machine-runner-swarm\bin\circleci-runner.exe'
+$tok = 'swarm-exit80-not-a-real-token-0000'
 
 # --- direct ---------------------------------------------------------------------------------------
 $cases = @(
     @{ Name = 'no-name'; Env = @('--env', "CIRCLECI_RUNNER_API_AUTH_TOKEN=$tok"); Expect = 'runner.name must be set' }
-    @{ Name = 'no-token'; Env = @('--env', 'CIRCLECI_RUNNER_NAME=smr-exit80-test'); Expect = 'auth_token must be set' }
+    @{ Name = 'no-token'; Env = @('--env', 'CIRCLECI_RUNNER_NAME=swarm-exit80-test'); Expect = 'auth_token must be set' }
     @{ Name = 'invalid-name'; Env = @('--env', 'CIRCLECI_RUNNER_NAME=bad/name', '--env', "CIRCLECI_RUNNER_API_AUTH_TOKEN=$tok"); Expect = 'must contain only' }
 )
 foreach ($c in $cases) {
     $r = Invoke-Docker (@('run', '--rm') + $iso + $mounts + $c.Env + @('--entrypoint', $runner, $Image, 'machine'))
     $text = $r.Output -join ' '
-    Write-SmrCheck "exit80-$($c.Name)" ($r.ExitCode -eq 80 -and $text -match [regex]::Escape($c.Expect) -and $text -notmatch [regex]::Escape($tok)) "exit=$($r.ExitCode) $($r.Output | Select-Object -Last 1)"
+    Write-SwarmCheck "exit80-$($c.Name)" ($r.ExitCode -eq 80 -and $text -match [regex]::Escape($c.Expect) -and $text -notmatch [regex]::Escape($tok)) "exit=$($r.ExitCode) $($r.Output | Select-Object -Last 1)"
 }
 
 # --- swarm: no hot loop ---------------------------------------------------------------------------
 $swarm = $null
-$service = "smr-exit80-$PID"
+$service = "swarm-exit80-$PID"
 $dieCodes = @()
 $expected = '80'
 if ($Baked) { $expected = '1' }
 try {
-    $swarm = Initialize-SmrSwarm -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
+    $swarm = Initialize-SwarmCluster -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
     $create = @('service', 'create', '--detach', '--name', $service, '--restart-condition', 'any', '--restart-delay', "${DelaySeconds}s",
-        '--endpoint-mode', 'dnsrr', '--env', 'CIRCLECI_RUNNER_NAME=smr-exit80-swarm')
+        '--endpoint-mode', 'dnsrr', '--env', 'CIRCLECI_RUNNER_NAME=swarm-exit80-swarm')
     if ($Isolation -ne 'default') { $create += "--isolation=$Isolation" }
     if (-not $Baked) { $create += $mounts }
     # "docker service create ... IMAGE COMMAND" replaces the stock image's default command; a baked image
@@ -88,19 +88,19 @@ try {
     $ev = Invoke-Docker @('events', '--since', "$since", '--until', "$until", '--filter', 'type=container', '--filter', 'event=die',
         '--filter', "label=com.docker.swarm.service.name=$service", '--format', '{{.Actor.Attributes.exitCode}}')
     $dieCodes = @($ev.Output | Where-Object { $_ -match '^\d+$' })
-    $tasks = @(Get-SmrServiceTask -Service $service -DockerCommand $DockerCommand)
+    $tasks = @(Get-SwarmServiceTask -Service $service -DockerCommand $DockerCommand)
     $errors = @($tasks | Where-Object { $_.Error } | ForEach-Object { $_.Error } | Select-Object -Unique)
     $max = [int][math]::Floor($ObserveSeconds / $DelaySeconds) + 2
     $allExpected = ($dieCodes.Count -gt 0) -and (@($dieCodes | Where-Object { $_ -ne $expected }).Count -eq 0)
-    Write-SmrCheck 'swarm-restarts' ($dieCodes.Count -ge 2) "container exits in ${ObserveSeconds}s: $($dieCodes.Count) (Swarm restarts it every ${DelaySeconds}s plus start time)"
-    Write-SmrCheck 'swarm-no-hot-loop' ($dieCodes.Count -le $max) "exits=$($dieCodes.Count) allowed<=$max"
-    Write-SmrCheck "swarm-exit-code-$expected" $allExpected "codes=[$($dieCodes -join ' ')] task errors=[$($errors -join ' | ')]"
+    Write-SwarmCheck 'swarm-restarts' ($dieCodes.Count -ge 2) "container exits in ${ObserveSeconds}s: $($dieCodes.Count) (Swarm restarts it every ${DelaySeconds}s plus start time)"
+    Write-SwarmCheck 'swarm-no-hot-loop' ($dieCodes.Count -le $max) "exits=$($dieCodes.Count) allowed<=$max"
+    Write-SwarmCheck "swarm-exit-code-$expected" $allExpected "codes=[$($dieCodes -join ' ')] task errors=[$($errors -join ' | ')]"
 } finally {
     $null = Invoke-Docker @('service', 'rm', $service)
     if ($swarm -and $swarm.Initialised) { $null = Invoke-Docker @('swarm', 'leave', '--force') }
 }
 
-$count = Get-SmrCheckCount
+$count = Get-SwarmCheckCount
 $verdict = 'PASS'
 if ($count.Failed -gt 0) { $verdict = 'FAIL' }
 [Console]::Out.WriteLine("RESULT exit80 checks=$($count.Checks) failed=$($count.Failed) swarm_exits=$($dieCodes.Count) window=${ObserveSeconds}s delay=${DelaySeconds}s verdict=$verdict")

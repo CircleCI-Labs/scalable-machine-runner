@@ -8,7 +8,7 @@ set -euo pipefail
 # shellcheck source=linux/tests/lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-node=smr-test-helper-$$
+node=swarm-test-helper-$$
 dind_start "$node"
 work=$(mktemp -d)
 trap 'docker rm -f -v "$node" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
@@ -55,8 +55,8 @@ echo "RESULT test=helper step=deploy_without_secrets refused=yes"
 
 for s in linux-java linux-hardened; do printf '%s' "$SENTINEL_TOKEN" | setup --secret "$s" >/dev/null; done
 setup --deploy --stack-file /work/runners.yaml </dev/null >/dev/null
-services=$(idocker "$node" stack services smr --format '{{.Name}}' | sort | paste -sd, -)
+services=$(idocker "$node" stack services runners --format '{{.Name}}' | sort | paste -sd, -)
 echo "RESULT test=helper step=deploy services=$services"
-[[ $services == smr_linux-default,smr_linux-hardened,smr_linux-java ]] || fail "unexpected services: $services"
+[[ $services == runners_linux-default,runners_linux-hardened,runners_linux-java ]] || fail "unexpected services: $services"
 
 pass "setup.sh: preflight, single-node swarm init, secrets from stdin (a runner config, never echoed), deploy; all idempotent"

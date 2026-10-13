@@ -1,6 +1,7 @@
 #!/bin/sh
-# smr-entrypoint: run CircleCI machine runner 3 as its own user and step every job down to an
-# unprivileged job user. Installed as /opt/smr/bin/smr-entrypoint and mounted read-only, with the
+# circleci-runner-entrypoint: run CircleCI machine runner 3 as its own user and step every job down to an
+# unprivileged job user. Installed as bin/circleci-runner-entrypoint in a versioned directory of /opt/machine-runner-swarm,
+# mounted read-only at /opt/machine-runner-swarm, with the
 # runner, into a stock image (cimg/*, Alpine, UBI). The service starts it as root (user: "0").
 #
 # The token never passes through here. The Swarm secret is a runner config file holding only
@@ -8,29 +9,29 @@
 # Every other setting is a CIRCLECI_RUNNER_* variable from the stack, validated by the runner itself
 # (exit 80 for a bad value, 1 for a missing config file).
 #
-# Environment: SMR_JOB_USER  default circleci (created with uid 2001 if missing)
-#              SMR_JOB_SUDO  default true; false removes the job user's sudo rights in this container
+# Environment: MACHINE_RUNNER_SWARM_JOB_USER  default circleci (created with uid 2001 if missing)
+#              MACHINE_RUNNER_SWARM_JOB_SUDO  default true; false removes the job user's sudo rights in this container
 # Arguments replace the runner's default: machine --config /run/secrets/circleci_runner_config.yaml
-# Exit: 80 when a prerequisite is missing, otherwise the runner's own code (it is exec'd, so it
+# Exit: 80 when a prerequisite is missing or an existing circleci-runner account is not uid 2000, otherwise the runner's own code (it is exec'd, so it
 # receives SIGTERM from the init process and drains: a running job finishes).
 set -eu
 
-die() { echo "smr-entrypoint: error: $*" >&2; exit 80; }
+die() { echo "circleci-runner-entrypoint: error: $*" >&2; exit 80; }
 has() { command -v "$1" >/dev/null 2>&1; }
 # util-linux setpriv, not the capabilities-only BusyBox applet.
 setpriv_ok() { has setpriv && setpriv --reuid=0 --regid=0 --init-groups --inh-caps=-all --ambient-caps=-all -- true >/dev/null 2>&1; }
 # sudo needs passwd and shadow entries for the invoking user, so use the image's own tools.
 add_user() { useradd -u "$2" -U -d "$3" -M -s "$4" "$1" 2>/dev/null || adduser -D -u "$2" -h "$3" -H -s "$4" "$1"; }
 
-bin=/opt/smr/bin/circleci-runner
-job=${SMR_JOB_USER:-circleci}
-sudo_ok=${SMR_JOB_SUDO:-true}
+bin=/opt/machine-runner-swarm/bin/circleci-runner
+job=${MACHINE_RUNNER_SWARM_JOB_USER:-circleci}
+sudo_ok=${MACHINE_RUNNER_SWARM_JOB_SUDO:-true}
 umask 022
-case $sudo_ok in true | false) ;; *) die "SMR_JOB_SUDO must be true or false, got '$sudo_ok'" ;; esac
+case $sudo_ok in true | false) ;; *) die "MACHINE_RUNNER_SWARM_JOB_SUDO must be true or false, got '$sudo_ok'" ;; esac
 
 # The runner and the entrypoint must not be writable by the users they run as.
-for p in /opt/smr /opt/smr/bin "$bin"; do
-  [ -e "$p" ] || die "$p is missing: install it on the host (linux/setup.sh) and mount /opt/smr read-only"
+for p in /opt/machine-runner-swarm /opt/machine-runner-swarm/bin "$bin"; do
+  [ -e "$p" ] || die "$p is missing: install it on the host (linux/setup.sh) and mount /opt/machine-runner-swarm read-only"
   s=$(stat -L -c '%u %a' "$p")
   [ "${s% *}" = 0 ] && [ $((0${s#* } & 022)) -eq 0 ] || die "$p must be owned by root and not group/world writable"
 done
@@ -41,8 +42,12 @@ if has sudo; then step=sudo; elif setpriv_ok; then step=setpriv; fi
 { [ -n "$step" ] && { setpriv_ok || has su; }; } || die "jobs cannot be stepped down in this image: it needs sudo or util-linux setpriv" \
   "(Debian/Ubuntu: apt-get install sudo; Alpine: apk add sudo setpriv; UBI: microdnf install sudo util-linux)"
 
-# Users: the runner is uid 2000 (the secret's owner); the job user is the image's circleci or SMR_JOB_USER.
-id smr-runner >/dev/null 2>&1 || add_user smr-runner 2000 /var/lib/smr /bin/false
+# Users: the runner is uid 2000 (the secret's owner); the job user is the image's circleci or MACHINE_RUNNER_SWARM_JOB_USER.
+if id circleci-runner >/dev/null 2>&1; then
+  [ "$(id -u circleci-runner)" = 2000 ] || die "the image already has a circleci-runner account with uid $(id -u circleci-runner): it must be uid 2000, the owner of the secret"
+else
+  add_user circleci-runner 2000 /var/lib/circleci-runner /bin/false
+fi
 if ! id "$job" >/dev/null 2>&1; then
   add_user "$job" 2001 "/home/$job" /bin/sh
   install -d -o 2001 -g 2001 "/home/$job"
@@ -52,7 +57,7 @@ juid=$(id -u "$job")
 jgid=$(id -g "$job")
 jhome=$(getent passwd "$job" | cut -d: -f6)
 
-# SMR_JOB_SUDO=false: no sudo group membership, no sudoers rule naming the user, its groups or ALL.
+# MACHINE_RUNNER_SWARM_JOB_SUDO=false: no sudo group membership, no sudoers rule naming the user, its groups or ALL.
 # sudo -l then has to agree, otherwise the container does not start (e.g. a rule through an alias).
 if [ "$sudo_ok" = false ]; then
   sed -i -E "/^(sudo|wheel|admin):/{s/([:,])$job(,|\$)/\1\2/;s/:,/:/;s/,\$//}" /etc/group
@@ -72,14 +77,14 @@ fi
 # image's environment variables survive the step-down (JAVA_HOME, LANG, proxies), but never the token.
 if [ "$step" = sudo ]; then
   keep=$(env | cut -d= -f1 | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' |
-    grep -Evx 'HOME|USER|LOGNAME|SHELL|MAIL|PWD|OLDPWD|SHLVL|_|TERM|HOSTNAME|PATH|SMR_.*|CIRCLECI_RUNNER_.*' | tr '\n' ' ') || true
+    grep -Evx 'HOME|USER|LOGNAME|SHELL|MAIL|PWD|OLDPWD|SHLVL|_|TERM|HOSTNAME|PATH|MACHINE_RUNNER_SWARM_.*|CIRCLECI_RUNNER_.*' | tr '\n' ' ') || true
   {
     echo 'Defaults:#2000 !secure_path'
     echo "Defaults:#2000 env_keep += \"CIRCLECI_RUNNER_NAME $keep\""
     echo "#2000 ALL=($job) NOPASSWD: ALL"
     if [ "${created:-}" = yes ] && [ "$sudo_ok" = true ]; then echo "$job ALL=(ALL) NOPASSWD: ALL"; fi
-  } > /etc/sudoers.d/90-smr-runner
-  chmod 0440 /etc/sudoers.d/90-smr-runner
+  } > /etc/sudoers.d/90-circleci-runner
+  chmod 0440 /etc/sudoers.d/90-circleci-runner
   CIRCLECI_RUNNER_COMMAND_PREFIX=$(printf '["sudo","-niHu","%s","--"]' "$job")
 else
   CIRCLECI_RUNNER_COMMAND_PREFIX=$(printf '["setpriv","--reuid=%s","--regid=%s","--init-groups","--inh-caps=-all","--ambient-caps=-all","--","env","HOME=%s","USER=%s","LOGNAME=%s"]' \
@@ -91,7 +96,7 @@ export CIRCLECI_RUNNER_COMMAND_PREFIX
 # fails ("failed to remove working directory"); a single-task container is thrown away anyway.
 export CIRCLECI_RUNNER_CLEANUP_WORK_DIR="${CIRCLECI_RUNNER_CLEANUP_WORK_DIR:-false}"
 # The runner writes the task agent, the job user runs it and owns the working directory.
-export CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY="${CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY:-/var/lib/smr/agent}"
+export CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY="${CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY:-/var/lib/circleci-runner/agent}"
 export CIRCLECI_RUNNER_WORK_DIR="${CIRCLECI_RUNNER_WORK_DIR:-/var/opt/circleci/workdir}"
 install -d -m 0755 -o 2000 -g 2000 "$CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY"
 install -d -m 0750 -o "$juid" -g "$jgid" "$CIRCLECI_RUNNER_WORK_DIR"
@@ -99,16 +104,16 @@ install -d -m 0755 -o "$juid" -g "$jgid" /var/opt/circleci   # the parent too: t
 
 # Docker-build pattern: let the job user use a bind-mounted host Docker socket, unless it is root's.
 sock=/var/run/docker.sock
-if [ -S "$sock" ] && [ "$(stat -c %g "$sock")" != 0 ]; then echo "smr-docker:x:$(stat -c %g "$sock"):$job" >> /etc/group; fi
+if [ -S "$sock" ] && [ "$(stat -c %g "$sock")" != 0 ]; then echo "circleci-docker:x:$(stat -c %g "$sock"):$job" >> /etc/group; fi
 
-echo "smr-entrypoint: runner=2000 job=$job sudo=$sudo_ok stepdown=$step" >&2
+echo "circleci-runner-entrypoint: runner=2000 job=$job sudo=$sudo_ok stepdown=$step" >&2
 [ $# -gt 0 ] || set -- machine --config /run/secrets/circleci_runner_config.yaml
 if setpriv_ok; then
   if [ "$step" = setpriv ]; then # setpriv steps jobs down, so the runner keeps setuid/setgid to call it
     exec setpriv --reuid=2000 --regid=2000 --clear-groups --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid -- \
-      env HOME=/var/lib/smr "$bin" "$@"
+      env HOME=/var/lib/circleci-runner "$bin" "$@"
   fi
-  exec setpriv --reuid=2000 --regid=2000 --clear-groups -- env HOME=/var/lib/smr "$bin" "$@"
+  exec setpriv --reuid=2000 --regid=2000 --clear-groups -- env HOME=/var/lib/circleci-runner "$bin" "$@"
 fi
 # shellcheck disable=SC2016  # expanded by the inner shell
-exec su -p -s /bin/sh -c 'exec env HOME=/var/lib/smr "$0" "$@"' smr-runner -- "$bin" "$@"
+exec su -p -s /bin/sh -c 'exec env HOME=/var/lib/circleci-runner "$0" "$@"' circleci-runner -- "$bin" "$@"

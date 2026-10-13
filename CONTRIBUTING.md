@@ -1,14 +1,14 @@
 # Contributing
 
-Thank you for helping to improve the scalable machine runner. This repository is part of CircleCI Labs. Field engineering reviews issues and pull requests on a best-effort basis and does not provide an SLA. CircleCI support does not cover this repository.
+Thank you for helping to improve the machine runner swarm. This repository is part of CircleCI Labs. Field engineering reviews issues and pull requests on a best-effort basis and does not provide an SLA. CircleCI support does not cover this repository.
 
 ## Reporting a bug
 
 Search the [existing issues](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) first, and check that you use the latest release. Then open a new issue with the bug template. Include:
 
-- The release or commit of this repository, and the runner version from `/opt/smr/VERSION` or `C:\smr\VERSION`.
+- The release or commit of this repository, and the runner version from `/opt/machine-runner-swarm/VERSION` or `C:\machine-runner-swarm\VERSION`.
 - The operating system of the node and the Docker Engine version.
-- The output of `docker service ps --no-trunc smr_<service>` and `docker service logs --tail 100 smr_<service>`.
+- The output of `docker service ps --no-trunc runners_<service>` and `docker service logs --tail 100 runners_<service>`.
 
 Remove tokens, runner config files, and internal host names from everything you paste.
 
@@ -81,13 +81,13 @@ Each Linux test prints `RESULT` lines and exits 0 when it passes. `run-all.sh` r
 | `network.sh` | Network isolation between classes, and between the replicas of a class |
 | `bats/run.sh` | The unit tests of the entrypoint on `cimg/base`, Alpine, and UBI minimal |
 
-Three variables change the setup. `SMR_DIND_IMAGE` sets the Docker-in-Docker image. `SMR_TEST_CACHE` sets the directory that caches the real runner binary, `~/.cache/smr-tests` by default. `SMR_KEEP=1` keeps the Docker-in-Docker containers for debugging.
+Three variables change the setup. `SWARM_TEST_DIND_IMAGE` sets the Docker-in-Docker image. `SWARM_TEST_CACHE` sets the directory that caches the real runner binary, `~/.cache/swarm-tests` by default. `SWARM_TEST_KEEP=1` keeps the Docker-in-Docker containers for debugging.
 
 The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and one `RESULT` line, and exit 0 only when every check passes. `Invoke-UnitTests.ps1` runs the Pester tests on any system with PowerShell 7. The `Test-*.ps1` scripts need a Windows host with Docker in Windows-container mode, and none of them needs a runner token.
 
 | Test | What it checks |
 |---|---|
-| `Test-Injection.ps1` | A stock Server Core image with the `C:\smr` and Git mounts and the `PATH` of the stack: the toolchain, GNU tar as the task agent calls it, Git long paths, the exit codes of the runner, and the config file with environment overrides. `-Online` lets the real runner download its task agent. `-Baked` tests the baked image |
+| `Test-Injection.ps1` | A stock Server Core image with the `C:\machine-runner-swarm` and Git mounts and the `PATH` of the stack: the toolchain, GNU tar as the task agent calls it, Git long paths, the exit codes of the runner, and the config file with environment overrides. `-Online` lets the real runner download its task agent. `-Baked` tests the baked image |
 | `Test-Ephemerality.ps1` | A new container for every job and no residue, with the restart-policy negative control |
 | `Test-Exit80.ps1` | Exit 80 without a hot loop |
 | `Test-Placement.ps1` | Placement constraints and node labels |

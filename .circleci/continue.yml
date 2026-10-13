@@ -324,26 +324,26 @@ jobs:
           name: docker build linux/images/example (default target, then baked)
           command: |
             docker version --format 'docker {{.Server.Version}}'
-            docker build --pull -f linux/images/example/Dockerfile -t smr-ci/example:ci linux/images/example
-            docker build -f linux/images/example/Dockerfile --target baked -t smr-ci/example:baked .
-            docker image ls 'smr-ci/example'
+            docker build --pull -f linux/images/example/Dockerfile -t swarm-ci/example:ci linux/images/example
+            docker build -f linux/images/example/Dockerfile --target baked -t swarm-ci/example:baked .
+            docker image ls 'swarm-ci/example'
       - run:
           name: Smoke - the baked image runs the runner, the default image runs it through the host mount
           command: |
-            docker run --rm --entrypoint /opt/smr/bin/circleci-runner smr-ci/example:baked --version
-            docker run --rm --entrypoint psql smr-ci/example:ci --version
+            docker run --rm --entrypoint /opt/machine-runner-swarm/bin/circleci-runner swarm-ci/example:baked --version
+            docker run --rm --entrypoint psql swarm-ci/example:ci --version
             # A config file with a made-up token and no runner name: the runner rejects it with 80.
             printf 'api:\n  auth_token: not-a-real-token\n' > /tmp/config.yaml
             rc=0; docker run --rm --user 0 -v /tmp/config.yaml:/run/secrets/circleci_runner_config.yaml:ro \
-              --entrypoint /opt/smr/bin/smr-entrypoint smr-ci/example:baked || rc=$?
+              --entrypoint /opt/machine-runner-swarm/bin/circleci-runner-entrypoint swarm-ci/example:baked || rc=$?
             echo "baked entrypoint without a runner name exited ${rc}"
             [ "${rc}" -eq 80 ] || exit 1
       - trivy:
-          image: smr-ci/example:baked
+          image: swarm-ci/example:baked
           base: cimg/base:2026.10
           report: example-baked
       - trivy:
-          image: smr-ci/example:ci
+          image: swarm-ci/example:ci
           base: cimg/base:2026.10
           report: example
       - store_artifacts:
@@ -395,7 +395,7 @@ jobs:
   # ---------------------------------------------------------------------------
   windows-swarm:
     description: >
-      docker swarm init, then the stock-image path (C:\\smr mounted into the unmodified Server
+      docker swarm init, then the stock-image path (C:\\machine-runner-swarm mounted into the unmodified Server
       Core image, runner as the main process): the mounts, ephemerality, exit 80, placement, stop handling and persistent mode.
     parameters:
       os:
@@ -431,7 +431,7 @@ jobs:
             & .\windows\tests\Invoke-UnitTests.ps1 -ResultsDirectory C:\test-results\pester
             exit $LASTEXITCODE
       - run:
-          name: Stage C:\smr (windows\Setup.ps1 -StageOnly - runner, portable Git, ACLs)
+          name: Stage C:\machine-runner-swarm (windows\Setup.ps1 -StageOnly - runner, portable Git, ACLs)
           command: |
             # Stage first: the downloads must not run right after `docker swarm init`.
             $global:LASTEXITCODE = 1
@@ -444,7 +444,7 @@ jobs:
             docker pull mcr.microsoft.com/windows/servercore:$env:WINDOWS_TAG
             exit $LASTEXITCODE
       - run:
-          name: docker swarm init and the windows.build node label (windows\Setup.ps1 -InitSwarm -AdvertiseAddr)
+          name: docker swarm init and the machine-runner-swarm.windows-build node label (windows\Setup.ps1 -InitSwarm -AdvertiseAddr)
           command: |
             # `docker swarm init` alone fails here: "could not find the system's IP address".
             $ip = (Get-NetIPAddress -AddressFamily IPv4 |
@@ -456,7 +456,7 @@ jobs:
             $rc = $LASTEXITCODE
             docker node ls
             docker node inspect self --format '{{json .Spec.Labels}}'
-            Get-ChildItem C:\smr -Recurse -Depth 1 | Select-Object -First 30 | ForEach-Object { Write-Host $_.FullName }
+            Get-ChildItem C:\machine-runner-swarm -Recurse -Depth 1 | Select-Object -First 30 | ForEach-Object { Write-Host $_.FullName }
             exit $rc
       - run:
           name: Stock image plus the read-only mounts (windows/tests/Test-Injection.ps1 -Online)
@@ -511,7 +511,7 @@ jobs:
   windows-baked:
     description: >
       The fallback: the baked Server Core image (windows/images/servercore) with the runner,
-      Git and entrypoint inside, built and checked without the C:\\smr mount.
+      Git and entrypoint inside, built and checked without the C:\\machine-runner-swarm mount.
     parameters:
       os:
         type: executor
@@ -521,7 +521,7 @@ jobs:
     executor: << parameters.os >>
     environment:
       WINDOWS_TAG: << parameters.tag >>
-      IMAGE: smr-ci/windows:<< parameters.tag >>
+      IMAGE: swarm-ci/windows:<< parameters.tag >>
     steps:
       - checkout
       - run:
@@ -568,9 +568,9 @@ jobs:
           no_output_timeout: 30m
           command: |
             docker build -f windows/images/example/Dockerfile --build-arg "BASE_IMAGE=$env:IMAGE" `
-              -t smr-ci/windows-example:ci windows
+              -t swarm-ci/windows-example:ci windows
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            docker run --rm --isolation=process --entrypoint powershell.exe smr-ci/windows-example:ci `
+            docker run --rm --isolation=process --entrypoint powershell.exe swarm-ci/windows-example:ci `
               -NoProfile -Command "node --version; npm --version; git --version"
             exit $LASTEXITCODE
       - store_artifacts:
@@ -586,7 +586,7 @@ jobs:
     steps:
       - checkout
       - run:
-          name: docker swarm init and the host layout under /opt/smr
+          name: docker swarm init and the host layout under /opt/machine-runner-swarm
           command: ci/e2e-host.sh prepare
       - run:
           name: Host the stack - probes b1, b2 (default service) then b3 (hardened service)
@@ -615,7 +615,7 @@ jobs:
         type: enum
         enum: ["true", "false"]
         default: "true"
-        description: The service this probe runs in; false = hardened (SMR_JOB_SUDO=false).
+        description: The service this probe runs in; false = hardened (MACHINE_RUNNER_SWARM_JOB_SUDO=false).
       workspace:
         type: enum
         enum: [persist, attach, none]
@@ -641,10 +641,10 @@ jobs:
             equal: [attach, << parameters.workspace >>]
           steps:
             - attach_workspace:
-                at: /tmp/smr-e2e-ws
+                at: /tmp/swarm-e2e-ws
             - run:
                 name: Workspace from the previous probe arrived intact
-                command: grep -qx "${CIRCLE_WORKFLOW_ID}" "/tmp/smr-e2e-ws/<< parameters.previous >>.txt"
+                command: grep -qx "${CIRCLE_WORKFLOW_ID}" "/tmp/swarm-e2e-ws/<< parameters.previous >>.txt"
       - run:
           name: Residue, container identity and token readability (<< parameters.probe >>)
           no_output_timeout: 5m
@@ -656,9 +656,9 @@ jobs:
           condition:
             equal: [persist, << parameters.workspace >>]
           steps:
-            - run: mkdir -p /tmp/smr-e2e-ws && echo "${CIRCLE_WORKFLOW_ID}" > /tmp/smr-e2e-ws/<< parameters.probe >>.txt
+            - run: mkdir -p /tmp/swarm-e2e-ws && echo "${CIRCLE_WORKFLOW_ID}" > /tmp/swarm-e2e-ws/<< parameters.probe >>.txt
             - persist_to_workspace:
-                root: /tmp/smr-e2e-ws
+                root: /tmp/swarm-e2e-ws
                 paths: [<< parameters.probe >>.txt]
       # The host waits for this file after the job, so a failed probe ends the e2e at once.
       - run:
@@ -684,7 +684,7 @@ jobs:
     steps:
       - checkout
       - run:
-          name: docker swarm init (with an advertise address) and the host layout under C:\smr
+          name: docker swarm init (with an advertise address) and the host layout under C:\machine-runner-swarm
           no_output_timeout: 30m
           command: |
             $global:LASTEXITCODE = 1
@@ -766,7 +766,7 @@ jobs:
                 at: .
             - restore_cache:
                 keys:
-                  - smr-e2e-v1-<< parameters.variant >>-{{ .Environment.CIRCLE_WORKFLOW_ID }}
+                  - swarm-e2e-v1-<< parameters.variant >>-{{ .Environment.CIRCLE_WORKFLOW_ID }}
             - run:
                 name: The workspace and the cache arrived intact (ci/E2E-Storage.ps1 -Phase Verify)
                 command: |
@@ -793,7 +793,7 @@ jobs:
                 root: .
                 paths: [out]
             - save_cache:
-                key: smr-e2e-v1-<< parameters.variant >>-{{ .Environment.CIRCLE_WORKFLOW_ID }}
+                key: swarm-e2e-v1-<< parameters.variant >>-{{ .Environment.CIRCLE_WORKFLOW_ID }}
                 paths: [cache-dir]
       # The host waits for this file after the job (see the Linux probe).
       - run:

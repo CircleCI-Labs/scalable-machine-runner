@@ -2,7 +2,7 @@
 # (windows/stack/docker-build.yaml, an overlay file for docker stack deploy, pattern A). The job reaches
 # the host Docker engine through its named pipe, \\.\pipe\docker_engine, so it is ADMINISTRATOR-EQUIVALENT
 # on that node: it can start any container, mount any host path and, on a Swarm manager, read every secret. Use it only for trusted projects, on
-# nodes labelled smr.docker-build=true that no other class shares. Only Windows images can be built (the
+# nodes labelled machine-runner-swarm.docker-build=true that no other class shares. Only Windows images can be built (the
 # engine is in Windows-container mode); Linux images cannot. docker.exe comes from the host
 # (the stack file mounts C:\Program Files\Docker at C:\docker and adds it to PATH).
 #

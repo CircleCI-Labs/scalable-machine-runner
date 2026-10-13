@@ -40,7 +40,7 @@
 [CmdletBinding()]
 param(
     [string] $Image,
-    [string] $SmrRoot = 'C:\smr',
+    [string] $SwarmRoot = 'C:\machine-runner-swarm',
     [switch] $Baked,
     [switch] $Online,
     [ValidateSet('all', 'docker', 'swarm')][string] $Mode = 'all',
@@ -54,20 +54,20 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-Import-Module (Join-Path $here 'SmrTestHelpers.psm1') -Force
-if (-not $Image) { $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SmrWindowsTag) }
+Import-Module (Join-Path $here 'SwarmTestHelpers.psm1') -Force
+if (-not $Image) { $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SwarmWindowsTag) }
 
 function Invoke-Docker {
     param([string[]] $ArgumentList)
-    return (Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList $ArgumentList)
+    return (Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList $ArgumentList)
 }
 
-$work = Join-Path ([System.IO.Path]::GetTempPath()) "smr-stop-$PID"
+$work = Join-Path ([System.IO.Path]::GetTempPath()) "swarm-stop-$PID"
 $fixtures = Join-Path $work 'fixtures'
-$null = Initialize-SmrFakeRunner -OutputDirectory $fixtures -SourcePath (Join-Path $here 'fixtures\FakeRunner.cs')
+$null = Initialize-SwarmFakeRunner -OutputDirectory $fixtures -SourcePath (Join-Path $here 'fixtures\FakeRunner.cs')
 $iso = @()
 if ($Isolation -ne 'default') { $iso = @("--isolation=$Isolation") }
-$fixtureMount = @('--mount', "type=bind,source=$fixtures,target=C:\smr-test,readonly")
+$fixtureMount = @('--mount', "type=bind,source=$fixtures,target=C:\swarm-test,readonly")
 $secretPath = 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml'
 
 function Wait-Log {
@@ -91,7 +91,7 @@ function Get-ExitCode {
 $testImage = $Image
 $builtImage = $null
 if (-not $Baked) {
-    $builtImage = "smr-stop-test:$PID"
+    $builtImage = "swarm-stop-test:$PID"
     $r = Invoke-Docker @('build', '-f', (Join-Path $here '..\images\stop-timeout\Dockerfile'), '--build-arg', "BASE_IMAGE=$Image",
         '--build-arg', "SHUTDOWN_TIMEOUT_SECONDS=$ShutdownSeconds", '-t', $builtImage, (Join-Path $here '..\images\stop-timeout'))
     if ($r.ExitCode -ne 0) { throw "building the stop-timeout image failed: $($r.Output | Select-Object -Last 5)" }
@@ -101,9 +101,9 @@ if (-not $Baked) {
 function Invoke-FakeStop {
     # Runs the fake runner as the main process of a container of ImageName, stops it, and reports what happened.
     param([string] $ImageName, [string] $Suffix, [int] $StopTimeout)
-    $name = "smr-stop-$Suffix-$PID"
+    $name = "swarm-stop-$Suffix-$PID"
     $run = @('run', '--detach', '--name', $name) + $iso + $fixtureMount + @('--env', "FAKE_JOB_SECONDS=$JobSeconds",
-        '--entrypoint', 'C:\smr-test\FakeRunner.exe', $ImageName, 'machine')
+        '--entrypoint', 'C:\swarm-test\FakeRunner.exe', $ImageName, 'machine')
     $r = Invoke-Docker $run
     if ($r.ExitCode -ne 0) { throw "docker run failed: $($r.Output -join ' ')" }
     $up = Wait-Log -Container $name -Pattern 'FAKERUNNER started'
@@ -138,19 +138,19 @@ try {
         $d = Invoke-FakeStop -ImageName $testImage -Suffix 'docker' -StopTimeout $StopTimeoutSeconds
         $d.Log | Select-Object -Last 12 | ForEach-Object { [Console]::Out.WriteLine("  log: $_") }
         $minimum = [Math]::Max(5, $JobSeconds - 15)
-        Write-SmrCheck 'stop-docker' ($d.Up -and $d.Finished -and $d.Code -eq '0' -and $d.Elapsed -ge $minimum) `
+        Write-SwarmCheck 'stop-docker' ($d.Up -and $d.Finished -and $d.Code -eq '0' -and $d.Elapsed -ge $minimum) `
             "runner_started=$($d.Up) console_event=$($d.Event) (2 close, 5 logoff, 6 shutdown) stop_exit=$($d.StopExit) job_finished=$($d.Finished) container_exit=$($d.Code) stop_took=$($d.Elapsed)s (job ${JobSeconds}s, at least ${minimum}s expected)"
 
         if ($Online) {
             # --- stop-real-runner: the real runner, a bogus token, nothing to drain -------------------------
-            $name = "smr-stop-real-$PID"
+            $name = "swarm-stop-real-$PID"
             $mounts = @()
-            if (-not $Baked) { $mounts = Get-SmrStockMountArgument -SmrRoot $SmrRoot }
-            $stackEnv = Get-SmrStackEnvironment
+            if (-not $Baked) { $mounts = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot }
+            $stackEnv = Get-SwarmStackEnvironment
             if ($Baked) { $null = $stackEnv.Remove('PATH') }
-            $run = @('run', '--detach', '--name', $name) + $iso + $mounts + (ConvertTo-SmrEnvArgument -Environment $stackEnv) + @(
-                '--env', 'CIRCLECI_RUNNER_NAME=smr-stop-real', '--env', 'CIRCLECI_RUNNER_API_AUTH_TOKEN=smr-stop-not-a-real-token',
-                '--env', 'CIRCLECI_RUNNER_IDLE_TIMEOUT=10m', '--entrypoint', 'C:\smr\bin\circleci-runner.exe', $testImage, 'machine')
+            $run = @('run', '--detach', '--name', $name) + $iso + $mounts + (ConvertTo-SwarmEnvArgument -Environment $stackEnv) + @(
+                '--env', 'CIRCLECI_RUNNER_NAME=swarm-stop-real', '--env', 'CIRCLECI_RUNNER_API_AUTH_TOKEN=swarm-stop-not-a-real-token',
+                '--env', 'CIRCLECI_RUNNER_IDLE_TIMEOUT=10m', '--entrypoint', 'C:\machine-runner-swarm\bin\circleci-runner.exe', $testImage, 'machine')
             $null = Invoke-Docker $run
             $up = Wait-Log -Container $name -Pattern '401|Unauthorized|starting agent' -TimeoutSeconds 300
             Start-Sleep -Seconds 5
@@ -162,18 +162,18 @@ try {
             $null = Invoke-Docker @('rm', '--force', $name)
             $realLog | Select-Object -Last 8 | ForEach-Object { [Console]::Out.WriteLine("  log: $_") }
             $drained = ($realLog -join "`n") -match 'terminated'
-            Write-SmrCheck 'stop-real-runner' ($up -and $drained -and $realCode -eq '0' -and $elapsed -lt 100) "runner_up=$up drained_on_stop=$drained container_exit=$realCode stop_took=${elapsed}s"
+            Write-SwarmCheck 'stop-real-runner' ($up -and $drained -and $realCode -eq '0' -and $elapsed -lt 100) "runner_up=$up drained_on_stop=$drained container_exit=$realCode stop_took=${elapsed}s"
         }
     }
 
     if ($Mode -in @('all', 'swarm')) {
         # --- swarm: a Swarm secret as the runner config, then a rolling update ---------------------------
-        $swarm = Initialize-SmrSwarm -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
-        $swarmStack = "smrstop$PID"
+        $swarm = Initialize-SwarmCluster -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
+        $swarmStack = "swarmstop$PID"
         $service = "${swarmStack}_runner"
-        $secretName = "smr-stop-token-$PID"
+        $secretName = "swarm-stop-token-$PID"
         $secretFile = Join-Path $work 'secret.yaml'
-        [System.IO.File]::WriteAllText($secretFile, "api:`n  auth_token: smr-stop-secret-not-a-real-token`n")
+        [System.IO.File]::WriteAllText($secretFile, "api:`n  auth_token: swarm-stop-secret-not-a-real-token`n")
         $r = Invoke-Docker @('secret', 'create', $secretName, $secretFile)
         Remove-Item -LiteralPath $secretFile -Force
         if ($r.ExitCode -ne 0) { throw "docker secret create failed: $($r.Output -join ' ')" }
@@ -181,11 +181,11 @@ try {
         if ($Isolation -ne 'default') { $iso1 = "    isolation: $Isolation" }
         $yaml = @(
             'services:', '  runner:', "    image: $testImage", $iso1,
-            '    entrypoint: [''C:\smr-test\FakeRunner.exe'', machine, ''--config'', ''C:\ProgramData\Docker\secrets\circleci_runner_config.yaml'']',
-            '    environment:', '      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-stop-{{.Task.Slot}}"', '      SMR_INSTANCE_ID: "{{.Task.ID}}"',
+            '    entrypoint: [''C:\swarm-test\FakeRunner.exe'', machine, ''--config'', ''C:\ProgramData\Docker\secrets\circleci_runner_config.yaml'']',
+            '    environment:', '      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-stop-{{.Task.Slot}}"', '      MACHINE_RUNNER_SWARM_INSTANCE_ID: "{{.Task.ID}}"',
             "      FAKE_JOB_SECONDS: ""$JobSeconds""",
             '    secrets:', '      - source: stop-token', '        target: circleci_runner_config.yaml',
-            '    stop_grace_period: 3m', '    volumes:', '      - type: bind', "        source: '$fixtures'", "        target: 'C:\smr-test'", '        read_only: true',
+            '    stop_grace_period: 3m', '    volumes:', '      - type: bind', "        source: '$fixtures'", "        target: 'C:\swarm-test'", '        read_only: true',
             '    deploy:', '      replicas: 1', '      endpoint_mode: dnsrr', '      restart_policy:', '        condition: any', '        delay: 2s',
             '      update_config:', '        order: stop-first', '        parallelism: 1',
             'secrets:', '  stop-token:', '    external: true', "    name: $secretName") | Where-Object { $_ -ne '' }
@@ -194,7 +194,7 @@ try {
         $r = Invoke-Docker @('stack', 'deploy', '--resolve-image', 'never', '-c', $file, $swarmStack)
         if ($r.ExitCode -ne 0) { throw "docker stack deploy failed: $($r.Output -join ' ')" }
         $oldId = ''
-        $null = Wait-SmrCondition -TimeoutSeconds 300 -IntervalSeconds 3 -Condition {
+        $null = Wait-SwarmCondition -TimeoutSeconds 300 -IntervalSeconds 3 -Condition {
             $ids = @((Invoke-Docker @('ps', '--quiet', '--no-trunc', '--filter', "label=com.docker.swarm.service.name=$service")).Output | Where-Object { $_ })
             if ($ids.Count -gt 0 -and (((Invoke-Docker @('logs', $ids[0])).Output -join "`n") -match 'FAKERUNNER config=')) { $script:oldId = $ids[0]; $true } else { $false }
         }
@@ -202,7 +202,7 @@ try {
         if ($oldId) { $startLog = (Invoke-Docker @('logs', $oldId)).Output -join "`n" }
         $readable = $startLog -match ('FAKERUNNER config=' + [regex]::Escape($secretPath) + ' config_has_token=True')
         $inEnv = $startLog -match 'token_in_env=True'
-        Write-SmrCheck 'swarm-secret' ($readable -and -not $inEnv) "config_secret_readable_with_token=$readable token_in_runner_environment=$inEnv (the token is in the file only)"
+        Write-SwarmCheck 'swarm-secret' ($readable -and -not $inEnv) "config_secret_readable_with_token=$readable token_in_runner_environment=$inEnv (the token is in the file only)"
 
         Start-Sleep -Seconds 5
         $t0 = Get-Date
@@ -214,19 +214,19 @@ try {
         $oldCode = ''
         if ($oldId) { $oldCode = Get-ExitCode -Container $oldId }
         $oldLog | Select-Object -Last 8 | ForEach-Object { [Console]::Out.WriteLine("  log: $_") }
-        Write-SmrCheck 'stop-swarm-update' ($oldId -ne '' -and $finished -and $oldCode -eq '0') "old_container=$($oldId.Substring(0, [Math]::Min(12, $oldId.Length))) job_finished=$finished container_exit=$oldCode update_took=${elapsed}s"
+        Write-SwarmCheck 'stop-swarm-update' ($oldId -ne '' -and $finished -and $oldCode -eq '0') "old_container=$($oldId.Substring(0, [Math]::Min(12, $oldId.Length))) job_finished=$finished container_exit=$oldCode update_took=${elapsed}s"
     }
 } finally {
     if ($swarmStack) { $null = Invoke-Docker @('stack', 'rm', $swarmStack) }
     if ($secretName) {
-        $null = Wait-SmrCondition -TimeoutSeconds 60 -IntervalSeconds 3 -Condition { (Invoke-Docker @('secret', 'rm', $secretName)).ExitCode -eq 0 }
+        $null = Wait-SwarmCondition -TimeoutSeconds 60 -IntervalSeconds 3 -Condition { (Invoke-Docker @('secret', 'rm', $secretName)).ExitCode -eq 0 }
     }
     if ($swarm -and $swarm.Initialised) { $null = Invoke-Docker @('swarm', 'leave', '--force') }
     if ($builtImage) { $null = Invoke-Docker @('rmi', '--force', $builtImage) }
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-$count = Get-SmrCheckCount
+$count = Get-SwarmCheckCount
 $verdict = 'PASS'
 if ($count.Failed -gt 0) { $verdict = 'FAIL' }
 [Console]::Out.WriteLine("RESULT stop checks=$($count.Checks) failed=$($count.Failed) job_seconds=$JobSeconds verdict=$verdict")

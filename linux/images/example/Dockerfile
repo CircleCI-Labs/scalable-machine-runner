@@ -1,6 +1,6 @@
 # Bring-your-own image: a stock CircleCI convenience image plus the tools your jobs need.
 #
-# The runner is NOT in this image. The host's /opt/smr (the runner and smr-entrypoint, installed by
+# The runner is NOT in this image. The host's /opt/machine-runner-swarm (the runner and circleci-runner-entrypoint, installed by
 # linux/setup.sh) is mounted read-only into the container, so nothing here has to be rebuilt when
 # the runner version changes. Any image that has sudo or util-linux setpriv works.
 #
@@ -8,9 +8,9 @@
 #   # then, in linux/stack/runners.yaml:  image: registry.example.com/ci/linux-pg:1
 #
 # Fully baked variant (target "baked"): the runner and the entrypoint are inside the image, for hosts
-# where /opt/smr cannot be mounted. Build it from the repository root; setup.sh downloads the runner
+# where /opt/machine-runner-swarm cannot be mounted. Build it from the repository root; setup.sh downloads the runner
 # and verifies its SHA-256 exactly as it does on a host. Services still use
-# entrypoint: ["/opt/smr/bin/smr-entrypoint"] and need no /opt/smr mount.
+# entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"] and need no /opt/machine-runner-swarm mount.
 #
 #   docker build -f linux/images/example/Dockerfile --target baked -t registry.example.com/ci/linux-pg:1-baked .
 ARG BASE_IMAGE=cimg/base:2026.10
@@ -28,10 +28,10 @@ USER circleci
 FROM tools AS baked
 ARG RUNNER_VERSION=3.1.12
 USER 0
-COPY linux/setup.sh /tmp/smr/setup.sh
-COPY linux/entrypoint/smr-entrypoint /tmp/smr/entrypoint/smr-entrypoint
-RUN bash /tmp/smr/setup.sh --install --version "${RUNNER_VERSION}" --prefix /opt/smr \
- && rm -rf /tmp/smr
+COPY linux/setup.sh /tmp/swarm/setup.sh
+COPY linux/entrypoint/circleci-runner-entrypoint /tmp/swarm/entrypoint/circleci-runner-entrypoint
+RUN bash /tmp/swarm/setup.sh --install --version "${RUNNER_VERSION}" --prefix /opt/machine-runner-swarm \
+ && rm -rf /tmp/swarm
 # hadolint ignore=DL3066
 USER circleci
 

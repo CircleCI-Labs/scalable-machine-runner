@@ -5,15 +5,15 @@
     host, Docker in Windows-container mode. Needs no runner token.
 
 .DESCRIPTION
-    The containers get exactly what windows\stack\runners.yaml gives a stock service: C:\smr and C:\smr\git
+    The containers get exactly what windows\stack\runners.yaml gives a stock service: C:\machine-runner-swarm and C:\machine-runner-swarm\git
     mounted read-only (Git at C:\Program Files\Git), and the environment of its x-runner-env and
     x-stock-env anchors, PATH included. Prints "CHECK <name> PASS|FAIL <detail>" lines and ends with a
     RESULT line; exits 0 only when every check passed.
 
       os-version         the image build can run process-isolated on this host
-      runner-mount       C:\smr\bin\circleci-runner.exe --version works through the read-only mount (the ACL
+      runner-mount       C:\machine-runner-swarm\bin\circleci-runner.exe --version works through the read-only mount (the ACL
                          grants the container identity read and execute)
-      mount-readonly     a job cannot write to C:\smr or to Git                              (injected only)
+      mount-readonly     a job cannot write to C:\machine-runner-swarm or to Git                              (injected only)
       baked-entrypoint   the image's ENTRYPOINT is the runner with --config on the secret path  (baked only)
       toolchain          with the stack's PATH: bash, sh, git, gzip, tar and ssh resolve; powershell.exe and
                          cmd.exe still do; C:\Program Files\Git\usr\bin\tar.exe, the path the task agent
@@ -34,7 +34,7 @@
                          its task agent (symlink privilege, egress, PATH), gets 401s and exits 0 at the idle
                          timeout. Contacts runner.circleci.com and circleci-binary-releases.s3.amazonaws.com.
 
-.PARAMETER SmrRoot
+.PARAMETER SwarmRoot
     The staged host directory. Create it with:  .\windows\Setup.ps1 -StageOnly
 
 .EXAMPLE
@@ -42,12 +42,12 @@
     .\windows\tests\Test-Injection.ps1 -Online
 
 .EXAMPLE
-    .\windows\tests\Test-Injection.ps1 -Baked -Image smr-windows-servercore:ltsc2022
+    .\windows\tests\Test-Injection.ps1 -Baked -Image machine-runner-swarm-windows-servercore:ltsc2022
 #>
 [CmdletBinding()]
 param(
     [string] $Image,
-    [string] $SmrRoot = 'C:\smr',
+    [string] $SwarmRoot = 'C:\machine-runner-swarm',
     [switch] $Baked,
     [switch] $Online,
     [int] $OnlineTimeoutSeconds = 300,
@@ -57,11 +57,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-Import-Module (Join-Path $here 'SmrTestHelpers.psm1') -Force
+Import-Module (Join-Path $here 'SwarmTestHelpers.psm1') -Force
 
 if (-not $Image) {
     if ($Baked) { throw '-Baked needs -Image <your baked image>' }
-    $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SmrWindowsTag)
+    $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SwarmWindowsTag)
 }
 $mode = 'injected'
 if ($Baked) { $mode = 'baked' }
@@ -69,16 +69,16 @@ $iso = @()
 if ($Isolation -ne 'default') { $iso = @("--isolation=$Isolation") }
 
 # What the stack gives a service: the environment (without PATH for the baked image, which has it built in) and mounts.
-$stackEnv = Get-SmrStackEnvironment
+$stackEnv = Get-SwarmStackEnvironment
 $stockPath = $stackEnv['PATH']
 if ($Baked) { $null = $stackEnv.Remove('PATH') }
-$envArgs = ConvertTo-SmrEnvArgument -Environment $stackEnv
+$envArgs = ConvertTo-SwarmEnvArgument -Environment $stackEnv
 $mountArgs = @()
-if (-not $Baked) { $mountArgs = Get-SmrStockMountArgument -SmrRoot $SmrRoot }
+if (-not $Baked) { $mountArgs = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot }
 $psHost = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass')
-$runner = 'C:\smr\bin\circleci-runner.exe'
-$dummyToken = 'smr-injection-not-a-real-token-0000'
-$work = Join-Path ([System.IO.Path]::GetTempPath()) "smr-inj-$PID"
+$runner = 'C:\machine-runner-swarm\bin\circleci-runner.exe'
+$dummyToken = 'swarm-injection-not-a-real-token-0000'
+$work = Join-Path ([System.IO.Path]::GetTempPath()) "swarm-inj-$PID"
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 
 function Invoke-Container {
@@ -88,7 +88,7 @@ function Invoke-Container {
     if (-not $NoStack) { $run += $mountArgs + $envArgs }
     $run += $Extra   # after the stack's environment: for a repeated --env the last one wins
     $run += @('--entrypoint', $Entrypoint, $Image) + $Argument
-    return (Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList $run)
+    return (Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList $run)
 }
 
 function Invoke-PowerShellProbe {
@@ -107,28 +107,28 @@ function Get-JsonLine {
 
 try {
     # --- os-version ---------------------------------------------------------------------------------
-    $imageBuild = Get-SmrImageBuild -Image $Image -DockerCommand $DockerCommand
+    $imageBuild = Get-SwarmImageBuild -Image $Image -DockerCommand $DockerCommand
     if ($imageBuild -eq 0) {
         [Console]::Out.WriteLine("image $Image is not on this host; pulling it")
-        $null = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('pull', $Image)
-        $imageBuild = Get-SmrImageBuild -Image $Image -DockerCommand $DockerCommand
+        $null = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('pull', $Image)
+        $imageBuild = Get-SwarmImageBuild -Image $Image -DockerCommand $DockerCommand
     }
-    $hostBuild = Get-SmrHostBuild
-    $canProcess = Test-SmrProcessIsolation -HostBuild $hostBuild -ImageBuild $imageBuild
-    Write-SmrCheck 'os-version' ($imageBuild -ne 0 -and ($canProcess -or $Isolation -eq 'hyperv')) "image_build=$imageBuild host_build=$hostBuild process_isolation=$canProcess mode=$mode"
+    $hostBuild = Get-SwarmHostBuild
+    $canProcess = Test-SwarmProcessIsolation -HostBuild $hostBuild -ImageBuild $imageBuild
+    Write-SwarmCheck 'os-version' ($imageBuild -ne 0 -and ($canProcess -or $Isolation -eq 'hyperv')) "image_build=$imageBuild host_build=$hostBuild process_isolation=$canProcess mode=$mode"
 
     # --- runner-mount, mount-readonly, baked-entrypoint ---------------------------------------------
     $r = Invoke-Container -Entrypoint $runner -Argument @('--version')
-    Write-SmrCheck 'runner-mount' ($r.ExitCode -eq 0 -and ($r.Output -join ' ') -match '\d+\.\d+\.\d+') "exit=$($r.ExitCode) $($r.Output -join ' ')"
+    Write-SwarmCheck 'runner-mount' ($r.ExitCode -eq 0 -and ($r.Output -join ' ') -match '\d+\.\d+\.\d+') "exit=$($r.ExitCode) $($r.Output -join ' ')"
 
     if (-not $Baked) {
-        $r = Invoke-PowerShellProbe -Script "foreach (`$p in 'C:\smr\job-wrote-this', 'C:\Program Files\Git\job-wrote-this') { try { Set-Content -LiteralPath `$p -Value x -ErrorAction Stop; 'WRITABLE' } catch { 'READONLY' } }"
+        $r = Invoke-PowerShellProbe -Script "foreach (`$p in 'C:\machine-runner-swarm\job-wrote-this', 'C:\Program Files\Git\job-wrote-this') { try { Set-Content -LiteralPath `$p -Value x -ErrorAction Stop; 'WRITABLE' } catch { 'READONLY' } }"
         $text = $r.Output -join ' '
-        Write-SmrCheck 'mount-readonly' ($text -match 'READONLY READONLY' -and $text -notmatch 'WRITABLE') $text
+        Write-SwarmCheck 'mount-readonly' ($text -match 'READONLY READONLY' -and $text -notmatch 'WRITABLE') $text
     } else {
-        $r = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('image', 'inspect', '--format', '{{json .Config.Entrypoint}}', $Image)
+        $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('image', 'inspect', '--format', '{{json .Config.Entrypoint}}', $Image)
         $entry = @($r.Output | Select-Object -Last 1) -join ''
-        Write-SmrCheck 'baked-entrypoint' ($entry -match 'circleci-runner\.exe' -and $entry -match 'circleci_runner_config\.yaml') $entry
+        Write-SwarmCheck 'baked-entrypoint' ($entry -match 'circleci-runner\.exe' -and $entry -match 'circleci_runner_config\.yaml') $entry
     }
 
     # --- toolchain, shell, tar-agent-style, git-local, long-paths -------------------------------------
@@ -198,7 +198,7 @@ try {
     $r.longpathsConfig = ((& git config --get core.longpaths) -join '')
     & git init -q repo 2>&1 | Out-Null
     Set-Location 'C:\cci\w\repo'
-    & git config user.email 'smr@example.com'; & git config user.name 'smr'
+    & git config user.email 'swarm@example.com'; & git config user.name 'swarm'
     Set-Content -LiteralPath 'file.txt' -Value 'v1'
     $deep = 'C:\cci\w\repo\' + ((1..8 | ForEach-Object { 'd' * 40 }) -join '\')
     [System.IO.Directory]::CreateDirectory('\\?\' + $deep) | Out-Null
@@ -221,19 +221,19 @@ $r | ConvertTo-Json -Compress
     $j = Get-JsonLine -Output $r.Output
     if (-not $j) {
         $r.Output | Select-Object -Last 25 | ForEach-Object { [Console]::Out.WriteLine("  probe: $_") }
-        foreach ($n in 'toolchain', 'shell', 'tar-agent-style', 'git-local', 'long-paths') { Write-SmrCheck $n $false "probe did not return JSON (exit $($r.ExitCode))" }
+        foreach ($n in 'toolchain', 'shell', 'tar-agent-style', 'git-local', 'long-paths') { Write-SwarmCheck $n $false "probe did not return JSON (exit $($r.ExitCode))" }
     } else {
         $missing = @('bash', 'sh', 'git', 'gzip', 'tar', 'ssh', 'powershell', 'cmd' | Where-Object { -not $j.$_ })
         $isAdmin = "$($j.user)" -match 'containeradministrator'
         $isGnuTar = "$($j.gitTarVersion)" -match 'GNU tar'
-        Write-SmrCheck 'toolchain' ($missing.Count -eq 0 -and $isGnuTar -and $isAdmin -and $j.symlinkPrivilege -and $j.symlinkMade -and -not $j.psexec) `
+        Write-SwarmCheck 'toolchain' ($missing.Count -eq 0 -and $isGnuTar -and $isAdmin -and $j.symlinkPrivilege -and $j.symlinkMade -and -not $j.psexec) `
             "missing=[$($missing -join ',')] git_tar='$($j.gitTarVersion)' user=$($j.user) symlink_privilege=$($j.symlinkPrivilege) symlink_made=$($j.symlinkMade) bash=$($j.bash) PATH=$($j.path)"
-        Write-SmrCheck 'shell' (("$($j.bashRun)" -match 'bash-ok') -and ("$($j.shRun)" -match 'sh-ok')) "bash='$($j.bashRun)' sh='$($j.shRun)'"
-        Write-SmrCheck 'tar-agent-style' ([bool]$j.tarOk) "$($j.tar) $($j.tarOutput)"
+        Write-SwarmCheck 'shell' (("$($j.bashRun)" -match 'bash-ok') -and ("$($j.shRun)" -match 'sh-ok')) "bash='$($j.bashRun)' sh='$($j.shRun)'"
+        Write-SwarmCheck 'tar-agent-style' ([bool]$j.tarOk) "$($j.tar) $($j.tarOutput)"
         [Console]::Out.WriteLine("NOTE tar with a backslash operand (not what the agent passes): $($j.tarBackslashOperand)")
         [Console]::Out.WriteLine("NOTE tar with --file under C:\cci\w\tmp (a backslash-t in the path): $($j.tarFileInTmp)")
-        Write-SmrCheck 'git-local' ([bool]$j.gitOk -and "$($j.longpathsConfig)" -eq 'true') "$($j.git) core.longpaths=$($j.longpathsConfig) (set by GIT_CONFIG_* in the stack)"
-        Write-SmrCheck 'long-paths' ([bool]$j.longPathCloned) "path_length=$($j.longPathLength) cloned=$($j.longPathCloned)"
+        Write-SwarmCheck 'git-local' ([bool]$j.gitOk -and "$($j.longpathsConfig)" -eq 'true') "$($j.git) core.longpaths=$($j.longpathsConfig) (set by GIT_CONFIG_* in the stack)"
+        Write-SwarmCheck 'long-paths' ([bool]$j.longPathCloned) "path_length=$($j.longPathLength) cloned=$($j.longPathCloned)"
     }
 
     # --- path-default: nothing the image needs on PATH is lost by the stack's explicit PATH ------------
@@ -243,16 +243,16 @@ $r | ConvertTo-Json -Compress
         $norm = { param($p) $p.Trim().TrimEnd('\').ToLowerInvariant() }
         $have = @($stockPath -split ';' | ForEach-Object { & $norm $_ })
         $lost = @($imagePath -split ';' | Where-Object { $_ -and $_ -notmatch '\\Users\\' -and ($have -notcontains (& $norm $_)) })
-        Write-SmrCheck 'path-default' ($imagePath -ne '' -and $lost.Count -eq 0) "image PATH=$imagePath lost_from_stack_PATH=[$($lost -join ';')]"
+        Write-SwarmCheck 'path-default' ($imagePath -ne '' -and $lost.Count -eq 0) "image PATH=$imagePath lost_from_stack_PATH=[$($lost -join ';')]"
     }
 
     # --- runner-exit-80: the runner's own configuration check -----------------------------------------
     $cases = @(
         @{ Name = 'no-name-no-token'; Env = @(); Expect = 'must be set' }
-        @{ Name = 'no-token'; Env = @('--env', 'CIRCLECI_RUNNER_NAME=smr-test'); Expect = 'auth_token must be set' }
+        @{ Name = 'no-token'; Env = @('--env', 'CIRCLECI_RUNNER_NAME=swarm-test'); Expect = 'auth_token must be set' }
         @{ Name = 'no-name'; Env = @('--env', "CIRCLECI_RUNNER_API_AUTH_TOKEN=$dummyToken"); Expect = 'runner.name must be set' }
         @{ Name = 'invalid-name'; Env = @('--env', 'CIRCLECI_RUNNER_NAME=bad/name', '--env', "CIRCLECI_RUNNER_API_AUTH_TOKEN=$dummyToken"); Expect = 'must contain only' }
-        @{ Name = 'invalid-mode'; Env = @('--env', 'CIRCLECI_RUNNER_NAME=smr-test', '--env', "CIRCLECI_RUNNER_API_AUTH_TOKEN=$dummyToken", '--env', 'CIRCLECI_RUNNER_MODE=sometimes'); Expect = 'single-task' }
+        @{ Name = 'invalid-mode'; Env = @('--env', 'CIRCLECI_RUNNER_NAME=swarm-test', '--env', "CIRCLECI_RUNNER_API_AUTH_TOKEN=$dummyToken", '--env', 'CIRCLECI_RUNNER_MODE=sometimes'); Expect = 'single-task' }
     )
     $codes = @()
     $allOk = $true
@@ -262,57 +262,57 @@ $r | ConvertTo-Json -Compress
         if (-not $ok) { $allOk = $false }
         $codes += "$($c.Name)=$($r.ExitCode)"
     }
-    Write-SmrCheck 'runner-exit-80' $allOk ($codes -join ' ')
-    $r = Invoke-Container -Entrypoint $runner -Argument @('machine', '--config', 'C:\no\such\file.yaml') -Extra @('--env', 'CIRCLECI_RUNNER_NAME=smr-test')
+    Write-SwarmCheck 'runner-exit-80' $allOk ($codes -join ' ')
+    $r = Invoke-Container -Entrypoint $runner -Argument @('machine', '--config', 'C:\no\such\file.yaml') -Extra @('--env', 'CIRCLECI_RUNNER_NAME=swarm-test')
     [Console]::Out.WriteLine("NOTE a missing --config file makes the runner exit $($r.ExitCode) (not 80): $($r.Output | Select-Object -Last 1)")
 
     # --- config-file: the token comes from the file, the environment overrides the file ----------------
     $cfgDir = Join-Path $work 'cfg'
     New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $cfgDir 'circleci_runner_config.yaml'), "api:`n  auth_token: $dummyToken`nrunner:`n  name: smr-name-from-file`n")
-    Grant-SmrAuthenticatedUserRead -Path $cfgDir
-    $name = "smr-inj-config-$PID"
+    [System.IO.File]::WriteAllText((Join-Path $cfgDir 'circleci_runner_config.yaml'), "api:`n  auth_token: $dummyToken`nrunner:`n  name: swarm-name-from-file`n")
+    Grant-SwarmAuthenticatedUserRead -Path $cfgDir
+    $name = "swarm-inj-config-$PID"
     $run = @('run', '--detach', '--name', $name) + $iso + $mountArgs + $envArgs + @('--mount', "type=bind,source=$cfgDir,target=C:\cfg,readonly",
-        '--env', 'CIRCLECI_RUNNER_NAME=smr-name-from-env', '--env', 'CIRCLECI_RUNNER_API_URL=http://127.0.0.1:9', '--env', 'CIRCLECI_RUNNER_LOGGING_LEVEL=debug',
+        '--env', 'CIRCLECI_RUNNER_NAME=swarm-name-from-env', '--env', 'CIRCLECI_RUNNER_API_URL=http://127.0.0.1:9', '--env', 'CIRCLECI_RUNNER_LOGGING_LEVEL=debug',
         '--entrypoint', $runner, $Image, 'machine', '--config', 'C:\cfg\circleci_runner_config.yaml')
-    $null = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList $run
-    $null = Wait-SmrCondition -TimeoutSeconds 90 -IntervalSeconds 3 -Condition { ((Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('logs', $name)).Output -join "`n") -match 'smr-name-from' }
-    $cfgLog = (Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('logs', $name)).Output -join "`n"
-    $null = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('rm', '--force', $name)
-    Write-SmrCheck 'config-file' ($cfgLog -match 'smr-name-from-env' -and $cfgLog -notmatch 'smr-name-from-file' -and $cfgLog -match 'REDACTED' -and $cfgLog -notmatch 'must be set' -and $cfgLog -notmatch [regex]::Escape($dummyToken)) `
-        "name_from_env_wins=$($cfgLog -match 'smr-name-from-env') token_loaded_from_file=$($cfgLog -match 'REDACTED') token_printed=$($cfgLog -match [regex]::Escape($dummyToken))"
+    $null = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList $run
+    $null = Wait-SwarmCondition -TimeoutSeconds 90 -IntervalSeconds 3 -Condition { ((Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('logs', $name)).Output -join "`n") -match 'swarm-name-from' }
+    $cfgLog = (Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('logs', $name)).Output -join "`n"
+    $null = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('rm', '--force', $name)
+    Write-SwarmCheck 'config-file' ($cfgLog -match 'swarm-name-from-env' -and $cfgLog -notmatch 'swarm-name-from-file' -and $cfgLog -match 'REDACTED' -and $cfgLog -notmatch 'must be set' -and $cfgLog -notmatch [regex]::Escape($dummyToken)) `
+        "name_from_env_wins=$($cfgLog -match 'swarm-name-from-env') token_loaded_from_file=$($cfgLog -match 'REDACTED') token_printed=$($cfgLog -match [regex]::Escape($dummyToken))"
 
     # --- online -------------------------------------------------------------------------------------
     if ($Online) {
-        $name = "smr-inj-online-$PID"
+        $name = "swarm-inj-online-$PID"
         $start = Get-Date
         $run = @('run', '--detach', '--name', $name) + $iso + $mountArgs + $envArgs + @('--env', "CIRCLECI_RUNNER_API_AUTH_TOKEN=$dummyToken",
-            '--env', 'CIRCLECI_RUNNER_NAME=smr-injection-online', '--env', 'CIRCLECI_RUNNER_IDLE_TIMEOUT=30s', '--entrypoint', $runner, $Image, 'machine')
-        $null = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList $run
+            '--env', 'CIRCLECI_RUNNER_NAME=swarm-injection-online', '--env', 'CIRCLECI_RUNNER_IDLE_TIMEOUT=30s', '--entrypoint', $runner, $Image, 'machine')
+        $null = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList $run
         $logs = @()
         $exitCode = $null
         while (((Get-Date) - $start).TotalSeconds -lt $OnlineTimeoutSeconds) {
-            $logs = @((Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('logs', $name)).Output)
-            $w = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('inspect', '--format', '{{.State.Status}} {{.State.ExitCode}}', $name)
+            $logs = @((Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('logs', $name)).Output)
+            $w = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('inspect', '--format', '{{.State.Status}} {{.State.ExitCode}}', $name)
             $st = ([string]($w.Output | Select-Object -First 1)).Trim() -split ' '
             if ($w.ExitCode -eq 0 -and $st[0] -eq 'exited') { $exitCode = $st[1]; break }
             Start-Sleep -Seconds 5
         }
         $elapsed = [int]((Get-Date) - $start).TotalSeconds
-        $null = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('rm', '--force', $name)
+        $null = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('rm', '--force', $name)
         $logs | Select-Object -Last 15 | ForEach-Object { [Console]::Out.WriteLine("  log: $_") }
         if ($null -eq $exitCode) {
-            Write-SmrCheck 'online' $false "the runner did not exit within ${OnlineTimeoutSeconds}s. A hang before the first claim usually means the task-agent download failed: egress, a proxy, or the symlink privilege"
+            Write-SwarmCheck 'online' $false "the runner did not exit within ${OnlineTimeoutSeconds}s. A hang before the first claim usually means the task-agent download failed: egress, a proxy, or the symlink privilege"
         } else {
             $saw401 = [bool]($logs | Where-Object { $_ -match '401|Unauthorized' })
-            Write-SmrCheck 'online' (($exitCode -eq '0') -and $saw401) "exit=$exitCode elapsed=${elapsed}s saw_401=$saw401"
+            Write-SwarmCheck 'online' (($exitCode -eq '0') -and $saw401) "exit=$exitCode elapsed=${elapsed}s saw_401=$saw401"
         }
     }
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-$count = Get-SmrCheckCount
+$count = Get-SwarmCheckCount
 $verdict = 'PASS'
 if ($count.Failed -gt 0) { $verdict = 'FAIL' }
 [Console]::Out.WriteLine("RESULT injection mode=$mode image=$Image checks=$($count.Checks) failed=$($count.Failed) verdict=$verdict")

@@ -30,7 +30,7 @@ param(
     [string] $Image,
     [ValidateRange(2, 10)][int] $Jobs = 3,
     [ValidateSet('all', 'restart-policy', 'swarm')][string] $Mode = 'all',
-    [string] $WorkDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "smr-eph-$PID"),
+    [string] $WorkDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "swarm-eph-$PID"),
     [ValidateSet('process', 'hyperv', 'default')][string] $Isolation = 'process',
     [int] $TimeoutSeconds = 600,
     [string] $AdvertiseAddr,
@@ -39,41 +39,41 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-Import-Module (Join-Path $here 'SmrTestHelpers.psm1') -Force
-if (-not $Image) { $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SmrWindowsTag) }
+Import-Module (Join-Path $here 'SwarmTestHelpers.psm1') -Force
+if (-not $Image) { $Image = 'mcr.microsoft.com/windows/servercore:' + (Get-SwarmWindowsTag) }
 
 function Invoke-Docker {
     param([string[]] $ArgumentList)
-    return (Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList $ArgumentList)
+    return (Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList $ArgumentList)
 }
 
 $fixtures = Join-Path $WorkDirectory 'fixtures'
 New-Item -ItemType Directory -Force -Path $fixtures | Out-Null
 Copy-Item -LiteralPath (Join-Path $here 'fixtures\Fake-Job.ps1') -Destination $fixtures -Force
-Grant-SmrAuthenticatedUserRead -Path $fixtures
+Grant-SwarmAuthenticatedUserRead -Path $fixtures
 
-$job = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\smr-test\Fake-Job.ps1')
+$job = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\swarm-test\Fake-Job.ps1')
 $failures = 0
 $swarm = $null
 
 try {
     if ($Mode -in @('all', 'restart-policy')) {
         Write-Output '===== restart-policy (negative control: plain Docker restarts the same container)'
-        $name = "smr-eph-restart-$PID"
+        $name = "swarm-eph-restart-$PID"
         $null = Invoke-Docker @('rm', '--force', $name)
         $run = @('run', '--detach', '--name', $name, '--restart', 'unless-stopped')
         if ($Isolation -ne 'default') { $run += "--isolation=$Isolation" }
-        $run += @('--mount', "type=bind,source=$fixtures,target=C:\smr-test,readonly", '--entrypoint', 'powershell.exe', $Image) + $job
+        $run += @('--mount', "type=bind,source=$fixtures,target=C:\swarm-test,readonly", '--entrypoint', 'powershell.exe', $Image) + $job
         $r = Invoke-Docker $run
         if ($r.ExitCode -ne 0) { throw "docker run failed: $($r.Output -join ' ')" }
         $lines = @()
-        $null = Wait-SmrCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 2 -Condition {
+        $null = Wait-SwarmCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 2 -Condition {
             $script:lines = @((Invoke-Docker @('logs', $name)).Output | Where-Object { $_ -match '^FAKEJOB ' })
             $script:lines.Count -ge $Jobs
         }
         $lines = @($script:lines)
         $null = Invoke-Docker @('rm', '--force', $name)
-        $m = Measure-SmrFakeJobLine -ModeName 'restart-policy' -Line @($lines | Select-Object -First $Jobs)
+        $m = Measure-SwarmFakeJobLine -ModeName 'restart-policy' -Line @($lines | Select-Object -First $Jobs)
         if ($m.Jobs -lt $Jobs) { Write-Output "FAIL: expected $Jobs jobs, saw $($m.Jobs)"; $failures++ }
         elseif ($m.Dirty -gt 0 -and $m.Distinct -eq 1) { Write-Output 'PASS (the control restarted one container and saw its residue)' }
         else { Write-Output 'FAIL: the control saw no leakage, so this test is blind'; $failures++ }
@@ -81,8 +81,8 @@ try {
 
     if ($Mode -in @('all', 'swarm')) {
         Write-Output '===== swarm (restart_policy any: a new container per job)'
-        $swarm = Initialize-SmrSwarm -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
-        $stack = "smreph$PID"
+        $swarm = Initialize-SwarmCluster -AdvertiseAddr $AdvertiseAddr -DockerCommand $DockerCommand
+        $stack = "swarmeph$PID"
         $service = "${stack}_job"
         $iso = ''
         if ($Isolation -ne 'default') { $iso = "    isolation: $Isolation" }
@@ -91,11 +91,11 @@ try {
             '  job:',
             "    image: $Image",
             $iso,
-            '    entrypoint: ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ''C:\smr-test\Fake-Job.ps1'']',
+            '    entrypoint: ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ''C:\swarm-test\Fake-Job.ps1'']',
             '    volumes:',
             '      - type: bind',
             "        source: '$fixtures'",
-            "        target: 'C:\smr-test'",
+            "        target: 'C:\swarm-test'",
             '        read_only: true',
             '    deploy:',
             '      replicas: 1',
@@ -111,7 +111,7 @@ try {
         if ($r.ExitCode -ne 0) { throw 'docker stack deploy failed' }
 
         $seen = @{}
-        $null = Wait-SmrCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 2 -Condition {
+        $null = Wait-SwarmCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 2 -Condition {
             $ids = @((Invoke-Docker @('ps', '--all', '--quiet', '--no-trunc', '--filter', "label=com.docker.swarm.service.name=$service")).Output | Where-Object { $_ })
             foreach ($id in $ids) {
                 if ($seen.ContainsKey($id)) { continue }
@@ -120,13 +120,13 @@ try {
             }
             $seen.Count -ge $Jobs
         }
-        $tasks = @(Get-SmrServiceTask -Service $service -DockerCommand $DockerCommand)
+        $tasks = @(Get-SwarmServiceTask -Service $service -DockerCommand $DockerCommand)
         $null = Invoke-Docker @('stack', 'rm', $stack)
-        $null = Wait-SmrCondition -TimeoutSeconds 120 -IntervalSeconds 3 -Condition {
+        $null = Wait-SwarmCondition -TimeoutSeconds 120 -IntervalSeconds 3 -Condition {
             @((Invoke-Docker @('ps', '--all', '--quiet', '--filter', "label=com.docker.swarm.service.name=$service")).Output | Where-Object { $_ }).Count -eq 0
         }
         Write-Output ("tasks seen by Swarm: {0}; distinct container IDs with a job: {1}" -f $tasks.Count, $seen.Count)
-        $m = Measure-SmrFakeJobLine -ModeName 'swarm' -Line @($seen.Values | Select-Object -First $Jobs)
+        $m = Measure-SwarmFakeJobLine -ModeName 'swarm' -Line @($seen.Values | Select-Object -First $Jobs)
         if ($m.Jobs -lt $Jobs) { Write-Output "FAIL: expected $Jobs jobs, saw $($m.Jobs)"; $failures++ }
         elseif ($m.Dirty -eq 0 -and $m.Distinct -eq $m.Jobs) { Write-Output 'PASS (a new container per job, no residue)' }
         else { Write-Output 'FAIL: state leaked between jobs, or a container was reused'; $failures++ }

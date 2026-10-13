@@ -6,7 +6,7 @@
     The helpers keep the tests honest about three Windows PowerShell 5.1 facts:
       * a native command's stderr redirected with 2>&1 becomes an error record, and a terminating
         error under $ErrorActionPreference = 'Stop' (the runner writes warnings to stderr), so every
-        docker call goes through Invoke-SmrDocker, which runs with Continue and returns plain strings;
+        docker call goes through Invoke-SwarmDocker, which runs with Continue and returns plain strings;
       * the C: volume ID is the same in every container of one image, so a container is identified
         by COMPUTERNAME (the container ID, because no test sets --hostname);
       * process isolation needs the image build to match the host, so the tests pick the image by
@@ -15,10 +15,10 @@
 
 Set-StrictMode -Off
 
-$script:SmrChecks = 0
-$script:SmrFailed = 0
+$script:SwarmChecks = 0
+$script:SwarmFailed = 0
 
-function Invoke-SmrDocker {
+function Invoke-SwarmDocker {
     <#
     .SYNOPSIS
         Runs docker and returns @{ ExitCode; Output } with Output as an array of strings.
@@ -38,50 +38,50 @@ function Invoke-SmrDocker {
     return @{ ExitCode = $code; Output = $lines }
 }
 
-function Write-SmrCheck {
+function Write-SwarmCheck {
     <#
     .SYNOPSIS
         Prints "CHECK <name> PASS|FAIL <detail>" and counts it.
     #>
     param([Parameter(Mandatory = $true)][string] $Name, [Parameter(Mandatory = $true)][bool] $Ok, [string] $Detail = '')
-    $script:SmrChecks++
-    if (-not $Ok) { $script:SmrFailed++ }
+    $script:SwarmChecks++
+    if (-not $Ok) { $script:SwarmFailed++ }
     $verdict = 'FAIL'
     if ($Ok) { $verdict = 'PASS' }
     [Console]::Out.WriteLine("CHECK $Name $verdict $Detail")
 }
 
-function Get-SmrCheckCount {
-    return @{ Checks = $script:SmrChecks; Failed = $script:SmrFailed }
+function Get-SwarmCheckCount {
+    return @{ Checks = $script:SwarmChecks; Failed = $script:SwarmFailed }
 }
 
-function Clear-SmrCheckCount {
-    $script:SmrChecks = 0
-    $script:SmrFailed = 0
+function Clear-SwarmCheckCount {
+    $script:SwarmChecks = 0
+    $script:SwarmFailed = 0
 }
 
-function Get-SmrHostBuild {
+function Get-SwarmHostBuild {
     return [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuildNumber
 }
 
-function Get-SmrWindowsTag {
+function Get-SwarmWindowsTag {
     <#
     .SYNOPSIS
         The servercore tag that matches a host build: ltsc2022 for 20348, ltsc2025 for 26100.
     #>
-    param([int] $Build = (Get-SmrHostBuild))
+    param([int] $Build = (Get-SwarmHostBuild))
     if ($Build -eq 20348) { return 'ltsc2022' }
     if ($Build -eq 26100) { return 'ltsc2025' }
     throw "Windows build $Build is not Server 2022 (20348) or Server 2025 (26100); pass -Image explicitly"
 }
 
-function Get-SmrImageBuild {
+function Get-SwarmImageBuild {
     <#
     .SYNOPSIS
         The Windows build number of a local image (10.0.20348.1234 gives 20348), or 0.
     #>
     param([Parameter(Mandatory = $true)][string] $Image, [string] $DockerCommand = 'docker')
-    $r = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('image', 'inspect', '--format', '{{.Os}} {{.OsVersion}}', $Image)
+    $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('image', 'inspect', '--format', '{{.Os}} {{.OsVersion}}', $Image)
     if ($r.ExitCode -ne 0) { return 0 }
     $parts = ([string]($r.Output | Select-Object -Last 1)).Trim() -split ' '
     if ($parts.Count -lt 2 -or $parts[0] -ne 'windows') { return 0 }
@@ -90,7 +90,7 @@ function Get-SmrImageBuild {
     return [int]$v[2]
 }
 
-function Test-SmrProcessIsolation {
+function Test-SwarmProcessIsolation {
     <#
     .SYNOPSIS
         True when an image of build ImageBuild can run process-isolated on a host of build HostBuild
@@ -101,7 +101,7 @@ function Test-SmrProcessIsolation {
     return ($HostBuild -eq 26100 -and $ImageBuild -eq 20348)
 }
 
-function ConvertFrom-SmrServiceTaskLine {
+function ConvertFrom-SwarmServiceTaskLine {
     <#
     .SYNOPSIS
         Parses "docker service ps --no-trunc --format '{{json .}}'" lines into objects with
@@ -124,13 +124,13 @@ function ConvertFrom-SmrServiceTaskLine {
     return $tasks
 }
 
-function Get-SmrServiceTask {
+function Get-SwarmServiceTask {
     param([Parameter(Mandatory = $true)][string] $Service, [string] $DockerCommand = 'docker')
-    $r = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('service', 'ps', '--no-trunc', '--format', '{{json .}}', $Service)
-    return @(ConvertFrom-SmrServiceTaskLine -Line $r.Output)
+    $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('service', 'ps', '--no-trunc', '--format', '{{json .}}', $Service)
+    return @(ConvertFrom-SwarmServiceTaskLine -Line $r.Output)
 }
 
-function Wait-SmrCondition {
+function Wait-SwarmCondition {
     <#
     .SYNOPSIS
         Polls a script block until it returns $true or the timeout passes. Returns the last result.
@@ -146,7 +146,7 @@ function Wait-SmrCondition {
     return $ok
 }
 
-function Get-SmrAdvertiseAddress {
+function Get-SwarmAdvertiseAddress {
     <#
     .SYNOPSIS
         An IPv4 address of this host that is not loopback or link-local, for "docker swarm init".
@@ -158,30 +158,30 @@ function Get-SmrAdvertiseAddress {
     return $addr.ToString()
 }
 
-function Initialize-SmrSwarm {
+function Initialize-SwarmCluster {
     <#
     .SYNOPSIS
         Makes sure the engine is a swarm manager. Returns @{ Initialised } so the caller can leave the
         swarm again if (and only if) this call created it.
     #>
     param([string] $AdvertiseAddr, [string] $DockerCommand = 'docker')
-    $state = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('info', '--format', '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}')
+    $state = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('info', '--format', '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}')
     $parts = ([string]($state.Output | Select-Object -First 1)).Trim() -split ' '
     if ($parts[0] -eq 'active' -and $parts[1] -eq 'true') { return @{ Initialised = $false } }
     if ($parts[0] -eq 'active') { throw 'this node is a swarm worker; run the test on a manager' }
-    if (-not $AdvertiseAddr) { $AdvertiseAddr = Get-SmrAdvertiseAddress }
-    $r = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('swarm', 'init', '--advertise-addr', $AdvertiseAddr)
+    if (-not $AdvertiseAddr) { $AdvertiseAddr = Get-SwarmAdvertiseAddress }
+    $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('swarm', 'init', '--advertise-addr', $AdvertiseAddr)
     if ($r.ExitCode -ne 0) { throw "docker swarm init failed: $($r.Output -join ' ')" }
     return @{ Initialised = $true }
 }
 
-function Get-SmrNodeId {
+function Get-SwarmNodeId {
     param([string] $DockerCommand = 'docker')
-    $r = Invoke-SmrDocker -DockerCommand $DockerCommand -ArgumentList @('info', '--format', '{{.Swarm.NodeID}}')
+    $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('info', '--format', '{{.Swarm.NodeID}}')
     return ([string]($r.Output | Select-Object -First 1)).Trim()
 }
 
-function Grant-SmrAuthenticatedUserRead {
+function Grant-SwarmAuthenticatedUserRead {
     <#
     .SYNOPSIS
         Grants Authenticated Users read and execute on a directory tree. Process-isolated containers open
@@ -193,7 +193,7 @@ function Grant-SmrAuthenticatedUserRead {
     if ($LASTEXITCODE -ne 0) { throw "icacls failed on $Path" }
 }
 
-function Get-SmrStackEnvironment {
+function Get-SwarmStackEnvironment {
     <#
     .SYNOPSIS
         The environment the stack file gives every stock service: the x-runner-env and x-stock-env anchors of
@@ -215,7 +215,7 @@ function Get-SmrStackEnvironment {
     return $result
 }
 
-function ConvertTo-SmrEnvArgument {
+function ConvertTo-SwarmEnvArgument {
     <#
     .SYNOPSIS
         A hashtable as "--env", "NAME=value" pairs for docker run.
@@ -226,18 +226,18 @@ function ConvertTo-SmrEnvArgument {
     return $list
 }
 
-function Get-SmrStockMountArgument {
+function Get-SwarmStockMountArgument {
     <#
     .SYNOPSIS
-        The two read-only mounts of a stock-image service as docker run arguments: SmrRoot at C:\smr, and
-        SmrRoot\git at C:\Program Files\Git (the path the task agent hard-codes for tar.exe).
+        The two read-only mounts of a stock-image service as docker run arguments: SwarmRoot at C:\machine-runner-swarm, and
+        SwarmRoot\git at C:\Program Files\Git (the path the task agent hard-codes for tar.exe).
     #>
-    param([string] $SmrRoot = 'C:\smr')
-    return @('--mount', "type=bind,source=$SmrRoot,target=C:\smr,readonly",
-        '--mount', "type=bind,source=$SmrRoot\git,target=C:\Program Files\Git,readonly")
+    param([string] $SwarmRoot = 'C:\machine-runner-swarm')
+    return @('--mount', "type=bind,source=$SwarmRoot,target=C:\machine-runner-swarm,readonly",
+        '--mount', "type=bind,source=$SwarmRoot\git,target=C:\Program Files\Git,readonly")
 }
 
-function Initialize-SmrFakeRunner {
+function Initialize-SwarmFakeRunner {
     <#
     .SYNOPSIS
         Compiles fixtures\FakeRunner.cs with the csc.exe that ships with .NET Framework and returns the path of
@@ -254,11 +254,11 @@ function Initialize-SmrFakeRunner {
     $code = $LASTEXITCODE
     $ErrorActionPreference = $saved
     if ($code -ne 0) { throw "csc failed: $($output -join ' ')" }
-    Grant-SmrAuthenticatedUserRead -Path $OutputDirectory
+    Grant-SwarmAuthenticatedUserRead -Path $OutputDirectory
     return $exe
 }
 
-function Measure-SmrFakeJobLine {
+function Measure-SwarmFakeJobLine {
     <#
     .SYNOPSIS
         Prints the FAKEJOB lines and a RESULT line and returns the counts (jobs, distinct containers,
@@ -273,6 +273,6 @@ function Measure-SmrFakeJobLine {
     return @{ Jobs = $jobs.Count; Distinct = $hosts.Count; Dirty = $dirty.Count }
 }
 
-Export-ModuleMember -Function Invoke-SmrDocker, Write-SmrCheck, Get-SmrCheckCount, Clear-SmrCheckCount, Get-SmrHostBuild, Get-SmrWindowsTag,
-Get-SmrImageBuild, Test-SmrProcessIsolation, ConvertFrom-SmrServiceTaskLine, Get-SmrServiceTask, Wait-SmrCondition, Get-SmrAdvertiseAddress,
-Initialize-SmrSwarm, Get-SmrNodeId, Grant-SmrAuthenticatedUserRead, Initialize-SmrFakeRunner, Get-SmrStackEnvironment, ConvertTo-SmrEnvArgument, Get-SmrStockMountArgument, Measure-SmrFakeJobLine
+Export-ModuleMember -Function Invoke-SwarmDocker, Write-SwarmCheck, Get-SwarmCheckCount, Clear-SwarmCheckCount, Get-SwarmHostBuild, Get-SwarmWindowsTag,
+Get-SwarmImageBuild, Test-SwarmProcessIsolation, ConvertFrom-SwarmServiceTaskLine, Get-SwarmServiceTask, Wait-SwarmCondition, Get-SwarmAdvertiseAddress,
+Initialize-SwarmCluster, Get-SwarmNodeId, Grant-SwarmAuthenticatedUserRead, Initialize-SwarmFakeRunner, Get-SwarmStackEnvironment, ConvertTo-SwarmEnvArgument, Get-SwarmStockMountArgument, Measure-SwarmFakeJobLine

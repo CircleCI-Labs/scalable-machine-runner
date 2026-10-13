@@ -67,10 +67,10 @@ flowchart TB
 
 ### Linux
 
-- **Storage.** The secret is a minimal runner config file that holds only `api.auth_token`. Swarm mounts it as a read-only file in memory at `/run/secrets/circleci_runner_config.yaml`, owned by the runner user `smr-runner` (uid 2000) with mode `0400`. The runner reads it with `--config`. The token is in no environment variable, no command line, and no stack file, and `docker inspect` does not show it.
-- **Users.** The runner runs as `smr-runner`, which has no sudo rights and cannot write to `/opt/smr`. Jobs run as the job user, stepped down with `command_prefix`.
+- **Storage.** The secret is a minimal runner config file that holds only `api.auth_token`. Swarm mounts it as a read-only file in memory at `/run/secrets/circleci_runner_config.yaml`, owned by the runner user `circleci-runner` (uid 2000) with mode `0400`. The runner reads it with `--config`. The token is in no environment variable, no command line, and no stack file, and `docker inspect` does not show it.
+- **Users.** The runner runs as `circleci-runner`, which has no sudo rights and cannot write to `/opt/machine-runner-swarm`. Jobs run as the job user, stepped down with `command_prefix`.
 - **Default class.** The job user keeps passwordless sudo. A job that does not use sudo cannot read the token. A job that uses sudo can read the secret file, because root can read any file, and it can become the runner user. No in-container control stops this. The secret is a read-only mount of one file, so root cannot truncate, delete, or unmount it without `CAP_SYS_ADMIN`, but root can read it. Scrubbing the file, making the runner process non-dumpable, and dropping capabilities do not help while sudo works. The protection is against accidental exposure, such as a script that prints files or environment.
-- **Hardened class.** `SMR_JOB_SUDO: "false"` removes every sudo right of the job user before the runner starts, and the container does not start when a right survives. The job user cannot read the file or the process of the runner, and cannot become another user. Tools must be in the image. Use this for shared or regulated classes.
+- **Hardened class.** `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` removes every sudo right of the job user before the runner starts, and the container does not start when a right survives. The job user cannot read the file or the process of the runner, and cannot become another user. Tools must be in the image. Use this for shared or regulated classes.
 
 The test `linux/tests/token.sh` measures these results against the real runner binary.
 
@@ -82,7 +82,7 @@ The test `linux/tests/token.sh` measures these results against the real runner b
 | `sudo -n true` | Works | Fails, because `sudo -l -U <job user>` reports that the user is not allowed to run sudo |
 | Read the secret file with sudo | Readable | Not possible |
 | Read the `/proc` of the runner as root without `CAP_SYS_PTRACE` | Denied | Not possible |
-| Write to `/opt/smr` | No | No |
+| Write to `/opt/machine-runner-swarm` | No | No |
 
 ### Windows
 
@@ -139,7 +139,7 @@ Do not set the variable to `true` on Linux. Refer to [Error: failed to remove wo
 
 | Control | Setting in `windows\stack\runners.yaml` |
 |---|---|
-| Runner and Git | Read-only mounts of `C:\smr`. Authenticated Users have read and execute access, and a job cannot write |
+| Runner and Git | Read-only mounts of `C:\machine-runner-swarm`. Authenticated Users have read and execute access, and a job cannot write |
 | Secret | Administrators and `SYSTEM` only. Refer to [Token model on each OS](#token-model-on-each-os) |
 | Working directory | `CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"` |
 | Logs | Text format. The `json-file` log driver with rotation |

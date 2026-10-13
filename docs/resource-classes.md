@@ -76,6 +76,27 @@ secrets:
 
 Use `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` with the capability settings of `linux-hardened` for a hardened class. Refer to [Concepts](concepts.md#users-and-the-runner-token-on-linux).
 
+The anchor `*runner` brings the four keys that a Linux class needs for the runner: `user: "0"`, `entrypoint: ["/circleci-runner-entrypoint"]`, the config `entrypoint`, and the volume `runner-bin` mounted read-only. A service in another stack file, or one written without the anchor, repeats them:
+
+```yaml
+services:
+  linux-python:
+    user: "0"
+    entrypoint: ["/circleci-runner-entrypoint"]
+    configs:
+      - {source: entrypoint, target: /circleci-runner-entrypoint, mode: 0555}
+    volumes:
+      - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}
+
+configs:
+  entrypoint: {name: machine-runner-swarm-entrypoint-<12 hex digits>, file: <path to circleci-runner-entrypoint>}
+
+volumes:
+  runner-bin: {}
+```
+
+The name of the config carries the first 12 hex digits of the SHA-256 of the file, because a Swarm config cannot change. Refer to [Upgrade to a new release of this repository](operations.md#upgrade-to-a-new-release-of-this-repository). The shipped add-on files repeat the top-level `configs:` and `volumes:`, so each of them also loads alone.
+
 On Windows, copy a service such as `windows-default`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks.
 
 ## Size the limits
@@ -95,7 +116,7 @@ Size one runner for the largest job of the class, not for the average job. A job
 Plan the node capacity from the reservations:
 
 - The sum of the reservations of all replicas on a node must fit in the node. Leave room for the operating system and Docker, for example one CPU and 2 GB of memory.
-- The shipped Linux file reserves 10 CPUs and 20 GB of memory in total. A node with fewer resources runs fewer replicas, and the others stay `Pending`.
+- The shipped Linux file reserves 10 CPUs and 20 GB of memory in total. A node with fewer resources runs fewer replicas, and the others stay `Pending`. The `runner-distributor` service reserves nothing, and its limit is 0.5 CPU and 256 MB.
 - Swarm cannot limit disk for a container. Jobs share the Docker data disk of the node, so size it for the replicas plus the stopped containers that Swarm keeps. Refer to [Start Swarm](install-linux.md#3-start-swarm).
 
 ## Choose replica counts
@@ -142,7 +163,7 @@ $ printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create linux-persis
 $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml runners
 ```
 
-Recycle the runner with a forced update. The runner drains first (a runner drain: it takes no new job and finishes the running one), so a running job finishes. The volume survives.
+Recycle the runner with a forced update. The runner drains first (a runner drain: it takes no new job and finishes the running one), so a running job finishes. The volume survives. The container keeps the runner version that it started with, so a forced update is also how the class moves to a new runner version.
 
 ```console
 $ docker service update --force runners_linux-persistent
@@ -212,6 +233,7 @@ Refer to the [machine runner 3 configuration reference](https://circleci.com/doc
 
 | Variable | Default | Notes |
 |---|---|---|
+| `MACHINE_RUNNER_SWARM_RUNNER_WAIT` | `120` | The seconds that the entrypoint waits for the link `current` of the runner distributor. Without it, the container exits with code 80 |
 | `MACHINE_RUNNER_SWARM_JOB_USER` | `circleci` | The account that runs jobs. The entrypoint creates it with uid 2001 when the image has none |
 | `MACHINE_RUNNER_SWARM_JOB_SUDO` | `true` | `false` removes every sudo right of the job user in that container and steps jobs down with `setpriv --no-new-privs`, which needs util-linux `setpriv` in the image (exit code 80 without it). Any other value exits with code 80 |
 
@@ -228,11 +250,17 @@ The entrypoint sets these variables for the runner. It always sets the command p
 
 Arguments that you pass to the entrypoint replace the default command, which is `machine --config /run/secrets/circleci_runner_config.yaml`.
 
-### Variables read by the helpers
+### Variables read by the runner distributor
 
-| Variable | Used by | Effect |
+These are variables of `docker stack deploy`, and `x-distributor-env` in `linux/stack/runners.yaml` passes them to the `runner-distributor` service. They apply to that service only. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+
+| Variable | Default | Effect |
 |---|---|---|
-| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `linux/setup.sh` | HTTPS mirror of the runner downloads |
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | `current` | `current` follows the manifest of CircleCI. A version such as `3.1.12` pins that version |
+| `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` | `3` | The major version that `current` may adopt |
+| `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often the distributor looks again: seconds, or a number with `s`, `m`, `h`, or `d` |
+| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `https://circleci-binary-releases.s3.amazonaws.com/circleci-runner` | Where `manifest.json` and the tarballs are, for example a mirror |
+| `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | Empty | A comma-separated list of the SHA-256 values of the tarballs that may be installed, instead of the value of the manifest |
 
 ### Stack keys on Windows
 
@@ -271,7 +299,7 @@ The runner does not look for a config file on its own. The entrypoint arguments 
 | Code | Source | Meaning |
 |---|---|---|
 | 0 | Runner | A normal exit after a job or after a runner drain. Swarm starts a new container |
-| 80 | Entrypoint | A prerequisite is missing: `/opt/machine-runner-swarm` is not root-owned or is writable, the image has neither sudo nor `setpriv` (or, for a hardened class, no util-linux `setpriv` with `--no-new-privs`), `MACHINE_RUNNER_SWARM_JOB_SUDO` is invalid, or the entrypoint cannot remove every sudo right of the job user |
+| 80 | Entrypoint | A prerequisite is missing: the link `current` does not exist after the wait, the runner does not match its SHA-256 record, the runner or a directory above it is not root-owned or is writable, the image has neither sudo nor `setpriv` (or, for a hardened class, no util-linux `setpriv` with `--no-new-privs`), `MACHINE_RUNNER_SWARM_JOB_SUDO` is invalid, or the entrypoint cannot remove every sudo right of the job user |
 | 80 | Runner | A configuration error: a missing or invalid name, an empty token, an unknown log level, or an invalid mode |
 | 1 | Runner | The config file is missing because the secret is not attached, the YAML does not parse, or a duration is malformed |
 

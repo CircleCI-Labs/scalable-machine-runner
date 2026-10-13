@@ -1,0 +1,88 @@
+# Hugo configuration of the docs site (docs/ci.md, "Docs site"). Run site/stage.sh first: it writes content/.
+#
+# The repository name appears in these two places only: baseURL (the GitHub Pages address) and the GitHub
+# link of the menu below. Change both when the repository is renamed to machine-runner-swarm. stage.sh derives
+# its GitHub links from baseURL, and the publish job follows the repository it runs in.
+baseURL: https://circleci-labs.github.io/scalable-machine-runner/
+title: Machine runner swarm
+locale: en-US
+enableRobotsTXT: true
+
+module:
+  hugoVersion:
+    extended: true
+    min: 0.146.0
+  imports:
+    - path: github.com/imfing/hextra
+
+markup:
+  highlight:
+    # Required by the theme (dark mode of code blocks).
+    noClasses: false
+
+menu:
+  main:
+    - identifier: documentation
+      name: Documentation
+      pageRef: /docs
+      weight: 1
+    - name: Search
+      weight: 2
+      params:
+        type: search
+    - name: GitHub
+      weight: 3
+      url: https://github.com/CircleCI-Labs/scalable-machine-runner
+      params:
+        icon: github
+
+params:
+  description: Run CircleCI machine runner 3 as Docker Swarm services, one service for each resource class.
+  externalLinkDecoration: false
+
+  banner:
+    # A new key shows the banner again to visitors who closed the old one.
+    key: labs-not-supported
+    message: >-
+      **CircleCI Labs project, not officially supported.** Field engineers maintain it on a best-effort basis,
+      and CircleCI support does not cover it.
+
+  navbar:
+    displayTitle: true
+    displayLogo: false
+    width: wide
+
+  theme:
+    default: system
+    displayToggle: true
+
+  footer:
+    enable: true
+    displayCopyright: false
+    displayPoweredBy: false
+    width: normal
+
+  search:
+    enable: true
+    type: flexsearch
+    flexsearch:
+      index: content
+      tokenize: forward
+
+  # The Mermaid script is downloaded at build time and served from the site. Pinned to the version that the
+  # lint-docs-mermaid job validates the diagrams with (minlag/mermaid-cli 12.0.1 bundles mermaid 12.0.0).
+  mermaid:
+    base: https://cdn.jsdelivr.net/npm/mermaid@12.0.0/dist
+
+  highlight:
+    copy:
+      enable: true
+      display: hover
+
+  page:
+    width: normal
+    contextMenu:
+      enable: false
+
+  toc:
+    displayTags: false

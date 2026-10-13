@@ -1,0 +1,44 @@
+# The sidebar of the docs site: its order, its groups and the labels of its pages (docs/ci.md, "Docs site").
+#
+#   == Group title        starts a sidebar group. The pages below it are its children.
+#   ==                    ends the group: the pages below it are top-level pages again.
+#   path | Sidebar label  a page: a Markdown file, with its path from the repository root.
+#                         The label is optional (the page title is the default).
+#
+# stage.sh fails on a docs/*.md file that is not listed here, and on a listed file that does not exist, so a new,
+# renamed or removed page always shows up in this file. STAGE_LENIENT=1 turns both errors into warnings.
+# The landing page (README.md) is not listed: it is the home page of the site.
+
+== Get started
+docs/quickstart-linux.md | Quickstart on Linux
+docs/quickstart-windows.md | Quickstart on Windows Server
+docs/concepts.md
+
+== Install
+docs/install-linux.md | Linux
+docs/install-windows.md | Windows Server
+docs/multi-node.md
+
+== Configure
+docs/resource-classes.md
+docs/images.md
+docs/docker-builds.md
+
+== Operate
+docs/operations.md
+docs/troubleshooting.md
+docs/migration.md | Migrate from Docker Compose
+
+== Security
+docs/security.md
+
+==
+docs/faq.md
+
+== Reference
+CHANGELOG.md | Changelog
+
+== Maintainers
+docs/ci.md | CI/CD
+docs/releasing.md
+CONTRIBUTING.md

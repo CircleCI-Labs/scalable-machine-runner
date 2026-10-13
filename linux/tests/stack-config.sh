@@ -16,14 +16,15 @@ check() { # service description regex
 }
 service_block() { awk -v s="$1" '$0 == "  " s ":" { f = 1; next } f && (/^  [^ ]/ || /^[^ ]/) { f = 0 } f' <<< "$cfg"; }
 
-# every file combination must load; the last one holds all five services
-for files in "runners.yaml" "runners.yaml docker-build.yaml" "runners.yaml persistent.yaml" "runners.yaml docker-build.yaml persistent.yaml"; do
+# every file combination must load (an add-on stack file also alone); the last one holds all six services
+for files in "runners.yaml" "ssh-rerun.yaml" "runners.yaml docker-build.yaml" "runners.yaml persistent.yaml" "runners.yaml ssh-rerun.yaml" \
+  "runners.yaml docker-build.yaml persistent.yaml ssh-rerun.yaml"; do
   args=()
   for f in $files; do args+=(-c "$dir/$f"); done
   cfg=$(docker stack config "${args[@]}") || { echo "FAIL: docker stack config rejected: $files"; exit 1; }
 done
 
-services=(linux-default linux-java linux-hardened linux-docker-build linux-persistent)
+services=(linux-default linux-java linux-hardened linux-docker-build linux-persistent linux-default-ssh)
 for s in "${services[@]}"; do
   block=$(service_block "$s")
   if [[ -z $block ]]; then
@@ -63,6 +64,13 @@ for s in "${services[@]}"; do
   check "$s" 'the read-only /opt/machine-runner-swarm bind' '^        read_only: true$'
   check "$s" 'the bind source /opt/machine-runner-swarm/current (a link to the installed version)' '^        source: /opt/machine-runner-swarm/current$'
   check "$s" 'its own network' "^      $s: null$"
+  if [[ $s != linux-default-ssh ]]; then
+    # only the SSH add-on publishes a port or turns the SSH rerun feature on
+    if grep -qE '^    ports:$|CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR|max_replicas_per_node' <<< "$block"; then
+      echo "  $s: publishes a port or enables SSH reruns (only linux-default-ssh does)"
+      problems=$((problems + 1))
+    fi
+  fi
   if grep -q 'privileged\|security_opt' <<< "$block"; then
     echo "  $s: uses a key Swarm ignores"
     problems=$((problems + 1))
@@ -89,7 +97,28 @@ check linux-docker-build 'the docker.sock bind' '^        source: /var/run/docke
 check linux-docker-build 'the machine-runner-swarm.docker-build label constraint' '^          - node.labels.machine-runner-swarm.docker-build == true$'
 check linux-docker-build 'the worker role constraint' '^          - node.role == worker$'
 
-echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml services=${#services[@]} problems=$problems"
+block=$(service_block linux-default-ssh)
+check linux-default-ssh 'the SSH advertise address, templated per task, on the fixed port' "^      CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR: '\\{\\{\\.Node\\.Hostname\\}\\}:54782'$"
+check linux-default-ssh 'max_replicas_per_node 1 (one host-mode port per node)' '^        max_replicas_per_node: 1$'
+check linux-default-ssh 'replicas 1' '^      replicas: 1$'
+flat=$(tr '\n' '~' <<< "$block")
+if ! grep -qE 'ports:~      - mode: host~        target: 54782~        published: 54782~        protocol: tcp~' <<< "$flat"; then
+  echo "  linux-default-ssh: port 54782 must be published once, in host mode (not ingress)"
+  problems=$((problems + 1))
+fi
+grep -q 'mode: ingress' <<< "$block" && { echo "  linux-default-ssh: must not publish in ingress mode"; problems=$((problems + 1)); }
+# Drift check: apart from the SSH settings and the replica count, linux-default-ssh is linux-default under another name.
+without_ssh() {
+  grep -vE '^      CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR:|^        max_replicas_per_node:|^      replicas:' |
+    awk '/^    ports:$/ { skip = 1; next } skip && /^      / { next } { skip = 0; print }'
+}
+if ! diff_out=$(diff <(service_block linux-default | without_ssh) <(service_block linux-default-ssh | sed 's/linux-default-ssh/linux-default/g' | without_ssh)); then
+  echo "  linux-default-ssh differs from linux-default beyond the SSH settings (keep the common settings in sync):"
+  printf '%s\n' "$diff_out" | sed 's/^/    /'
+  problems=$((problems + 1))
+fi
+
+echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml services=${#services[@]} problems=$problems"
 if [[ $problems -eq 0 ]]; then
   echo "PASS (docker stack config accepts every file combination; every service meets the contract)"
 else

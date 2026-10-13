@@ -6,7 +6,7 @@ BeforeAll {
     $script:files = @{}
     $script:blocks = @{}      # service name -> its text
     $script:fileOf = @{}      # service name -> file name
-    foreach ($name in 'runners.yaml', 'custom-image.yaml', 'persistent.yaml', 'docker-build.yaml') {
+    foreach ($name in 'runners.yaml', 'custom-image.yaml', 'persistent.yaml', 'docker-build.yaml', 'ssh-rerun.yaml') {
         $text = Get-Content -LiteralPath (Join-Path $script:stackDir $name) -Raw
         $script:files[$name] = $text
         # One block per service: from "  <name>:" under services: to the next service or the top-level key after them.
@@ -20,18 +20,19 @@ BeforeAll {
         }
     }
     $script:allText = ($script:files.Values -join "`n")
-    $script:stockServices = @('windows-default', 'windows-custom', 'windows-persistent', 'windows-docker-build')
+    $script:stockServices = @('windows-default', 'windows-custom', 'windows-persistent', 'windows-docker-build', 'windows-default-ssh')
 }
 
 Describe 'the stack files' {
     It 'split the classes: runners.yaml holds only windows-default and deploys alone, the optional ones are separate add-on stack files' {
-        ($script:blocks.Keys | Sort-Object) | Should -Be @('windows-custom', 'windows-default', 'windows-docker-build', 'windows-persistent')
+        ($script:blocks.Keys | Sort-Object) | Should -Be @('windows-custom', 'windows-default', 'windows-default-ssh', 'windows-docker-build', 'windows-persistent')
         $script:fileOf['windows-default'] | Should -Be 'runners.yaml'
         @($script:fileOf.Keys | Where-Object { $script:fileOf[$_] -eq 'runners.yaml' }) | Should -Be @('windows-default')
         $script:files['runners.yaml'] | Should -Not -Match 'windows-custom|registry\.example\.com'
         $script:fileOf['windows-custom'] | Should -Be 'custom-image.yaml'
         $script:fileOf['windows-persistent'] | Should -Be 'persistent.yaml'
         $script:fileOf['windows-docker-build'] | Should -Be 'docker-build.yaml'
+        $script:fileOf['windows-default-ssh'] | Should -Be 'ssh-rerun.yaml'
     }
 
     It 'declare every named volume they use (docker stack deploy fails with "undefined volume" otherwise)' {
@@ -61,14 +62,14 @@ Describe 'the stack files' {
     }
 
     It 'run circleci-runner.exe directly with --config on the secret, from the stock anchor in each file' {
-        foreach ($name in 'runners.yaml', 'custom-image.yaml', 'persistent.yaml', 'docker-build.yaml') {
+        foreach ($name in 'runners.yaml', 'custom-image.yaml', 'persistent.yaml', 'docker-build.yaml', 'ssh-rerun.yaml') {
             $script:files[$name] | Should -Match "(?m)^x-stock: &stock\r?\n  entrypoint: \['C:\\machine-runner-swarm\\bin\\circleci-runner\.exe', machine, '--config', 'C:\\ProgramData\\Docker\\secrets\\circleci_runner_config\.yaml'\]"
         }
         foreach ($s in $script:stockServices) { $script:blocks[$s] | Should -Match '<<: \[\*runner, \*stock\]' }
     }
 
     It 'mount the junction current of the installed version read-only, Git at the path the task agent hard-codes' -TestCases @(
-        @{ Service = 'windows-default' }, @{ Service = 'windows-custom' }, @{ Service = 'windows-persistent' }, @{ Service = 'windows-docker-build' }
+        @{ Service = 'windows-default' }, @{ Service = 'windows-custom' }, @{ Service = 'windows-persistent' }, @{ Service = 'windows-docker-build' }, @{ Service = 'windows-default-ssh' }
     ) {
         param($Service)
         $script:blocks[$Service] | Should -Match '- \*runner-mount\r?\n      - \*git-mount'
@@ -78,7 +79,7 @@ Describe 'the stack files' {
 
     It 'spell out PATH for stock services: Windows first, then Git cmd, usr\bin and ucrt64\bin' {
         $paths = [regex]::Matches($script:allText, "(?m)^\s+PATH: '([^']+)'") | ForEach-Object { $_.Groups[1].Value }
-        @($paths).Count | Should -Be 5   # runners.yaml, custom-image.yaml, persistent.yaml, docker-build.yaml (twice: the anchor and the override with C:\docker)
+        @($paths).Count | Should -Be 6   # runners.yaml, custom-image.yaml, persistent.yaml, ssh-rerun.yaml, docker-build.yaml (twice: the anchor and the override with C:\docker)
         foreach ($p in $paths) {
             $entries = $p -split ';'
             foreach ($sys in 'C:\Windows\system32', 'C:\Windows', 'C:\Windows\System32\WindowsPowerShell\v1.0\') { $entries | Should -Contain $sys }
@@ -94,7 +95,7 @@ Describe 'the stack files' {
         }
         $script:blocks['windows-persistent'] | Should -Match 'CIRCLECI_RUNNER_MODE: continuous'
         $script:blocks['windows-persistent'] | Should -Not -Match 'IDLE_TIMEOUT'
-        foreach ($s in 'windows-default', 'windows-custom', 'windows-docker-build') { $script:blocks[$s] | Should -Match 'CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h' }
+        foreach ($s in 'windows-default', 'windows-custom', 'windows-docker-build', 'windows-default-ssh') { $script:blocks[$s] | Should -Match 'CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h' }
     }
 
     It 'restart every exit in a new container, one at a time, with the long grace period' {
@@ -121,6 +122,34 @@ Describe 'the stack files' {
         foreach ($s in @($script:blocks.Keys | Where-Object { $_ -ne 'windows-docker-build' })) {
             $script:blocks[$s] | Should -Match 'node\.labels\.machine-runner-swarm\.docker-build != true'
         }
+    }
+
+    It 'publish the SSH rerun port only in the SSH add-on: host mode, one replica per node, the node name advertised' {
+        $b = $script:blocks['windows-default-ssh']
+        $b | Should -Match '(?m)^    ports:\r?\n      - target: 54782\r?\n        published: 54782\r?\n        protocol: tcp\r?\n        mode: host'
+        $b | Should -Not -Match 'mode: ingress'
+        $b | Should -Match '(?m)^        max_replicas_per_node: 1\b'
+        $b | Should -Match '(?m)^      CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR: "\{\{\.Node\.Hostname\}\}:54782"'
+        $script:files['runners.yaml'] | Should -Match '(?m)^  endpoint_mode: dnsrr' -Because 'an ingress port cannot be used with dnsrr, so the SSH port must stay in host mode'
+        foreach ($s in @($script:blocks.Keys | Where-Object { $_ -ne 'windows-default-ssh' })) {
+            $script:blocks[$s] | Should -Not -Match '(?m)^    ports:|SSH_ADVERTISE_ADDR|max_replicas_per_node' -Because "$s is not the SSH add-on"
+        }
+    }
+
+    It 'keep windows-default-ssh the same as windows-default apart from the SSH settings and the replica count' {
+        $ssh = $script:blocks['windows-default-ssh']
+        $default = $script:blocks['windows-default']
+        foreach ($pattern in '<<: \[\*runner, \*stock\]', '<<: \[\*runner-env, \*stock-env\]', '<<: \*runner-deploy', '- \*runner-mount\r?\n      - \*git-mount') {
+            $ssh | Should -Match $pattern
+        }
+        $image = { param($x) [regex]::Match($x, '(?m)^    image: (\S+)').Groups[1].Value }
+        (& $image $ssh) | Should -Be (& $image $default)
+        $resources = { param($x) @([regex]::Matches($x, '(?m)^        (limits|reservations): (\{[^}]*\})') | ForEach-Object { $_.Value }) }
+        @(& $resources $default).Count | Should -Be 2
+        (& $resources $ssh) | Should -Be (& $resources $default)
+        $constraints = { param($x) @([regex]::Matches($x, '(?m)^          - (node\..+?)\s*(#.*)?$') | ForEach-Object { $_.Groups[1].Value.TrimEnd() }) }
+        (& $constraints $ssh) | Should -Be (& $constraints $default)
+        $ssh | Should -Match '(?m)^          - spread: node\.id'
     }
 
     It 'use nothing the Windows engine rejects' {

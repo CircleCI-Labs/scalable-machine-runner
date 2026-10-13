@@ -20,6 +20,7 @@
 #   linux-hardened  jobs have NO sudo, so a job cannot read the runner token
 # Optional classes are separate files, deployed with an extra -c flag:
 #   docker-build.yaml  host Docker socket (root-equivalent)      persistent.yaml  long-lived runner + volume
+#   ssh-rerun.yaml     "Rerun job with SSH": publishes port 54782 on the node
 #
 # Notes:
 # - Pin images by digest in production (image: cimg/base:2026.10@sha256:...). Tags such as 21.0 float.

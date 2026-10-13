@@ -1,0 +1,118 @@
+# Optional class: runners that support "Rerun job with SSH". UNTESTED on Windows: the Swarm side is proven on Linux only,
+# and the docs for machine runner 3 do not exclude Windows. Deploy with an extra -c flag:
+#   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\ssh-rerun.yaml runners
+# Create the secret first (the runner config with the token, as in runners.yaml): windows-default-ssh-token, and a resource class
+# <namespace>/windows-default-ssh. A rerun with SSH runs on the resource class of the original job, so the job you want to debug
+# must run on this class: point its resource_class at windows-default-ssh, or add the three SSH settings below to an existing service.
+#
+# Setting CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR turns the feature on. The task agent then opens an SSH server on the FIXED port 54782
+# of the container, and the web app shows the advertised host:port in the "Enable SSH" step (only displayed: any reachable name or IP).
+# Swarm publishes the port in HOST mode: it opens on the node that runs the task (ingress mode would route to any replica, and does not
+# work with endpoint_mode dnsrr anyway). A node has one port 54782, so max_replicas_per_node is 1: replicas beyond the number of
+# nodes stay pending. Open inbound TCP 54782 in Windows Defender Firewall on those nodes, from where your users connect.
+# Users pass the shell they want as the SSH command (docs/resource-classes.md, "Rerun job with SSH").
+#
+# The advertised name is the NODE's hostname, which users can resolve only if their DNS knows it. Otherwise write a name or an
+# address they can reach, for example "{{.Node.Hostname}}.example.com:54782" (the whole value is templated per task).
+# This file repeats the anchors of runners.yaml (an anchor does not reach into another file): keep the common settings in sync.
+
+x-runner-env: &runner-env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
+  CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
+  # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
+  # HTTPS_PROXY / NO_PROXY: set here when the host needs a proxy (jobs inherit the runner's environment)
+  MACHINE_RUNNER_SWARM_INSTANCE_ID: "{{.Task.ID}}"           # lets a job tell which container it ran in
+  # Git for Windows ships Git Credential Manager; nothing in a container can answer its prompts.
+  GIT_TERMINAL_PROMPT: "0"
+  GCM_INTERACTIVE: never
+  GIT_CONFIG_COUNT: "1"                     # the system gitconfig is in the read-only Git tree
+  GIT_CONFIG_KEY_0: core.longpaths
+  GIT_CONFIG_VALUE_0: "true"
+
+# The stock image's PATH is replaced, so it is spelled out: Windows first (its find, sort and tar stay
+# ahead of Git's), then Git's cmd, ucrt64\bin and usr\bin (bash, sh, tar, gzip, ssh). Tests\Test-Injection.ps1
+# checks the Windows part against the image's own PATH.
+x-stock-env: &stock-env
+  # yamllint disable-line rule:line-length
+  PATH: 'C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin'
+
+x-runner-deploy: &runner-deploy
+  endpoint_mode: dnsrr                      # no VIP: nothing connects to a runner
+  restart_policy:
+    condition: any                          # every exit (job done, idle timeout, exit 80) -> a NEW container
+    delay: 10s                              # also the pause between attempts when the runner exits 80
+  update_config:
+    order: stop-first
+    parallelism: 1
+    failure_action: pause
+
+x-runner: &runner
+  isolation: process                        # the image build must match the host (the node label windows-<image tag>)
+  stop_grace_period: 5h5m                   # runner max_run_time (5h) plus 5 minutes to drain
+  logging:
+    driver: json-file                       # rotation; "local" also works on Windows
+    options:
+      max-size: 20m
+      max-file: "3"
+  labels:
+    machine-runner-swarm.role: runner
+
+# Stock images: the runner is the main process.
+x-stock: &stock
+  entrypoint: ['C:\machine-runner-swarm\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
+
+x-runner-mount: &runner-mount               # the runner, read-only
+  type: bind
+  source: 'C:\machine-runner-swarm\current'  # a junction to C:\machine-runner-swarm\<version>, made by Setup.ps1: Docker resolves it
+  target: 'C:\machine-runner-swarm'           # when it creates a container, so a new version reaches the next job only (docs/operations.md)
+  read_only: true
+
+x-git-mount: &git-mount                     # portable Git, where the task agent expects it
+  type: bind
+  source: 'C:\machine-runner-swarm\current\git'
+  target: 'C:\Program Files\Git'
+  read_only: true
+
+services:
+  # Same as windows-default, plus the SSH settings. Anyone who can start a job can rerun it with SSH, and a rerun holds the
+  # runner for up to 2 hours: docs/resource-classes.md. On Windows the job account is ContainerAdministrator, so the SSH user is too.
+  windows-default-ssh:
+    <<: [*runner, *stock]
+    image: mcr.microsoft.com/windows/servercore:ltsc2022
+    environment:
+      <<: [*runner-env, *stock-env]
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-default-ssh-{{.Task.Slot}}"
+      CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h      # idle slots recycle onto a new secret or image
+      CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR: "{{.Node.Hostname}}:54782"   # shown in the job output; see the note above
+    ports:
+      - target: 54782
+        published: 54782
+        protocol: tcp
+        mode: host                          # opens on the node itself, not through the ingress routing mesh
+    volumes:
+      - *runner-mount
+      - *git-mount
+    secrets:
+      - source: windows-default-ssh-token
+        target: circleci_runner_config.yaml
+    deploy:
+      <<: *runner-deploy                    # stop-first frees the node's port 54782 before the new task binds it
+      replicas: 1
+      resources:
+        limits: {cpus: "2", memory: 4g}
+        reservations: {cpus: "2", memory: 4g}
+      placement:
+        max_replicas_per_node: 1            # one host-mode port 54782 per node
+        constraints:
+          - node.platform.os == windows
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: a job there can read other classes' tokens
+          - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
+        preferences:
+          - spread: node.id
+
+secrets:
+  windows-default-ssh-token:
+    external: true

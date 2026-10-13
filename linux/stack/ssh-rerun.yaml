@@ -1,0 +1,84 @@
+# Optional class: runners that support "Rerun job with SSH". Deploy with an extra -c flag:
+#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/ssh-rerun.yaml runners
+# Create the secret first (same format as in runners.yaml): linux-default-ssh-token, and a resource class
+# <namespace>/linux-default-ssh. A rerun with SSH runs on the resource class of the original job, so the job
+# you want to debug must run on this class: point its resource_class at linux-default-ssh, or add the three
+# SSH settings below to an existing service (docs/resource-classes.md, "Rerun job with SSH").
+#
+# Setting CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR turns the feature on. The task agent then opens an SSH server on
+# the FIXED port 54782 of the container, and the web app shows the advertised host:port in the "Enable SSH"
+# step. The address is only displayed, so it can be any name or IP that users can reach (a proxy is fine).
+#
+# Swarm publishes the port in HOST mode: it opens on the node that runs the task. The default ingress mode
+# would route to any replica, so a connection could reach another job. A node has one port 54782, so
+# max_replicas_per_node is 1: replicas beyond the number of nodes stay pending. Open inbound TCP 54782 on those
+# nodes, from where your users connect (docs/resource-classes.md).
+#
+# The advertised name is the NODE's hostname, which users can resolve only if their DNS knows it. Otherwise
+# write a name or an address they can reach, for example "{{.Node.Hostname}}.example.com:54782" (the whole
+# value is templated per task). Anyone who can start a job can rerun it with SSH, and a rerun holds the
+# runner for up to 2 hours: docs/resource-classes.md. Keep the common settings in sync with runners.yaml.
+
+x-env: &env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"   # the container is discarded after the job, and the runner (uid 2000) cannot remove job-owned files
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+
+services:
+  linux-default-ssh:
+    image: cimg/base:2026.10
+    user: "0"
+    entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]
+    init: true
+    stop_grace_period: 5h5m
+    hostname: "{{.Node.Hostname}}-linux-default-ssh-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-default-ssh-{{.Task.Slot}}"
+      CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR: "{{.Node.Hostname}}:54782"   # shown in the job output; see the note above
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"   # as linux-default; "false" gives the SSH user no sudo, as linux-hardened does
+    ports:
+      - target: 54782
+        published: 54782
+        protocol: tcp
+        mode: host   # opens on the node itself, not through the ingress routing mesh
+    secrets:
+      - source: linux-default-ssh-token
+        target: circleci_runner_config.yaml
+        uid: "2000"
+        gid: "2000"
+        mode: 0400
+    networks: [linux-default-ssh]
+    cap_drop: [NET_RAW, MKNOD]
+    ulimits:
+      nofile: {soft: 65536, hard: 65536}
+      core: 0
+    logging:
+      driver: local
+      options: {max-size: 20m, max-file: "3"}
+    volumes:
+      - type: bind
+        source: /opt/machine-runner-swarm/current   # a link to the installed version (see runners.yaml)
+        target: /opt/machine-runner-swarm
+        read_only: true
+    deploy:
+      replicas: 1
+      restart_policy: {condition: any, delay: 10s}
+      update_config: {order: stop-first, parallelism: 1}   # stop-first frees the node's port 54782 before the new task binds it
+      resources:
+        limits: {cpus: "2", memory: 4G, pids: 4096}
+        reservations: {cpus: "2", memory: 4G}
+      placement:
+        max_replicas_per_node: 1   # one host-mode port 54782 per node
+        constraints:
+          - node.platform.os == linux
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node (see runners.yaml)
+        preferences:
+          - spread: node.id
+
+networks:
+  linux-default-ssh: {driver: overlay}
+
+secrets:
+  linux-default-ssh-token: {external: true}

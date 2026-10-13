@@ -40,6 +40,7 @@
 #   custom-image.yaml   your own image on top of stock Server Core (a class you build yourself)
 #   persistent.yaml     a long-lived continuous-mode runner with a named volume
 #   docker-build.yaml   Windows image builds through the host Docker engine (administrator-equivalent)
+#   ssh-rerun.yaml      "Rerun job with SSH": publishes port 54782 on the node (untested on Windows)
 #   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.yaml runners
 #
 # Stopping a BUSY container from outside (a rolling update, a scale down, a node drain, "docker stack rm", a Docker restart)

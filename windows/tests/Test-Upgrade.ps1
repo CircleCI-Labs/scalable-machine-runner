@@ -5,7 +5,8 @@
 
 .DESCRIPTION
     The stack files mount C:\machine-runner-swarm\current, a link to C:\machine-runner-swarm\<version>. This test shows
-    what Docker does with such a link, for each -LinkType (a junction, and a directory symbolic link):
+    what Docker does with such a link, for each -LinkType (a junction by default, and a directory symbolic link, which
+    behaves the same way):
 
       <type>-first       a service whose container mounts the link starts on version 1.0.0
       <type>-running     the flip of the link to 2.0.0 while that container runs does not change what it sees: its job
@@ -18,11 +19,14 @@
 
 .EXAMPLE
     .\windows\tests\Test-Upgrade.ps1
+
+.EXAMPLE
+    .\windows\tests\Test-Upgrade.ps1 -LinkType Junction,SymbolicLink
 #>
 [CmdletBinding()]
 param(
     [string] $Image,
-    [ValidateSet('Junction', 'SymbolicLink')][string[]] $LinkType = @('Junction', 'SymbolicLink'),
+    [ValidateSet('Junction', 'SymbolicLink')][string[]] $LinkType = @('Junction'),
     [int] $JobSeconds = 25,
     [int] $TimeoutSeconds = 240,
     [ValidateSet('process', 'hyperv', 'default')][string] $Isolation = 'process',

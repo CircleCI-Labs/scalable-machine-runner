@@ -93,7 +93,7 @@ The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and on
 | `Test-Exit80.ps1` | Exit 80 without a hot loop |
 | `Test-Placement.ps1` | Placement constraints and node labels |
 | `Test-StopHandling.ps1` | What a stop does to a busy stock container (it kills the job, informational), and a Swarm secret as the runner config. `-Online` stops the real runner and expects a drain |
-| `Test-Upgrade.ps1` | A junction or symbolic link as the bind source: the next container sees the new version, and the running one keeps the old |
+| `Test-Upgrade.ps1` | A junction as the bind source: the next container sees the new version, and the running one keeps the old |
 | `Test-Persistent.ps1` | Continuous mode, and a named volume that outlives the container |
 
 ### Documentation checks

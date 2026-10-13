@@ -18,7 +18,7 @@ Describe 'Pins' {
 
     It 'give Setup.ps1 the runner version of linux/setup.sh' {
         $linux = Get-Content -LiteralPath (Join-Path $script:windowsDir '..\linux\setup.sh') -Raw
-        $linux | Should -Match '(?m)^MACHINE_RUNNER_SWARM_VERSION=3\.1\.12$'
+        $linux | Should -Match '(?m)^MACHINE_RUNNER_SWARM_VERSION=3\.1\.12\r?$'
         (Select-String -LiteralPath (Join-Path $script:windowsDir 'Setup.ps1') -Pattern "\[string\] \`$RunnerVersion = '3.1.12'" -Quiet) | Should -BeTrue
     }
 }

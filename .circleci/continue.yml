@@ -517,7 +517,7 @@ jobs:
             .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Persistent.ps1 -Report "reports\persistent-$env:WINDOWS_TAG.txt"
             exit $LASTEXITCODE
       - run:
-          name: A runner upgrade through a junction or symbolic link as the bind source (windows/tests/Test-Upgrade.ps1)
+          name: A runner upgrade through the junction as the bind source (windows/tests/Test-Upgrade.ps1)
           when: always
           no_output_timeout: 25m
           command: |

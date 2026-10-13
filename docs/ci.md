@@ -11,6 +11,47 @@ as job artifacts.
 - Lint settings: `.hadolint.yaml`, `.yamllint.yaml`, `.shellcheckrc`,
   `PSScriptAnalyzerSettings.psd1`, `.trivyignore`, `lychee.toml` (repository root)
 
+## What is tested
+
+This section is the short answer for users and reviewers. The pipeline sections below give the details. A claim in the user documentation that this section does not support is an overclaim, so report it.
+
+### Tested
+
+| Area | What is checked | How |
+|---|---|---|
+| Stack files | Every file parses, merges and interpolates, and each service keeps the contract: secrets, mounts, placement, limits, capabilities | `lint-stack`, `linux/tests/stack-config.sh` and `windows/tests/Stack.Tests.ps1`, with no Swarm |
+| Install on Linux | `setup.sh` checks, starts Swarm and installs the runner twice, and the second run changes nothing. The layout and the owner are right, and the runner runs in a stock `cimg/base` | `linux-setup` on a fresh VM, and `linux-arm64` for the install and the start of the stack on Arm |
+| Clean environment | A new container for every job and no residue from the job before. A negative control shows that a plain restart reuses the container | `ephemerality.sh`, `Test-Ephemerality.ps1`, and real CircleCI jobs in the e2e on Linux and on Windows 2022 and 2025 |
+| Step-down and the token | The default class keeps sudo and sudo can read the token. The hardened class has no sudo, and a setuid binary cannot lift the job, because of `setpriv --no-new-privs`. The token is in no environment or command line | `token.sh`, `task.sh` (the real runner binary against a fake API) and the e2e probes with real jobs |
+| Placement | A service stays pending until a node has its label. The docker-build node runs no other class | `placement.sh` and `Test-Placement.ps1`, in a one-node and a two-node Swarm on Linux |
+| Runner upgrade | Flipping `current` under load: running jobs finish on the old version, and the next container gets the new one. A `global-job` installs on both nodes | `upgrade.sh` and `Test-Upgrade.ps1` |
+| Stop and runner drain | On Linux, SIGTERM lets a running job finish and the container exits 0. On Windows, a stock container is killed after about 5 seconds (the control), and an idle real runner drains | `drain.sh` (fake job) and `Test-StopHandling.ps1` |
+| Persistent class | One container serves many jobs, and the named volume survives a recycle | `persistent.sh` and `Test-Persistent.ps1`, with a fake runner on Linux |
+| Limits and network | `pids`, `ulimits`, capabilities, and reservations that leave replicas pending. Classes cannot reach each other, and replicas of one class can | `limits.sh` and `network.sh` |
+| Bad configuration | The runner and the entrypoint exit 80 and do not loop hot | `exit80.sh` and `Test-Exit80.ps1` |
+| Entrypoint | The unit tests on `cimg`, Alpine and UBI | `bats` in the Linux suite |
+| Workspaces and caches | A real workspace and cache round trip on Windows, including the Git `tar` | `ci/E2E-Storage.ps1` in the Windows e2e |
+| Documentation | Markdown rules, relative links and anchors, and every Mermaid diagram | `lint-markdown`, `lint-docs-links`, `lint-docs-mermaid` |
+
+### Not tested
+
+| Gap | What it means |
+|---|---|
+| A real multi-host cluster, and a mixed Linux and Windows cluster | The Linux suite runs two Swarm nodes as containers on one VM, and every Windows test runs on one host |
+| Overlay traffic between nodes | Only the isolation between classes on one Swarm is tested |
+| `docker node update --availability drain` with a busy replica | The stop paths are tested, and the node-level command is not |
+| A rolling update on Linux with a real runner in the middle of a job | The drain is tested with a fake job, and a real runner only while idle |
+| The order of a rolling update with several busy replicas, a scale-down while jobs run, and `--update-parallelism` | Not exercised. `limits.sh` scales a service only to test reservations |
+| Token rotation and the leaked-token procedure | The steps in [Operations](operations.md#rotate-a-runner-token) are documented, not run in CI |
+| Manager loss, quorum, backup, restore, autolock and certificate rotation | Documented in [Operations](operations.md#run-the-cluster), not run in CI |
+| A drain that lasts hours | The `stop_grace_period` of 5h5m is a setting, and no test waits for it |
+| The persistent class with a real task agent | Linux and Windows run a fake or an idle runner |
+| The docker-build add-on stack file with a real job | The Windows named pipe is never used by a test |
+| Real jobs on arm64 | `linux-arm64` is a smoke test: the install and the start of the stack |
+| RHEL and SELinux | The steps follow Docker's documentation |
+| Windows Server 2019, Hyper-V isolation, group managed service accounts, proxies, and `add_ssh_keys` | Not exercised, and the docs say so |
+| `publish()` of the release job | It stops before publishing without `GITHUB_TOKEN`, so the first release is its first real run |
+
 ## Pipeline shape
 
 There is one workflow, `ci`. Every job of it is listed in `.circleci/continue.yml`. The `setup` job passes four boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled. The setup phase itself has two mutually exclusive workflows that run the same `setup` job: `setup-e2e` for `main` and `smr-swarm/*`, with the e2e context, and `setup-plain` for every other branch, without any context ([below](#when-things-run-and-the-setup-gate)).

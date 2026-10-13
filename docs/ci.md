@@ -34,7 +34,7 @@ This section is the short answer for users and reviewers. The pipeline sections 
 | Entrypoint | The unit tests on `cimg`, Alpine and UBI, including the wait for the runner, the check against its SHA-256 record, and the version that a container resolves once | `bats` in the Linux suite |
 | MicroVM add-on | `microvm.yaml` merged with the main file. Jobs run in a Kata VM with their own kernel, DNS works through the forwarder, a read-only node directory stops a write from the VM, dockerd builds inside the VM, and the entrypoint exits 80 on runc | `linux/tests/microvm.sh`: skipped without `/dev/kvm`, run by the job `linux-microvm` on the Android machine image ([below](#linux-microvm)) |
 | Workspaces and caches | A real workspace and cache round trip on Windows, including the Git `tar` | `ci/E2E-Storage.ps1` in the Windows e2e |
-| Documentation | Markdown rules, relative links and anchors, and every Mermaid diagram | `lint-markdown`, `lint-docs-links`, `lint-docs-mermaid` |
+| Documentation | Markdown rules, relative links and anchors, and every Mermaid diagram. The documentation site builds, and its links and anchors resolve | `lint-markdown`, `lint-docs-links`, `lint-docs-mermaid`, `docs-site-build` |
 
 ### Not tested
 
@@ -60,7 +60,7 @@ This section is the short answer for users and reviewers. The pipeline sections 
 
 ## Pipeline shape
 
-There is one workflow, `ci`. Every job of it is listed in `.circleci/continue.yml`. The `setup` job passes four boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled. The setup phase itself has two mutually exclusive workflows that run the same `setup` job: `setup-e2e` for `main` and `smr-swarm/*`, with the e2e context, and `setup-plain` for every other branch, without any context ([below](#when-things-run-and-the-setup-gate)).
+There is one workflow, `ci`, and a small second one, `docs-site`, that publishes the documentation site on `main` ([Docs site](#docs-site)). Every job of both is listed in `.circleci/continue.yml`. The `setup` job passes four boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled. The setup phase itself has two mutually exclusive workflows that run the same `setup` job: `setup-e2e` for `main` and `smr-swarm/*`, with the e2e context, and `setup-plain` for every other branch, without any context ([below](#when-things-run-and-the-setup-gate)).
 
 ```mermaid
 flowchart TD
@@ -89,6 +89,7 @@ flowchart TD
 | every pipeline | `lint-markdown` | `davidanson/markdownlint-cli2:v0.18.1` | `.markdownlint-cli2.yaml` on every Markdown file; `docs/ci.md` with the same rules (the repository config ignores it) |
 | every pipeline | `lint-docs-links` | `lycheeverse/lychee:0.24.2` | Relative links and `#heading` anchors in every Markdown file, offline (external URLs are not fetched: the job is fast and never flaky) |
 | every pipeline | `lint-docs-mermaid` | `minlag/mermaid-cli:12.0.1`, medium | Renders every `mermaid` block in every Markdown file; a syntax error fails the job |
+| every pipeline | `docs-site-build` | `cimg/go:1.27.2`, small | The documentation site ([below](#docs-site)): `site/stage.sh`, `hugo --minify --panicOnWarning` and `site/check.sh` (lychee offline on the built site). The site is stored as the artifact `docs-site.tgz` |
 | every pipeline | `e2e-simulation` | `ubuntu-2604:current` | `ci/tests/e2e-sim.sh`: the Linux e2e host and probe scripts against a fake runner in `docker:dind` (below) |
 | every pipeline | `linux-swarm` | `ubuntu-2604:current`, xlarge (two test nodes share the VM) | `linux/tests/run-all.sh`: stack validation (with the config names), the setup helper, ephemerality with a negative control, exit 80, token readability, real runner tasks through the step-down (`task.sh`), placement, persistent mode, draining, network isolation, limits, the runner distributor (a node with no install, a joining node, an upgrade under load, a rollback, `current` following the manifest, the major-version guard, pruning, a tampered binary, a wrong SHA-256, and CircleCI's real manifest) and the entrypoint unit tests. The distributor downloads from a local HTTP mirror of the harness. Everything runs in a single-node and a two-node Swarm inside privileged `docker:dind` containers: the CI VM's own engine never becomes a Swarm node for these |
 | every pipeline | `linux-image-example` | `ubuntu-2604:current` | Builds `linux/images/example`, checks that the tools it adds run, then Trivy (below) |
@@ -101,7 +102,8 @@ flowchart TD
 | `e2e-linux` | `e2e-linux-host`, `e2e-linux-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`; probes: `cci-labs/scalable-machine-runner-e2e-linux` | Real runner e2e (below) |
 | `e2e-linux-arm64` | `e2e-linux-arm64-host`, `e2e-linux-arm64-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`, `arm.medium`; probes: the same class | The same e2e with the arm64 runner. It uses the class and the token of `e2e-linux` and runs after it in the same serial group. Every probe records `uname -m`, and the host requires it to equal its own `aarch64` |
 | `e2e-windows` | `e2e-windows-2022-host` and `-b1`, `-b2`, `-b3`; then the same for 2025 | host: `windows-server-2022-gui:current` / `windows-server-2025-gui:current`; probes: `cci-labs/scalable-machine-runner-e2e-windows` | Real runner e2e (below) |
-| `release` | `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release` | The release (below). It requires every job above except the optional `linux-mixed-arch` |
+| `release` | `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release` | The release (below). It requires every job above except the optional `linux-mixed-arch` and `linux-microvm` |
+| `main` only, workflow `docs-site` | `docs-site-publish` | `cimg/go:1.27.2`, small, context `scalable-machine-runner-docs`, `serial-group` | The same build, then `site/publish.sh` pushes the site to the `gh-pages` branch. The release does not wait for it ([below](#docs-site)) |
 
 **Executor images.** These were checked against the CircleCI docs on 2026-10-12:
 
@@ -340,6 +342,8 @@ ci/tests/setup-gate.sh               # the setup gate: which suites a branch get
 ci/tests/setup-config.sh             # only main and smr-swarm/* get the e2e context (compiles config.yml per branch)
 circleci config process .circleci/continue.yml --pipeline-parameters '{full-suite: true, e2e-linux: true, e2e-windows: true, release: true}' > /dev/null
 
+site/stage.sh && (cd site && hugo --minify --panicOnWarning) && site/check.sh   # the docs site and its links (needs Hugo, Go and lychee)
+
 ci/tests/e2e-sim.sh                  # the Linux e2e scripts against a fake runner (needs privileged Docker)
 linux/tests/run-all.sh               # the Linux suite
 ```
@@ -363,6 +367,78 @@ The `release` job is part of the `ci` workflow. On `main`, when both e2e tokens 
 **Add a new job to `requires` of the release job.** `lint-circleci` fails when a job of the workflow is missing from it: it compiles the workflow and checks that every job that no other job requires is a requirement of the release (in the compiled workflow the release waits for one lock job, which requires them).
 Refer to [Releasing](releasing.md) for the rules, the setup of the token, and how to recover from a failed release.
 
+## Docs site
+
+The documentation is also a site on GitHub Pages: <https://circleci-labs.github.io/scalable-machine-runner/>. CircleCI builds it with [Hugo](https://gohugo.io/) and the [Hextra](https://github.com/imfing/hextra) theme and pushes it to the `gh-pages` branch. No GitHub Actions workflow is involved. The Markdown of `README.md`, `docs/`, `CHANGELOG.md` and `CONTRIBUTING.md` stays the only source, and nothing in it is written for the site: `README.md` is the home page.
+
+| Path | What it is |
+|---|---|
+| `site/hugo.yaml` | The Hugo configuration: `baseURL`, the menu, the "not officially supported" banner, search and Mermaid |
+| `site/go.mod`, `site/go.sum` | Pin the Hextra module |
+| `site/nav.txt` | The order, the groups and the sidebar labels of the pages |
+| `site/stage.sh` | Copies the Markdown into `site/content/` (generated, not tracked) and leaves the sources unchanged |
+| `site/check.sh` | lychee, offline, on the built site: links and heading anchors |
+| `site/publish.sh` | Pushes the built site to `gh-pages` |
+
+### Preview locally
+
+Install Hugo extended 0.168.0 and Go (Hugo downloads the theme as a Go module), then run from the repository root:
+
+```sh
+site/stage.sh
+cd site && hugo server
+```
+
+Run `site/stage.sh` again after you change a page. To run the check of the pipeline, add lychee and run `(cd site && hugo --minify --panicOnWarning) && site/check.sh`.
+
+### What the staging script changes
+
+`site/stage.sh` writes a copy of each page and never touches the sources. In the copy it:
+
+- maps `page-title` to `title`, `page-description` to `description` and every other `page-*` key to `params`, and takes the first heading as the title of a page without front matter,
+- removes the first level-one heading, because the theme prints the title,
+- adds `weight` and the sidebar label from `site/nav.txt`,
+- points a relative link to another page at that page, and turns a link to any other file or directory of the repository (`../examples/linux-hello.yml`, `../.circleci/continue.yml`, `../ci`) into a link to GitHub at the branch `main`,
+- writes the `_index.md` file of every sidebar group and of the documentation root.
+
+**Add every new, renamed or removed page to `site/nav.txt`.** The script fails on a `docs/*.md` file that the list misses and on a listed file that does not exist, so `docs-site-build` catches a page that would be missing from the sidebar. `STAGE_LENIENT=1` turns both errors into warnings while you restructure.
+
+What Hextra does with the Markdown of this repository:
+
+- GitHub alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`), tables, fenced code blocks inside lists, `{{ }}` and `<placeholder>` text in code, and Mermaid blocks render as on GitHub.
+- A row of linked badge images, as in the README, shows one badge on each line and not side by side.
+- A Mermaid block renders in the browser: without JavaScript the reader sees the diagram source.
+
+### Jobs and why there are two
+
+| Job | Workflow | When | What |
+|---|---|---|---|
+| `docs-site-build` | `ci` | every pipeline | Stage, `hugo --minify --panicOnWarning` and `site/check.sh`. The release requires it |
+| `docs-site-publish` | `docs-site` | `main` only | The same steps, then `site/publish.sh` |
+
+`lint-circleci` fails when a job of `ci` that no other job requires is not a requirement of the release. A publication in `ci` would therefore make every release wait for it, and a failed publication would block a release. The publication is a job of its own workflow, `docs-site`, on `main`. It rebuilds the site with the same `docs-site` command and does not wait for the other tests, because the pages describe `main`. `serial-group` allows one publication at a time.
+
+`site/publish.sh` replaces everything on `gh-pages` with `site/public`, adds `.nojekyll`, and commits only when something changed. The first run creates the branch without a parent. The commit message ends with `[skip ci]`, so the push starts no pipeline. The commit contains the bytes as built: the pages carry integrity hashes for their scripts, and the script switches off every line-ending conversion of git.
+
+### GitHub Pages and the token
+
+A maintainer does this once:
+
+1. Create the context `scalable-machine-runner-docs` with the variable `GITHUB_TOKEN`: a fine-grained token for this repository only, with the repository permission **Contents: read and write** and nothing else. Without the variable the job builds and checks the site and publishes nothing, as the release does without its token.
+2. Restrict the context like the e2e context ([Secrets and public logs](#secrets-and-public-logs)), to this project and to `main`:
+
+   ```bash
+   circleci context restriction create scalable-machine-runner-docs --org <org> --type project --value <project-id>
+   circleci context restriction create scalable-machine-runner-docs --org <org> --type expression \
+     --value 'pipeline.git.branch == "main" and not job.ssh.enabled and not (pipeline.config_source starts-with "api")'
+   ```
+
+3. After the first publication, open Settings, Pages, and set **Source** to **Deploy from a branch**, the branch to `gh-pages` and the folder to `/ (root)`. GitHub then deploys every push to that branch with its own managed `pages-build-deployment` run. There is no workflow file to maintain.
+
+The site has its own context and not the release context. The release token can publish releases, and the docs job downloads and runs a theme, a Mermaid script and a Hugo binary at build time, so it gets only the token that it needs. If one token for both is wanted, attach `scalable-machine-runner-release` to `docs-site-publish` instead: that context holds a `GITHUB_TOKEN` that can write to the repository, and no other change is needed.
+
+When the repository is renamed to `machine-runner-swarm`, the Pages address changes with it and GitHub does not redirect the old one. Change the two lines of `site/hugo.yaml` that name the repository (`baseURL` and the GitHub link of the menu). The publication follows the repository that the pipeline runs in.
+
 ## Pinned versions
 
 Every tool image is pinned by tag and digest in `.circleci/continue.yml`. There is no Renovate. To bump a version:
@@ -379,7 +455,11 @@ Every tool image is pinned by tag and digest in `.circleci/continue.yml`. There 
 | Docker CLI (`docker stack config`) | 29.9.0 | `lint-stack` |
 | PowerShell / PSScriptAnalyzer / Pester | 7.5 / 1.25.0 / 5.7.1 | `lint-powershell`, `windows-swarm` |
 | CircleCI CLI | 1.4.0 (SHA-256 checked) | `lint-circleci` |
-| lychee | 0.24.2 | `lint-docs-links` |
+| lychee | 0.24.2 | `lint-docs-links` (image), `docs-site` command (binary, SHA-256 checked) |
+| Hugo (extended) | 0.168.0 (SHA-256 checked) | `docs-site` command |
+| `cimg/go` (Go for the Hugo modules) | 1.27.2 by digest | `docs-site-build`, `docs-site-publish` |
+| Hextra theme | v0.13.0 | `site/go.mod` and `site/go.sum` |
+| Mermaid script of the site | 12.0.0, the version of the `lint-docs-mermaid` image | `params.mermaid.base` in `site/hugo.yaml` |
 | markdownlint-cli2 | 0.18.1 | `lint-markdown` |
 | Trivy | 0.75.0 | `trivy` command |
 | git-cliff, cosign, gh, Go (the release job) | 2.14.2, 3.1.3, 2.102.0, 1.27.2, each SHA-256 checked | `ci/release.sh install-tools` |

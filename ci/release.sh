@@ -40,25 +40,39 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 install_tools() {
   [ "$(uname -m)" = x86_64 ] || die "install-tools supports x86_64 Linux only"
+  # Each tool: its version and the SHA-256 value of its download, which Renovate cannot compute. A Renovate pull request
+  # changes the version only: put the new value next to it (docs/releasing.md, "Pinned tools").
+  # renovate: datasource=github-releases depName=orhun/git-cliff extractVersion=^v(?<version>.*)$
+  local git_cliff_version=2.14.2
+  local git_cliff_sha256=24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4
+  # renovate: datasource=github-releases depName=sigstore/cosign extractVersion=^v(?<version>.*)$
+  local cosign_version=3.1.3
+  local cosign_sha256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
+  # renovate: datasource=github-releases depName=cli/cli extractVersion=^v(?<version>.*)$
+  local gh_version=2.102.0
+  local gh_sha256=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
+  # renovate: datasource=golang-version depName=go
+  local go_version=1.27.2
+  local go_sha256=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
   local tmp; tmp="$(mktemp -d)"
   fetch() { # url sha256 file
     curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$3" "$1"
     echo "$2  $3" | sha256sum -c --quiet -
   }
   mkdir -p "${bin}"
-  fetch https://github.com/orhun/git-cliff/releases/download/v2.14.2/git-cliff-2.14.2-x86_64-unknown-linux-gnu.tar.gz \
-    24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4 "${tmp}/git-cliff.tar.gz"
+  fetch "https://github.com/orhun/git-cliff/releases/download/v${git_cliff_version}/git-cliff-${git_cliff_version}-x86_64-unknown-linux-gnu.tar.gz" \
+    "${git_cliff_sha256}" "${tmp}/git-cliff.tar.gz"
   tar -xzf "${tmp}/git-cliff.tar.gz" -C "${tmp}"
-  install -m 0755 "${tmp}/git-cliff-2.14.2/git-cliff" "${bin}/git-cliff"
-  fetch https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-amd64 \
-    4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71 "${tmp}/cosign"
+  install -m 0755 "${tmp}/git-cliff-${git_cliff_version}/git-cliff" "${bin}/git-cliff"
+  fetch "https://github.com/sigstore/cosign/releases/download/v${cosign_version}/cosign-linux-amd64" \
+    "${cosign_sha256}" "${tmp}/cosign"
   install -m 0755 "${tmp}/cosign" "${bin}/cosign"
-  fetch https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz \
-    bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386 "${tmp}/gh.tar.gz"
+  fetch "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_amd64.tar.gz" \
+    "${gh_sha256}" "${tmp}/gh.tar.gz"
   tar -xzf "${tmp}/gh.tar.gz" -C "${tmp}"
-  install -m 0755 "${tmp}/gh_2.102.0_linux_amd64/bin/gh" "${bin}/gh"
-  fetch https://go.dev/dl/go1.27.2.linux-amd64.tar.gz \
-    ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5 "${tmp}/go.tar.gz"
+  install -m 0755 "${tmp}/gh_${gh_version}_linux_amd64/bin/gh" "${bin}/gh"
+  fetch "https://go.dev/dl/go${go_version}.linux-amd64.tar.gz" \
+    "${go_sha256}" "${tmp}/go.tar.gz"
   rm -rf "${goroot}"; mkdir -p "${goroot}"
   tar -xzf "${tmp}/go.tar.gz" -C "${goroot}" --strip-components=1
   rm -rf "${tmp}"

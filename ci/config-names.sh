@@ -20,7 +20,7 @@ list=$(mktemp)
 trap 'rm -f "$list"' EXIT
 for stack in "$root"/linux/stack/*.yaml "$root"/windows/stack/*.yaml; do
   [ -f "$stack" ] || continue
-  # lines like:   entrypoint: {name: machine-runner-swarm-entrypoint-0123456789ab, file: ../entrypoint/circleci-runner-entrypoint}
+  # lines like:   entrypoint: {name: machine-runner-swarm-entrypoint-0123456789ab, file: circleci-runner-entrypoint}
   grep -E 'name: machine-runner-swarm-[a-z0-9-]+-[0-9a-f]{12}, file: ' "$stack" > "$list.lines" || true
   while IFS= read -r line; do
     name=$(printf '%s\n' "$line" | sed -E 's/.*name: (machine-runner-swarm-[a-z0-9-]+-[0-9a-f]{12}), file: .*/\1/')

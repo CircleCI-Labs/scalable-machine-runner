@@ -99,7 +99,7 @@ The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and on
 
 ### Swarm config names
 
-The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change `linux/entrypoint/circleci-runner-entrypoint`, `linux/runner-distributor.sh`, or `windows/runner-distributor.ps1`, run `ci/config-names.sh --write` and commit the new names with the change. `lint-stack`, `linux/tests/stack-config.sh`, and the release job run `ci/config-names.sh` and fail on a stale name. Nobody decides when to bump a number.
+The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change `linux/stack/circleci-runner-entrypoint`, `linux/stack/runner-distributor.sh`, or `windows/runner-distributor.ps1`, run `ci/config-names.sh --write` and commit the new names with the change. `lint-stack`, `linux/tests/stack-config.sh`, and the release job run `ci/config-names.sh` and fail on a stale name. Nobody decides when to bump a number.
 
 ### Documentation checks
 

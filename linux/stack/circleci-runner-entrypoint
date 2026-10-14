@@ -8,7 +8,7 @@
 # bin/circleci-runner. This script waits up to MACHINE_RUNNER_SWARM_RUNNER_WAIT seconds (default 120) for the link, resolves it
 # ONCE, so a later flip changes the next container only and never this one, and exits 80 unless the binary matches its record.
 # The record comes from the distributor, so the services carry no version and no hash: an upgrade changes the distributor only.
-# An image that bakes the runner as /opt/machine-runner-swarm/bin/circleci-runner (docs/images.md) skips all of this.
+# A runner that sits as /opt/machine-runner-swarm/bin/circleci-runner (the unit tests, or an image of your own that carries it) is used as it is.
 #
 # The token never passes through here. The Swarm secret is a runner config file holding only
 # api.auth_token, owned by the runner user (uid 2000, mode 0400); the runner reads it with --config.
@@ -40,7 +40,7 @@ umask 022
 case $sudo_ok in true | false) ;; *) die "MACHINE_RUNNER_SWARM_JOB_SUDO must be true or false, got '$sudo_ok'" ;; esac
 
 # Wait for the runner-distributor of this node, pin this container to the version directory that the link names now, and check the
-# binary against its record. A baked image has bin/circleci-runner itself and needs none of it.
+# binary against its record. A runner that is in the image already as bin/circleci-runner needs none of it.
 if [ ! -e "$bin" ]; then
   total=${MACHINE_RUNNER_SWARM_RUNNER_WAIT:-120}
   case $total in '' | *[!0-9]*) die "MACHINE_RUNNER_SWARM_RUNNER_WAIT must be a number of seconds, got '$total'" ;; esac
@@ -65,7 +65,7 @@ fi
 # The runner and the entrypoint must not be writable by the users they run as: every directory from the runner up to the mount.
 p=$bin
 while :; do
-  [ -e "$p" ] || die "$p is missing: the runner comes from the runner-distributor volume, mounted read-only at /opt/machine-runner-swarm (stack/runners.yaml), or is baked into the image"
+  [ -e "$p" ] || die "$p is missing: the runner comes from the runner-distributor volume, mounted read-only at /opt/machine-runner-swarm (stack/runners.yaml)"
   s=$(stat -L -c '%u %a' "$p")
   [ "${s% *}" = 0 ] && [ $((0${s#* } & 022)) -eq 0 ] || die "$p must be owned by root and not group/world writable"
   [ "$p" != /opt/machine-runner-swarm ] || break

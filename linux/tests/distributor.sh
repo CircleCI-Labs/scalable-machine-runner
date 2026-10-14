@@ -263,7 +263,7 @@ dist_once() { # VOLUME ENV=VALUE...: the distributor script of this checkout in 
   local -a envs=(-e "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL")
   for i in "$@"; do envs+=(-e "$i"); done
   dk "$MGR" rm -f dist-once >/dev/null 2>&1 || true
-  dk "$MGR" run -d --name dist-once -v /runner-distributor.sh:/runner-distributor.sh:ro -v "$v":/opt/machine-runner-swarm "${envs[@]}" "$DIST_IMAGE" sh /runner-distributor.sh >/dev/null
+  dk "$MGR" run -d --name dist-once -v /stack/runner-distributor.sh:/runner-distributor.sh:ro -v "$v":/opt/machine-runner-swarm "${envs[@]}" "$DIST_IMAGE" sh /runner-distributor.sh >/dev/null
   for ((i = 0; i < 60; i++)); do
     [[ $(dk "$MGR" inspect -f '{{.State.Running}}' dist-once) == true ]] || break
     dk "$MGR" logs dist-once 2>&1 | grep -q '\[ ok \]' && break
@@ -293,7 +293,7 @@ import json, sys
 r = json.load(sys.stdin)['releases']
 sha = r['current']['linux']['$ARCH']['sha256']
 print(sorted((tuple(int(x) for x in v.split('.')), v) for v, e in r.items() if v[:1].isdigit() and e['linux']['$ARCH']['sha256'] == sha)[-1][1])")
-dk "$MGR" run -d --name dist-real -v /runner-distributor.sh:/runner-distributor.sh:ro -v real-vol:/opt/machine-runner-swarm \
+dk "$MGR" run -d --name dist-real -v /stack/runner-distributor.sh:/runner-distributor.sh:ro -v real-vol:/opt/machine-runner-swarm \
   -e MACHINE_RUNNER_SWARM_RUNNER_MAJOR="${want%%.*}" "$DIST_IMAGE" sh /runner-distributor.sh >/dev/null
 wait_for 180 bash -c "docker exec $MGR docker logs dist-real 2>&1 | grep -q '\[ ok \]'" || { dk "$MGR" logs dist-real 2>&1 | tail -n 5; fail "the distributor did not install the current release"; }
 real_cur=$(dk "$MGR" run --rm -v real-vol:/v "$DIST_IMAGE" readlink /v/current)

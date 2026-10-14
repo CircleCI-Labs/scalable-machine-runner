@@ -335,10 +335,10 @@ deploy_stack() {
   [[ $# -gt 0 ]] || set -- runners.yaml
   tmp=$(mktemp -d)
   [[ -z ${DIST_VERSION:-} ]] || mirror_start   # a reset of the Swarm removes it
-  docker exec "$node" mkdir -p /stack /entrypoint
-  # the stack files name the entrypoint and the distributor script relative to themselves: ../entrypoint/... and ../runner-distributor.sh
-  docker cp "$repo_dir/linux/entrypoint/circleci-runner-entrypoint" "$node:/entrypoint/circleci-runner-entrypoint"
-  docker cp "$repo_dir/linux/runner-distributor.sh" "$node:/runner-distributor.sh"
+  docker exec "$node" mkdir -p /stack
+  # the stack files name the entrypoint and the distributor script relative to themselves: they sit next to the stack files
+  docker cp "$stack_dir/circleci-runner-entrypoint" "$node:/stack/circleci-runner-entrypoint"
+  docker cp "$stack_dir/runner-distributor.sh" "$node:/stack/runner-distributor.sh"
   for f in "$@"; do
     sed "s/CHANGE-ME/${SWARM_TEST_HOST:-CHANGE-ME}/" "$stack_dir/$f" > "$tmp/$f"
     docker cp "$tmp/$f" "$node:/stack/$f"

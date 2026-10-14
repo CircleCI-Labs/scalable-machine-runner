@@ -60,10 +60,10 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
    sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened
    ```
 
-5. Copy the stack file, and deploy your copy. For a first run, change nothing in it. You review it later, and from here on you deploy your copy and never the shipped file. The `sed` command points the two paths of the Swarm configs, which are relative to the stack file, from `deploy/` to the shipped files.
+5. Copy the stack directory, and deploy your copy. For a first run, change nothing in it. You review it later, and from here on you deploy your copy and never the shipped files. The directory holds the stack files and the two scripts that they ship as Swarm configs, which the stack files name next to themselves.
 
    ```bash
-   mkdir deploy && sed 's|file: \.\./|file: ../linux/|' linux/stack/runners.yaml > deploy/runners.yaml
+   cp -r linux/stack deploy
    sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml
    ```
 

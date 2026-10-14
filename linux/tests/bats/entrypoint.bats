@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Unit tests for linux/entrypoint/circleci-runner-entrypoint. Run them with linux/tests/bats/run.sh, which
+# Unit tests for linux/stack/circleci-runner-entrypoint. Run them with linux/tests/bats/run.sh, which
 # executes the suite as root inside stock images (cimg/base, Alpine, UBI minimal) so that every
 # image's /bin/sh (dash, BusyBox ash, bash) and its useradd/adduser/sudo/setpriv are exercised.
 #
@@ -8,7 +8,7 @@
 # way the real runner runs the task agent. Every test starts from the image's original /etc.
 # shellcheck disable=SC2030,SC2031,SC2154  # each @test runs in its own subshell; bats sets BATS_*
 
-ENTRYPOINT_SRC=${SWARM_TEST_ENTRYPOINT_SRC:-/src/linux/entrypoint/circleci-runner-entrypoint}
+ENTRYPOINT_SRC=${SWARM_TEST_ENTRYPOINT_SRC:-/src/linux/stack/circleci-runner-entrypoint}
 ENTRYPOINT=/opt/machine-runner-swarm/bin/circleci-runner-entrypoint
 STUB=/opt/machine-runner-swarm/bin/circleci-runner
 SNAP=/tmp/swarm-etc-snapshot

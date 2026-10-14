@@ -216,8 +216,8 @@ configs:
   # Swarm configs cannot change, so the name carries the first 12 hex digits of the SHA-256 of the file: ci/config-names.sh --write
   # renames them after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
   # services that use it.
-  entrypoint: {name: machine-runner-swarm-entrypoint-bba40a2db581, file: ../entrypoint/circleci-runner-entrypoint}
-  distributor: {name: machine-runner-swarm-distributor-ec3bb36724c7, file: ../runner-distributor.sh}
+  entrypoint: {name: machine-runner-swarm-entrypoint-7dfc682a944b, file: circleci-runner-entrypoint}
+  distributor: {name: machine-runner-swarm-distributor-ec3bb36724c7, file: runner-distributor.sh}
 
 volumes:
   runner-bin: {}   # one per node: the runner of that node

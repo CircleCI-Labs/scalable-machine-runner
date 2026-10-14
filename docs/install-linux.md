@@ -196,14 +196,13 @@ The secret name is the service name plus `-token`. `docker stack deploy` fails w
 
 ## 5. Review the stack file
 
-Copy `linux/stack/runners.yaml` into a directory of your own, `deploy/`, and keep it under version control. From here on you check and deploy your copy and never the shipped file, so an edit never touches the shipped files. For a first run, change nothing: the copy works as it is, and you review it later.
-
-The stack file reads the entrypoint and the script of the distributor from files of this repository, as two Swarm configs (`file: ../entrypoint/circleci-runner-entrypoint` and `file: ../runner-distributor.sh`). The paths are relative to the stack file, so the copy needs them changed. This `sed` command points them from `deploy/` at the root of the repository to the shipped files:
+Copy the directory `linux/stack` to a directory of your own, `deploy/`, and keep it under version control. From here on you check and deploy your copy and never the shipped files, so an edit never touches the shipped files. For a first run, change nothing: the copy works as it is, and you review it later.
 
 ```console
-$ mkdir -p deploy
-$ sed 's|file: \.\./|file: ../linux/|' linux/stack/runners.yaml > deploy/runners.yaml
+$ cp -r linux/stack deploy
 ```
+
+The directory holds the stack files and the two scripts that they ship as Swarm configs, `circleci-runner-entrypoint` and `runner-distributor.sh`. The stack files name the scripts relative to themselves (`file: circleci-runner-entrypoint`), so keep the scripts in the same directory as the stack files. If you delete the add-on stack files that you do not use, keep `runners.yaml` and the two scripts.
 
 Keep the service `runner-distributor` and the top-level `configs:` and `volumes:` in your copy: every class needs them. A Swarm config cannot change, so its name carries the first 12 hex digits of the SHA-256 of its file. If you edit the entrypoint or the distributor script, rename its config the same way: `sha256sum <file> | cut -c1-12`. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
 
@@ -226,15 +225,9 @@ The optional classes are separate add-on stack files. Add each with another `-c`
 
 | File | Service | Purpose |
 |---|---|---|
-| `linux/stack/docker-build.yaml` (copy to `deploy/`) | `linux-docker-build` | Builds images with the host Docker engine. Needs a labeled worker node. Refer to [Docker Builds](docker-builds.md) |
-| `linux/stack/persistent.yaml` (copy to `deploy/`) | `linux-persistent` | A long-lived runner with a named volume. Needs the node name edited in the file. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
-| `linux/stack/ssh-rerun.yaml` (copy to `deploy/`) | `linux-default-ssh` | A class that supports Rerun job with SSH. Publishes port 54782 on the node. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh) |
-
-Copy each add-on stack file that you use with the same `sed` command, for example:
-
-```console
-$ sed 's|file: \.\./|file: ../linux/|' linux/stack/persistent.yaml > deploy/persistent.yaml
-```
+| `linux/stack/docker-build.yaml` (in `deploy/` after the copy) | `linux-docker-build` | Builds images with the host Docker engine. Needs a labeled worker node. Refer to [Docker Builds](docker-builds.md) |
+| `linux/stack/persistent.yaml` (in `deploy/` after the copy) | `linux-persistent` | A long-lived runner with a named volume. Needs the node name edited in the file. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
+| `linux/stack/ssh-rerun.yaml` (in `deploy/` after the copy) | `linux-default-ssh` | A class that supports Rerun job with SSH. Publishes port 54782 on the node. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh) |
 
 An add-on stack file repeats the common service settings of `runners.yaml`, because YAML anchors do not cross files. That includes the four keys that a class needs for the runner: `user: "0"`, the `entrypoint`, the config `entrypoint`, and the volume `runner-bin` mounted read-only. It repeats the top-level `configs:` and `volumes:` too, so it also loads alone. When you change a common setting, such as `stop_grace_period` or the logging options, change it in every file that you use.
 

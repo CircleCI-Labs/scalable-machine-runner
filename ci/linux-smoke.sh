@@ -121,7 +121,7 @@ exit80_without_name() {
   local rc=0
   printf 'api:\n  auth_token: not-a-real-token\n' > "${work}/config.yaml"
   docker run --rm --user 0 -v "${stack}_runner-bin:/opt/machine-runner-swarm:ro" \
-    -v "${repo}/linux/entrypoint/circleci-runner-entrypoint:/circleci-runner-entrypoint:ro" \
+    -v "${repo}/linux/stack/circleci-runner-entrypoint:/circleci-runner-entrypoint:ro" \
     -v "${work}/config.yaml:/run/secrets/circleci_runner_config.yaml:ro" "${image}" /circleci-runner-entrypoint || rc=$?
   echo "exit ${rc}"
   [ "${rc}" -eq 80 ]

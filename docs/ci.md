@@ -312,7 +312,7 @@ The project is public, so job logs and artifacts are public.
 ## Running the checks locally
 
 ```sh
-shellcheck -S warning ci/*.sh ci/tests/*.sh linux/setup.sh linux/runner-distributor.sh linux/entrypoint/circleci-runner-entrypoint
+shellcheck -S warning ci/*.sh ci/tests/*.sh linux/setup.sh linux/stack/runner-distributor.sh linux/stack/circleci-runner-entrypoint
 hadolint --config .hadolint.yaml linux/images/example/Dockerfile windows/images/servercore/Dockerfile
 yamllint --strict .
 docker stack config -c linux/stack/runners.yaml > /dev/null

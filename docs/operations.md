@@ -357,8 +357,8 @@ The entrypoint and the script of the distributor are Swarm configs, so this comm
 If you edit one of these files in your own copy, rename the config in your stack file after each edit, or Swarm keeps the old file. The new name is the old prefix and the first 12 digits of the new hash:
 
 ```console
-$ sha256sum linux/entrypoint/circleci-runner-entrypoint | cut -c1-12
-$ sha256sum linux/runner-distributor.sh | cut -c1-12
+$ sha256sum linux/stack/circleci-runner-entrypoint | cut -c1-12
+$ sha256sum linux/stack/runner-distributor.sh | cut -c1-12
 ```
 
 In a clone of this repository, `ci/config-names.sh --write` renames the configs of the shipped stack files.

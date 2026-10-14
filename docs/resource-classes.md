@@ -270,9 +270,9 @@ These are variables of `docker stack deploy`, and `x-distributor-env` in `linux/
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | `current` | `current` follows the manifest of CircleCI. A version such as `3.1.12` pins that version |
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | An exact version, the newest that CI tests | An exact version pins it and never changes by itself. `3.1`, `3` and `current` follow the manifest of CircleCI: [the version policy](operations.md#the-version-policy) |
 | `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` | `3` | The major version that `current` may adopt |
-| `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often the distributor looks again: seconds, or a number with `s`, `m`, `h`, or `d` |
+| `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often a floating version looks at the manifest again: seconds, or a number with `s`, `m`, `h`, or `d` |
 | `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `https://circleci-binary-releases.s3.amazonaws.com/circleci-runner` | Where `manifest.json` and the tarballs are, for example a mirror |
 | `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | Empty | A comma-separated list of the SHA-256 values of the tarballs that may be installed, instead of the value of the manifest |
 

@@ -10,7 +10,7 @@ This page takes you from nothing to a first job on Linux with the shipped stack 
 
 ## Before you start
 
-- A node with Ubuntu LTS or RHEL 8 or later, amd64 or arm64, Docker Engine 24 or later, a clock on NTP, and outbound HTTPS. Refer to [Prerequisites](install-linux.md#prerequisites) for the details, and to [Sizing](#sizing-and-pending-replicas) for the CPU and memory.
+- A node with Ubuntu LTS or RHEL 8 or later, amd64, arm64, ppc64le or s390x, Docker Engine 24 or later, a clock on NTP, and outbound HTTPS. Refer to [Prerequisites](install-linux.md#prerequisites) for the details, and to [Sizing](#sizing-and-pending-replicas) for the CPU and memory.
 - Your organization's runner namespace, and an organization admin who agreed to the [CircleCI Runner Terms](https://circleci.com/legal/runner-terms/).
 - The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in, on your workstation or on the node.
 - A bash shell. Run the commands on the node with `sudo`, or as a user in the `docker` group. The `docker` group is equivalent to root, so limit it.
@@ -48,7 +48,6 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
      sudo linux/setup.sh --check                             # on every node
      sudo docker swarm init --advertise-addr <manager IP address>   # on the manager
      sudo docker swarm update --task-history-limit 2         # on the manager
-     sudo docker node update --label-add machine-runner-swarm.proxy=true <manager>   # the node of the token proxy
      sudo docker swarm join-token worker                     # prints the join command: run it on each worker
      sudo docker node ls                                     # on the manager: every node is Ready
      ```

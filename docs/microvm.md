@@ -22,7 +22,7 @@ Swarm has no per-service container runtime: a service cannot ask for Kata. The D
 - The classes set `MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true`. The entrypoint then exits with code 80 unless `/proc/cmdline` names `kata-containers`, so a node that falls back to runc by mistake, with the label but the wrong default runtime, never runs a class that has `SYS_ADMIN`.
 - Docker's embedded DNS (`127.0.0.11`) does not work inside a Kata VM. The service `microvm-dns` is a CoreDNS forwarder on a runc node, and each microVM node mounts a file that points `/etc/resolv.conf` at it. Refer to [DNS](#dns).
 - The classes claim through the [token proxy](security.md#the-token-proxy), like the other single-task classes. A runner holds a placeholder config, and the class tokens are Swarm secrets of `token-proxy` alone, so a job in a VM never sees one, also in `linux-microvm-docker`. The runner finds `token-proxy` by name, and the forwarder resolves it, because it and the proxy are on the class networks. The proxy runs on a runc node, where Docker's DNS works.
-- The runner comes from the per-node volume `runner-bin`, as for every class. `runner-distributor` of `runners.yaml` needs working DNS to download it, so it stays off microVM nodes, and `microvm.yaml` runs a copy of it there, `microvm-runner-distributor`, with the same node file as the classes.
+- The runner does not come from a shared volume. Each container downloads the pinned runner from CircleCI's release bucket into itself, verifies its SHA-256, and runs it, so no state is shared between jobs, and a microVM node runs no `runner-distributor` and has no `runner-bin` volume. Refer to [The runner in a VM](#the-runner-in-a-vm).
 - A Kata container that starts at the moment its overlay network leaves the node hangs, which is what a rolling update does. The global service `microvm-netkeep` runs one sleeping container on each microVM node, on both class networks, so the networks stay up. Refer to [Rolling updates](#rolling-updates).
 
 | | `linux-default` | `linux-microvm` | `linux-microvm-docker` |
@@ -31,6 +31,7 @@ Swarm has no per-service container runtime: a service cannot ask for Kata. The D
 | Runs on | Nodes without the `microvm` and `docker-build` labels | Nodes with `microvm=true` | Nodes with `microvm=true` |
 | Job user | `circleci`, with sudo | `circleci`, with sudo | `circleci`, with sudo |
 | Class token in the job | No, the proxy holds it | No | No |
+| The runner | The per-node volume, read-only | Downloaded by the container, then verified | Downloaded by the container, then verified |
 | Capabilities | Docker's defaults, minus `NET_RAW` and `MKNOD` | The same | Docker's defaults, plus `SYS_ADMIN` and `NET_ADMIN` |
 | Docker in the job | No | No | Its own `dockerd` in the VM, on a tmpfs |
 
@@ -40,8 +41,9 @@ Swarm has no per-service container runtime: a service cannot ask for Kata. The D
 - **Linux amd64.** This add-on pins the amd64 build of Kata 4.2.0. Arm64 is untested.
 - **Docker Engine 24 or later**, and a Swarm that follows [Multi-Node Clusters](multi-node.md).
 - **One runc node at least** for `microvm-dns` and `token-proxy`, for example a manager. A single-node Swarm whose only node is a microVM node cannot run them. Refer to [DNS](#dns).
-- **The base stack**: `runners.yaml` with its placeholder secret and the label `machine-runner-swarm.proxy=true` on the node of the proxy ([Install on Linux](install-linux.md)). Deploy `microvm.yaml` together with it.
-- **A dedicated node.** The default runtime applies to every container on the node.
+- **The base stack**: `runners.yaml` with its placeholder secret ([Install on Linux](install-linux.md)). The token proxy runs on a manager by default, so no label is needed. Deploy `microvm.yaml` together with it.
+- **A node of its own.** The default runtime applies to every container on the node, so a microVM node runs microVM classes only, and nothing else of your stacks.
+- **Egress to the release bucket.** Each VM downloads the runner from `circleci-binary-releases.s3.amazonaws.com`, the host that its task agent comes from on every job already ([Egress hosts](security.md#egress-hosts)).
 
 ### Nested virtualization in the cloud
 
@@ -54,7 +56,7 @@ CircleCI's own cloud executors do not offer nested virtualization, except the An
 
 ## Set up a microVM node
 
-Run these steps on every microVM node, as root. The node joined the Swarm ([Install on Linux](install-linux.md)). There is nothing to install for the runner: the distributor fills the per-node volume `runner-bin`.
+Run these steps on every microVM node, as root. The node joined the Swarm ([Install on Linux](install-linux.md)). There is nothing to install for the runner: each VM downloads its own.
 
 1. **Check KVM and load the vhost modules.** Kata uses `vhost_vsock` to reach the agent in the VM, and `vhost_net` for networking.
 
@@ -120,7 +122,7 @@ Run these steps on every microVM node, as root. The node joined the Swarm ([Inst
 Docker's embedded DNS server, `127.0.0.11`, cannot be reached from inside a Kata VM, on an overlay or any other user-defined network. Kata has no fix for it yet. `microvm.yaml` works around it in two parts:
 
 - **The forwarder.** The service `microvm-dns` runs CoreDNS with `forward . 127.0.0.11` on a node without the `microvm` label, where the embedded DNS works. It joins the networks of both classes, where `token-proxy` is too, so `token-proxy` and the service names such as `linux-microvm` and `tasks.linux-microvm` resolve. It is published on port 53, TCP and UDP, through the routing mesh, so every node answers on port 53.
-- **The node file.** Each microVM node has a file that the stack mounts read-only at `/etc/resolv.conf` of every job and of `microvm-runner-distributor`. It names the gateway of `docker_gwbridge`, which is the node itself, and the routing mesh sends the query on to a forwarder.
+- **The node file.** Each microVM node has a file that the stack mounts read-only at `/etc/resolv.conf` of every job. It names the gateway of `docker_gwbridge`, which is the node itself, and the routing mesh sends the query on to a forwarder.
 
 1. **Write the node file**, after the node joined the Swarm (the network `docker_gwbridge` exists from then on). The gateway is `172.18.0.1` by default and differs when that range was taken, so read it from Docker:
 
@@ -145,17 +147,16 @@ Docker's embedded DNS server, `127.0.0.11`, cannot be reached from inside a Kata
 
 The forwarder needs a runc node. On a Swarm whose only node is a microVM node, replace `forward . 127.0.0.11` with `forward . 1.1.1.1` (or your resolver) and put `microvm-dns` on that node without the constraint. Public names then resolve, and service names do not.
 
-## The runner volume
+## The runner in a VM
 
-Every class mounts the per-node volume `runner-bin` read-only at `/opt/machine-runner-swarm`. Kata shares it into the VM through virtiofs. On a microVM node `microvm-runner-distributor` fills it, and the entrypoint of each container checks the runner against the SHA-256 record of the distributor before it starts it.
+The other classes mount the per-node volume `runner-bin` read-only, which the `runner-distributor` service fills. A microVM class does not, because root with `SYS_ADMIN` inside a VM, which is what `linux-microvm-docker` gives a job, can remount a shared mount read-write, and the write would reach the volume of the node and the runner of every later job. There is no read-only mount to prevent it, because the distributor writes the same volume. So nothing writable is shared:
 
-Root with `SYS_ADMIN` inside a VM, which is what `linux-microvm-docker` gives a job, can remount that share read-write. The write then reaches the volume on the node. The node cannot prevent it with a read-only mount, because the distributor writes the same volume. What a job in `linux-microvm-docker` can do, and what stops it:
+- With `MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true` the entrypoint downloads the runner into the container itself, before it starts it. It runs the distributor script (`/runner-distributor.sh`, a Swarm config of the class) once, as `sh /runner-distributor.sh --once`, which resolves the version, downloads the tarball from CircleCI's release bucket, checks its SHA-256 against the manifest (or against `MACHINE_RUNNER_SWARM_RUNNER_SHA256`), checks that the binary reports the version, and writes the same record as on any node. The checks of the entrypoint follow as for every class.
+- The source is the one that the task agent comes from on every job. The download is about 22 MB, and the VM does it for each job.
+- The settings are those of the distributor and have the same defaults: `MACHINE_RUNNER_SWARM_RUNNER_VERSION` (an exact pin by default, or `3.1`, `3`, `current`: [the version policy](operations.md#the-version-policy)), `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`, `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` (a [mirror](operations.md#run-the-downloads-from-a-mirror)) and `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, set as variables of `docker stack deploy`. In these two classes they sit in the service, because no distributor serves them. The pin is the same as in `runners.yaml`. A floating version is resolved in each VM when the job starts.
+- A failed or mismatching download ends the container with exit code 80, and Swarm tries again after the restart delay of 10 seconds.
 
-- It can change the runner binary and the SHA-256 record. The next container of any class on that node runs the changed binary. The class tokens are not in the node's volume or in a runner, so the binary cannot read one, but it can run jobs of its class and read what they hold.
-- It can change the binary only, or the record only. The entrypoint of the next container refuses to start (exit 80, "does not match its SHA-256 record"), and the distributor repairs the volume at its next check.
-- It can change both, and the next container starts the changed binary. The check is not a boundary against a job that has `SYS_ADMIN`.
-
-So give `linux-microvm-docker` nodes of its own ([Security](#security)). The changed binary then runs only in jobs of that class. The test `microvm.sh` shows all three cases.
+What a job in `linux-microvm-docker` can do with the runner is limited to its own VM. It can rewrite the runner binary and its record in its own copy, and that copy goes away with the VM. The next job downloads a fresh one. The class tokens are not in the VM or in the runner, so a changed runner cannot read one. Because nothing is shared, **no dedicated nodes are needed for this reason**. The test `microvm.sh` rewrites the binary and the record in a VM and shows that the next VM runs a fresh one, that a download with a wrong SHA-256 is refused, and that no `runner-bin` volume exists on the node.
 
 ## Deploy the classes
 
@@ -195,10 +196,10 @@ The service `microvm-netkeep` closes the gap. It is global, so one small VM slee
 
 ## Security
 
-- **What the VM adds.** A job that escapes its container, or abuses `SYS_ADMIN`, lands in a guest kernel and its own root filesystem. It does not reach the node, other jobs, or other classes' tokens, except through what the node shares: the runner volume ([above](#the-runner-volume)), and the network.
+- **What the VM adds.** A job that escapes its container, or abuses `SYS_ADMIN`, lands in a guest kernel and its own root filesystem. It does not reach the node, other jobs, or other classes' tokens. The VM shares no writable state with other jobs: the runner is its own ([above](#the-runner-in-a-vm)). What remains shared is the network.
 - **What it does not add.** The VM does not filter egress, and replicas of a class still share an overlay network. The job holds no class token: its runner has the placeholder, and the proxy adds the token of the class to the claim of each container once.
-- **Dedicated nodes for `linux-microvm-docker`.** A job with `SYS_ADMIN` can remount every shared mount of its VM read-write, among them the runner volume, and a bug in virtiofs, the VMM, or the guest kernel could still reach the node. Give the class nodes of its own. Label them `machine-runner-swarm.class.linux-microvm-docker=true`, as [Multi-Node Clusters](multi-node.md#labels-used-by-this-repository) describes, add `node.labels.machine-runner-swarm.class.linux-microvm-docker == true` to the constraints of `linux-microvm-docker` in your copy of the stack file, and `!= true` to those of `linux-microvm`.
-- **Tampering with the runner.** A privileged sibling that can write the runner volume can change the binary and its SHA-256 record together ([above](#the-runner-volume)). The check at the start of a container makes a change of one of them visible, and it does not stop a change of both. The dedicated nodes are the control.
+- **No dedicated nodes for the runner.** No volume is shared between VMs, so a job with `SYS_ADMIN` has nothing writable of the node or of other jobs to reach, and the classes can share nodes. A bug in virtiofs, the VMM, or the guest kernel could still reach the node. If that residual risk matters to you, give `linux-microvm-docker` nodes of its own: label them `machine-runner-swarm.class.linux-microvm-docker=true`, as [Multi-Node Clusters](multi-node.md#labels-used-by-this-repository) describes, add `node.labels.machine-runner-swarm.class.linux-microvm-docker == true` to the constraints of `linux-microvm-docker` in your copy of the stack file, and `!= true` to those of `linux-microvm`.
+- **Tampering with the runner.** A job that changes the runner in its VM changes its own copy, which dies with the VM ([above](#the-runner-in-a-vm)). The entrypoint still checks the binary against its record at the start, as for every class.
 - **The guard.** `linux-microvm-docker` adds `SYS_ADMIN`. On runc that is a host escape. The label and the constraints keep the class on microVM nodes, and the entrypoint check keeps it off a node that has the label but not the runtime. The stack-config test requires `MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true` on every service that adds `SYS_ADMIN`, in every stack file.
 - **A bigger attack surface under it.** The node now runs `virtiofsd`, a VMM, and the Kata shim for every job. Keep Kata and the node kernel current.
 
@@ -211,22 +212,22 @@ Measured on one `r8i-flex.2xlarge` (nested KVM), Docker 29.9, Kata 4.2.0, in a D
 | Container start | 0.27 s | 1.16 s | 2.5 s |
 | Swarm deploy to the first output of the container | 1.3 s | 3.4 s | not measured |
 
-- **Memory.** `microvm-netkeep` and `microvm-runner-distributor` add one small VM each (256 MB limit) to every microVM node. An idle VM with 2 GiB takes about 160 MB of host memory, and the guest kernel and its page cache use more as the job runs. A VM has the memory of the class limit, and the tmpfs of `linux-microvm-docker` counts against it.
+- **Memory.** `microvm-netkeep` adds one small VM (256 MB limit) to every microVM node. An idle VM with 2 GiB takes about 160 MB of host memory, and the guest kernel and its page cache use more as the job runs. A VM has the memory of the class limit, and the tmpfs of `linux-microvm-docker` counts against it.
 - **CPU.** Compute speed equals runc. A VM has the CPUs of the limit plus one, and the reservation of the class still covers only the limit.
 - **Disk.** virtiofs makes `fsync` about twice as slow as on the node's disk. Builds and test runs that write many small files with `fsync` feel it. A tmpfs avoids it.
-- **Start-up.** A job in a new container waits about a second longer, which is small against the time the runner needs to claim a job.
+- **Start-up.** A job in a new container waits about a second longer, which is small against the time the runner needs to claim a job. It also downloads the runner (about 22 MB) before it starts, which takes a few seconds on a normal link.
 
 Dragonball is the built-in VMM of runtime-rs and works with the same steps. It starts more slowly than Cloud Hypervisor, so the docs use Cloud Hypervisor.
 
 ## What is tested
 
-`linux/tests/microvm.sh` runs two Docker-in-Docker nodes with KVM, the real stack files `runners.yaml` and `microvm.yaml`, the real entrypoint, a distributor that installs the runner and the token proxy from a test mirror, and the real runner against a fake API. It skips when `/dev/kvm` is missing. It checks:
+`linux/tests/microvm.sh` runs two Docker-in-Docker nodes with KVM, the real stack files `runners.yaml` and `microvm.yaml`, the real entrypoint, a distributor on the runc node and a test mirror that serves the runner and the token proxy, and the real runner against a fake API. It skips when `/dev/kvm` is missing. It checks:
 
-- The classes stay pending until a node has the label. The forwarder and the proxy run on the runc node, and the distributor of `microvm.yaml` runs on the Kata node only, as the one of `runners.yaml` runs on the runc node only.
+- The classes stay pending until a node has the label. The forwarder and the proxy run on the runc node, together with the distributor, and the Kata node runs no distributor and has no `runner-bin` volume.
 - The guest kernel differs from the node kernel, `/proc/cmdline` names `kata-containers`, and `/etc/resolv.conf` is the node file and read-only.
 - Public names, `token-proxy`, the service name, and `tasks.<service>` resolve through the forwarder. A control service without the node file shows the failure that the forwarder fixes.
 - The real runner claims through the real token proxy from inside a VM and runs a task as the job user. The class token is in no file, variable, or process of the VM.
-- The runner volume: a root shell in the VM remounts it read-write and writes the volume of the node (the control). A changed binary is refused at the next start, and a changed binary with a changed record is not.
+- The runner of a VM: it is downloaded into the VM and verified, nothing is mounted at its path, a root shell that rewrites the binary and the record changes nothing for the next VM, a download with a wrong SHA-256 is refused (exit 80), and a floating version resolves in the VM.
 - A forced rolling update of a class replaces its VM, because `microvm-netkeep` holds the overlay. A control without it shows the hang.
 - `dockerd` starts in the VM, uses `overlay2` on the tmpfs, builds an image, and runs it.
 - The guard: the label on a runc node makes both classes exit 80.
@@ -266,6 +267,6 @@ It needs nested virtualization, and CircleCI's own Windows machines do not offer
 | The class stays `Pending` with `no suitable node` | No node has `machine-runner-swarm.microvm=true` | [Label the node](#configure-docker) |
 | A job cannot resolve names, or only some queries succeed | `microvm-dns` is not running, the config `microvm-corefile` is missing, a replica runs on a Kata node without the label, or another `-c` file overrides `microvm-dns` and the merge dropped its UDP port | `docker service ls` must show `*:53->53/tcp, *:53->53/udp` for `runners_microvm-dns`, and `docker service ps runners_microvm-dns` the replicas on nodes without the label. Check the [Corefile config](#dns). Change the service in your copy of `microvm.yaml`, not in another `-c` file |
 | A task stays `Starting` and its container stays `Created` after an update | The overlay left the node while the task started | [Rolling updates](#rolling-updates). Check that `microvm-netkeep` runs on the node, then `docker service update --force` the class again |
-| A class exits 80 with "waiting for the runner-distributor" or "has not installed the runner" | `microvm-runner-distributor` did not install the runner on this node: no node file, or no route to the download | `docker service ps runners_microvm-runner-distributor`, its logs, and [DNS](#dns) |
+| A class exits 80 with "cannot download and verify the runner in this microVM" | The VM could not download the runner, or its SHA-256 did not match | `docker service logs runners_linux-microvm` shows the lines of the download above the error. Check [DNS](#dns), egress to `circleci-binary-releases.s3.amazonaws.com`, `MACHINE_RUNNER_SWARM_RUNNER_VERSION` and `MACHINE_RUNNER_SWARM_RUNNER_SHA256` |
 | A container does not start, with `ETIMEDOUT` on vsock | `vhost_vsock` is not loaded, or QEMU lacks `/dev/shm` space | [Set up a microVM node](#set-up-a-microvm-node) step 1, and the QEMU note in [Configure Docker](#configure-docker) |
 | `dockerd` in the VM fails with `read-only file system` | The job skipped the remounts | [Run Docker inside the VM](#run-docker-inside-the-vm) |

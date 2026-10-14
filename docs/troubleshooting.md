@@ -83,7 +83,7 @@ The runner log contains `403 (Forbidden)` for the claim, and the log of `runners
 **Fix.**
 
 - `not a runner of any class`: the class is not in the proxy (a new class needs its variable, network, and secret under `token-proxy`; refer to [Define a class](resource-classes.md#define-a-class)), the proxy is not on the network of the class, or the claim comes from a container that is not a runner.
-- `this runner has already claimed a task`: the proxy restarted while the runner was idle. The runner retries every 5 seconds until it is replaced, at its idle timeout. Replace it now with `docker service update --force --update-parallelism 0 runners_<service>`. Refer to [Restart the proxy](operations.md#restart-the-proxy).
+- `this runner has already claimed a task`: the proxy restarted while the runner was idle, or the proxy moved to another node and started with the state `latch` or a lost state. The runner retries every 5 seconds until it is replaced, at its idle timeout. Replace it now with `docker service update --force --update-parallelism 0 runners_<service>`. Refer to [Restart the proxy](operations.md#restart-the-proxy) and [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves).
 
 ### The runner log shows x509 certificate errors
 
@@ -240,6 +240,14 @@ A line reads `runner-distributor: SHA-256 mismatch for circleci-runner_linux_amd
 **Cause.** The tarball does not have the SHA-256 that the manifest, or your list in `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, names. The usual causes are a list that lacks the value of one architecture (a fleet with amd64 and arm64 nodes needs both), a mirror whose tarball and manifest do not belong together, and a proxy that changes the download.
 
 **Fix.** Compare `wanted` with the SHA-256 of the file that you expect, from the `checksums.txt` of the release or from the manifest. Correct the list, the mirror, or the proxy. Never copy the `got` value into the list without checking where the file came from.
+
+### The distributor log says that the token proxy is not installed
+
+The log has `runner-distributor: error: the token proxy is not installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is unreleased (a checkout of this repository), which means its latest published release, and <url> returns none`, and the service `runners_token-proxy` waits (`has not installed the proxy`). The runner itself is installed and unaffected.
+
+**Cause.** A `git clone` or a "Download ZIP" has `unreleased` as the proxy version, which means the latest published release of this repository. The distributor asked GitHub for it and got no answer: either this repository has published no release yet, or the node cannot reach `api.github.com` (a proxy or an allow list), or GitHub answered with a rate limit.
+
+**Fix.** Use the bundle of a release, which names its release. Or set `MACHINE_RUNNER_SWARM_PROXY_VERSION` to a release (`0.3.0`) in the environment of `docker stack deploy`. Behind an allow list, add `api.github.com` and `github.com`, or mirror the release files and set `MACHINE_RUNNER_SWARM_PROXY_BASE_URL` and `MACHINE_RUNNER_SWARM_PROXY_LATEST_URL` ([the settings](operations.md#settings-of-the-distributor)). The distributor tries again every 5 minutes.
 
 ### The distributor log shows not adopting it
 

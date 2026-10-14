@@ -42,7 +42,7 @@ Your job configs do not change. Your resource classes and tokens can stay.
 
 ## Behavior to expect
 
-- **Runner updates.** With the default settings, the runner follows the current release of CircleCI within major version 3, and a new release reaches the nodes by itself. Pin a version to stop that. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+- **Runner updates.** With the default settings, the runner is an exact pin: the newest version that this repository's CI tests, which each release of this repository bumps, so the nodes keep a version until you change it. Set `3.1`, `3` or `current` to let it follow CircleCI's manifest. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 - **Sudo.** The default classes keep passwordless sudo, as the old images did. The hardened class removes it. Refer to [Concepts](concepts.md#users-and-the-runner-token-on-linux).
 - **Startup time.** A new container starts for every job, so a job waits about 10 seconds longer than before for the next claim, plus the task agent download. Add replicas for busy classes.
 - **Swarm on one host.** Swarm mode is required even on a single host. The shipped helper and the install page start it on the loopback address, so nothing is exposed.

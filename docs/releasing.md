@@ -59,13 +59,28 @@ git-cliff writes the notes of the new version for the body of the GitHub release
 |---|---|
 | `machine-runner-swarm-<version>.tar.gz` | `README.md`, `LICENSE`, `SECURITY.md`, `VERSION`, the generated `CHANGELOG.md`, `docs/`, `examples/`, `linux/` and `windows/` |
 | `machine-runner-swarm-<version>.zip` | The same files, for Windows users |
-| `machine-runner-swarm-proxy_linux_amd64`, `_linux_arm64`, `_windows_amd64` | The static token proxy binaries, built by `ci/build-proxy.sh` with the release version. The runner distributors of the stack download them from the release and verify them against `SHA256SUMS` |
-| `SHA256SUMS` | The SHA-256 checksum of both bundles and of the three proxy binaries |
+| `machine-runner-swarm-proxy_linux_amd64`, `_linux_arm64`, `_linux_ppc64le`, `_linux_s390x`, `_windows_amd64`, `_windows_arm64` | The static token proxy binaries, one for every platform of CircleCI's runner manifest, built by `ci/build-proxy.sh` with the release version (`ci/build-proxy.sh --assets` lists them, and `ci/release.sh` uploads that list). The runner distributors of the stack download the one of their architecture from the release and verify it against `SHA256SUMS` |
+| `SHA256SUMS` | The SHA-256 checksum of both bundles and of the six proxy binaries |
 | `SHA256SUMS.sigstore.json` | The cosign bundle: signature, certificate, and transparency log entry |
 
 ### The token proxy in a release
 
-The stack files in the repository carry `MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}` in the settings of the distributor (`linux/stack/runners.yaml` and `windows/stack/runners.yaml`). `ci/release.sh` builds the proxy binaries with `ci/build-proxy.sh` and the version of the release, and puts the stack files of the bundle into the archive with `unreleased` replaced by that version. The distributors of a bundle therefore download `machine-runner-swarm-proxy_<os>_<arch>` and `SHA256SUMS` from the release `v<version>` of this repository, which is the release that the bundle came from. A checkout of the repository has no release to download: tests and CI serve the binary of the checkout from a local mirror (`publish_proxy` in `linux/tests/lib.sh`, and the e2e host).
+The stack files in the repository carry `MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}` in the settings of the distributor (`linux/stack/runners.yaml` and `windows/stack/runners.yaml`). `ci/release.sh` builds the proxy binaries with `ci/build-proxy.sh` and the version of the release, and puts the stack files of the bundle into the archive with `unreleased` replaced by that version. The distributors of a bundle therefore download `machine-runner-swarm-proxy_<os>_<arch>` and `SHA256SUMS` from the release `v<version>` of this repository, which is the release that the bundle came from.
+
+A checkout of the repository (`git clone`, Download ZIP) keeps `unreleased`, and the distributors resolve it to the **latest published release** of this repository: they read its tag from the GitHub API (`releases/latest`, which skips drafts and pre-releases) and install the proxy of that release, looking again at every check interval. Until the first release is published there is nothing to resolve, and the distributor logs that, installs no proxy, and keeps the runner. Tests and CI serve the binary of the checkout from a local mirror (`publish_proxy` in `linux/tests/lib.sh`, and the e2e host).
+
+### Bump the runner version
+
+The stack files pin one exact runner version by default: `MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-3.1.13}` in the settings of the distributor of `linux/stack/runners.yaml` and `windows/stack/runners.yaml`, and in `x-env` of `linux/stack/microvm.yaml`. It is the newest runner version that CI tests, because the tests take their runner from the same line (`STACK_RUNNER_PIN` in `linux/tests/lib.sh`, so the real-runner tests and the end-to-end jobs run the pin), and a release carries the pin that CI tested.
+
+Each release bumps it, in a commit before the release:
+
+1. Pick the newest version in the [manifest](https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json) that has every platform (`jq -r '.releases | keys[]' manifest.json`, and check `.releases["<version>"]` for linux `amd64`, `arm64`, `ppc64le`, `s390x` and windows `amd64`, `arm64`). Read the [runner changelog](https://circleci.com/changelog/runner/) for the version.
+2. Change the default in the three files to that version, so that they stay equal. `linux/tests/stack-config.sh` fails when they differ, and the `release` job (`ci/release.sh`, `check_runner_pin`) fails when the version is not in the manifest for every platform.
+3. Commit it as `feat(runner): pin 3.1.14 by default` for a new minor or patch of the runner that users should get, or `fix(runner): ...` for a fix, so that git-cliff makes a release with it. Let CI run: the pin is now the version that the Swarm tests and the end-to-end jobs run.
+4. Update the version in the examples of the docs only when you want them to move (`docs/operations.md` uses `3.1.12` and `3.1.13` as example values).
+
+A user then gets the new runner by deploying the new release: the pin is part of the release, and a deploy of the new stack files moves the distributor to it. A user who sets the variable keeps what they set.
 
 The bundles come from `git archive`, so only tracked files ship. They leave out `linux/tests/`, `windows/tests/`, `docs/ci.md`, `docs/releasing.md`, `ci/`, and `.circleci/`: the pages about this repository's own pipeline and release are for maintainers.
 

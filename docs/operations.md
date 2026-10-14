@@ -118,7 +118,7 @@ The proxy answers `GET /healthz` with 200 when every class has a usable token fi
 
 #### Restart the proxy
 
-A restart is safe at any time. The proxy keeps the addresses of the runners that have claimed in the volume `proxy-state` and refuses only those after the restart. A runner that has not claimed, idle or just started, may claim afterwards, so no restart, deploy, or node reboot locks a runner out. The start line of the log says what the proxy found:
+A restart is safe at any time, on the same node. The proxy keeps the addresses of the runners that have claimed in the volume `proxy-state` and refuses only those after the restart. A runner that has not claimed, idle or just started, may claim afterwards, so no restart, deploy, or node reboot locks a runner out. The start line of the log says what the proxy found:
 
 | Log line at start | State |
 |---|---|
@@ -138,19 +138,34 @@ A busy replica finishes its job before Swarm replaces it. Restart the proxy for 
 $ docker service update --force runners_token-proxy
 ```
 
-The proxy runs the binary that the distributor installed behind `proxy/current` in `runner-bin` when Swarm creates its container. A new `MACHINE_RUNNER_SWARM_PROXY_VERSION` therefore reaches it at its next restart, and a binary that differs from its record stops the start (`does not match its SHA-256 record`).
+The proxy runs the binary that the distributor installed behind `proxy/current` in `runner-bin` when Swarm creates its container. A new `MACHINE_RUNNER_SWARM_PROXY_VERSION` therefore reaches it at its next restart, and so does a newer release that a checkout picked up (`unreleased` is the latest published release, looked at at every check interval). A binary that differs from its record stops the start (`does not match its SHA-256 record`).
 
-#### Move the proxy to another node
+#### Where the proxy runs, and when it moves
 
-The proxy is pinned to the node with the label `machine-runner-swarm.proxy=true`, because that node keeps its state. A new node has an empty volume, which the proxy cannot tell from a first start, so tell it first: runners that are busy then are not allowed to claim again.
+The proxy runs on a manager by default (`node.role == manager`), with no label. In a cluster with one manager it never moves. Its state, the addresses of the runners that have claimed, is the volume `proxy-state` of the node that it runs on.
+
+**The worst case.** If the proxy moves to another node, its state is lost: the new node has an empty volume, which the proxy cannot tell from a first start. A move happens by itself when its node is down and another manager matches, and it happens by hand when you change the placement. Then what the runners see depends on `MACHINE_RUNNER_SWARM_PROXY_NO_STATE`, which names what a start without any state means:
+
+- **`latch` (what you set before a planned move).** The proxy treats every runner present as having claimed, and **refuses the existing runners** (403, `this runner has already claimed a task`) until they recycle: at their idle timeout (1 hour in the shipped files), or at once with `docker service update --force --update-parallelism 0 runners_<service>` for each class. A runner that is running a job is not affected, and a runner that starts after the move is allowed. This is the safe side: no runner can claim twice.
+- **`allow` (the default, and what an unplanned move meets).** The start counts as a first start, so every runner present may claim once, **a busy runner too**. A job that runs in such a runner can then claim one more job of its class and read its code and secrets, so the rule of one claim for each container does not hold for the runners that exist at the move. Replace them to close it, with the command above.
+
+So a move you plan is done with `latch`, and one that you did not plan is answered with the replacement of the runners:
 
 ```console
 $ docker service update --env-add MACHINE_RUNNER_SWARM_PROXY_NO_STATE=latch runners_token-proxy
-$ docker node update --label-rm machine-runner-swarm.proxy <old node>
-$ docker node update --label-add machine-runner-swarm.proxy=true <new node>
+$ docker service update --constraint-rm 'node.role == manager' --constraint-add 'node.hostname == <new manager>' runners_token-proxy
 ```
 
-The proxy starts on the new node, treats every runner present as having claimed, and refuses them until Swarm replaces them: use the command of the previous section. Then set the variable back with `docker service update --env-add MACHINE_RUNNER_SWARM_PROXY_NO_STATE=allow runners_token-proxy`, or remove it from your copy of the stack file. If the node of the proxy dies, the service stays pending until you label another node, and no runner can claim in the meantime.
+The proxy starts on the new node, and the runners get 403 until Swarm replaces them: use the command of the previous section. Then set the variable back with `docker service update --env-add MACHINE_RUNNER_SWARM_PROXY_NO_STATE=allow runners_token-proxy`, or remove it from your copy of the stack file. If no node matches (the only manager is down), the service stays pending and no runner can claim in the meantime.
+
+**Several managers.** The default lets the proxy start on any of them, so a failure of its node moves it. To keep it on one, label that manager and say so at deploy time, in the environment of `docker stack deploy`:
+
+```console
+$ docker node update --label-add machine-runner-swarm.proxy=true <manager>
+$ sudo env MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true' docker stack deploy -c deploy/runners.yaml runners
+```
+
+The label then pins the proxy to a node of your choice, a manager or a worker. If that node dies, the service stays pending until you label another one, and the move is the planned one above. Keep a manager that runs few jobs for the proxy: it holds every class token.
 
 ### Capacity and concurrency
 
@@ -244,33 +259,64 @@ The `runner-distributor` service is the only way a runner reaches a Linux node, 
 
 A container resolves the link `current` once, when it starts. A job that runs now, and its container, keep their version. The next container, which is the next job, gets the new one. Idle replicas keep the old binary until they claim a job or exit after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack files.
 
+#### The version policy
+
+The runner version is operator-pinned, as it is for CircleCI's own runners. The default is an exact pin, and a floating value is an opt-in:
+
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | What the nodes run | Does it change by itself |
+|---|---|---|
+| An exact version, `3.1.13` (the default) | That version. The default is the newest runner version that the CI of this repository tests, and each release of this repository bumps it ([how](releasing.md#bump-the-runner-version)) | Never. Once the version is installed, the distributor makes no request for it |
+| `3.1` | The newest `3.1.x` of CircleCI's manifest | Yes: at every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` (default 24 hours) |
+| `3` | The newest `3.x.y` of the manifest | Yes, at every check interval |
+| `current` | CircleCI's current release, within `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` (default `3`) | Yes, at every check interval |
+
+The distributor resolves a floating value from the manifest of CircleCI, and asks the manifest again at every check interval **only for a floating value**. An exact pin never changes by itself: a new release of the runner, or of this repository, changes nothing on your nodes until you change the pin or deploy a release that carries a newer one. In a stack file, put a floating value in quotes (`"3.1"`), because YAML reads an unquoted `3.1` as a number, and `3.10` as `3.1`.
+
+An upgrade, a pin, and a rollback change the distributor only, whatever the policy is: the runner services never restart.
+
+#### How this compares with machine runner 3, container runner and the orchestrator
+
+CircleCI's own runners leave the version to the operator as well, and differ in what they offer to float on:
+
+| | How the version is chosen | Floating |
+|---|---|---|
+| Machine runner 3 on a host | The operating system package (`apt`, `yum`, Homebrew) or a manual install. The runner has no auto-update, so you update the package yourself | The package manager's latest, when you run it |
+| Container runner | The `tag` of the image in the Helm values. You set it, and the Helm chart is pinned to a major version tag | The image has a floating tag for each major and minor version (`kubernetes-3`, `kubernetes-3.0`), and a fixed tag for each patch release |
+| Machine runner orchestrator | The Helm chart, and the container disk image of the pool | The default image tag floats to the latest published image, and each release has a dated tag that pins it |
+| This repository | `MACHINE_RUNNER_SWARM_RUNNER_VERSION` of the distributor service | `3.1`, `3` and `current` float. The default is an exact pin |
+
+This is the model of container runner: an exact pin for production, a floating tag when you want the newest patch release of a line. The default here is the exact pin, so a deploy of the same files always gives the same runner. Choose `3.1` to take patch releases of the line that you have tested, and `current` only for a class that may run whatever CircleCI releases.
+
 #### Settings of the distributor
 
 The settings are variables of `docker stack deploy`. They apply to the distributor service only. The file `linux/stack/runners.yaml` reads them in `x-distributor-env` and sets the defaults.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | `current` | `current` follows the manifest of CircleCI. A version such as `3.1.12` pins that version |
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | An exact version, the newest that CI tests (`3.1.13` in this release) | An exact version pins it. `3.1`, `3` and `current` float: [the version policy](#the-version-policy) |
 | `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` | `3` | The major version that `current` may adopt |
-| `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often the distributor looks again. A number of seconds, or a number with `s`, `m`, `h`, or `d` |
+| `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often a floating version asks the manifest again, and how often the distributor verifies the installed copy of a pin. A number of seconds, or a number with `s`, `m`, `h`, or `d` |
 | `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `https://circleci-binary-releases.s3.amazonaws.com/circleci-runner` | Where `manifest.json` and the tarballs are. Set it for a [mirror](#run-the-downloads-from-a-mirror) |
 | `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | Empty | A comma-separated list of the SHA-256 values of the tarballs that may be installed, for every architecture of your nodes. It replaces the value of the manifest. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) |
-| `MACHINE_RUNNER_SWARM_PROXY_VERSION` | The release that you downloaded (a checkout: `unreleased`) | The release `v<version>` of this repository whose `machine-runner-swarm-proxy_linux_<arch>` the distributor installs, next to the runner. `ci/release.sh` writes the version of the release into the default of the stack files in the bundle, so a release needs no setting. In a checkout the default is `unreleased` and no proxy is installed, so the `token-proxy` service waits: set a version, or use the bundle of a release |
+| `MACHINE_RUNNER_SWARM_PROXY_VERSION` | The release that you downloaded (a checkout: `unreleased`) | The release `v<version>` of this repository whose `machine-runner-swarm-proxy_linux_<arch>` the distributor installs, next to the runner. `ci/release.sh` writes the version of the release into the default of the stack files in the bundle, so a release needs no setting. In a checkout (`git clone`, Download ZIP) the default is `unreleased`, which means the **latest published release** of this repository: the distributor reads its tag from `MACHINE_RUNNER_SWARM_PROXY_LATEST_URL`, installs that proxy, and looks again at every check interval. With no release published yet it logs that, installs no proxy, and the `token-proxy` service waits |
+| `MACHINE_RUNNER_SWARM_PROXY_LATEST_URL` | `https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest` | What `unreleased` asks: JSON with the `tag_name` of the latest release. GitHub answers 60 requests per hour for each address without a token, which is far more than one request per node and day. Set it for a mirror |
 | `MACHINE_RUNNER_SWARM_PROXY_BASE_URL` | `https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download` | Where `v<version>/machine-runner-swarm-proxy_linux_<arch>` and `v<version>/SHA256SUMS` are. Set it for a mirror of the release files |
-| `MACHINE_RUNNER_SWARM_PROXY_SHA256` | Empty | A comma-separated list of the SHA-256 values of the proxy binaries that may be installed (amd64 and arm64). The binary must equal its line in `SHA256SUMS` and, with this list, one of the values |
+| `MACHINE_RUNNER_SWARM_PROXY_SHA256` | Empty | A comma-separated list of the SHA-256 values of the proxy binaries that may be installed (one for each architecture of your nodes). The binary must equal its line in `SHA256SUMS` and, with this list, one of the values |
+
+The architectures are those of CircleCI's manifest, found with `uname -m`: `amd64`, `arm64`, `ppc64le` and `s390x`. The runner tarball and the proxy binary of a node are the ones of its own architecture, and a host with another one stops the distributor with `unsupported architecture`.
 
 A command that sets a variable must reach `docker stack deploy`. A host with `sudo` drops the environment, so pass the variable with `env`, or run the command as a user in the `docker` group. Set the same variables on every later deploy, because a deploy without them sets the defaults again.
 
 ```console
-$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 docker stack deploy -c deploy/runners.yaml runners
-$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 linux/setup.sh --deploy --stack-file deploy/runners.yaml
+$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 docker stack deploy -c deploy/runners.yaml runners
+$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 linux/setup.sh --deploy --stack-file deploy/runners.yaml
 ```
 
 #### What the default does
 
-With `current`, the distributor reads `manifest.json` when it starts and at every check interval. It finds the version that `current` names by matching the SHA-256 of `current` to a versioned entry of the manifest. It adopts that version only when its major version equals `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`. For another major version it logs `not adopting it` and keeps what it has.
+The default is an exact pin. The distributor reads `manifest.json` once, for the SHA-256 of that version (or uses your `MACHINE_RUNNER_SWARM_RUNNER_SHA256`), downloads the tarball, checks it, extracts the runner, records the SHA-256 of the binary, and moves the link `current` with one atomic rename. When the version is installed and verified, it makes no further request: the check at every interval compares the active binary with its record, and installs the version again only when the binary changed. A new release of the runner reaches your nodes when you change the pin, or when you deploy a release of this repository that carries a newer one.
 
-For a new version, it downloads the tarball, checks the SHA-256 of the tarball, extracts the runner, records the SHA-256 of the binary, and moves the link `current` with one atomic rename. A new release reaches every node within one check interval, with no redeploy. At every check the distributor also compares the active binary with its record, and it installs the version again when the binary changed.
+With a floating value the distributor reads `manifest.json` when it starts and at every check interval, and picks the newest version of the line (`3.1` is the newest `3.1.x`, `3` the newest `3.x.y`). With `current` it finds the version that `current` names by matching the SHA-256 of `current` to a versioned entry of the manifest, and adopts it only when its major version equals `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`. For another major version it logs `not adopting it` and keeps what it has. A new release reaches every node within one check interval, with no redeploy.
 
 To move the replicas that already wait for a job, force an update. An idle replica stops within seconds, and a busy one finishes its job first:
 
@@ -282,13 +328,13 @@ A persistent class runs one container for all jobs, so it keeps its version unti
 
 #### Pin a version
 
-A version such as `3.1.12` pins that version. The distributor takes its SHA-256 from the manifest, installs it, and never moves to another version by itself. Pin a version when a change of the runner must go through your own change process, and then upgrade by changing the pin.
+An exact version such as `3.1.12` pins that version, and the default is such a pin. The distributor takes its SHA-256 from the manifest, installs it, and never moves to another version by itself. Pin a version when a change of the runner must go through your own change process, and then upgrade by changing the pin, or by taking a newer release of this repository, which bumps its default.
 
 ```console
 $ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.13 docker stack deploy -c deploy/runners.yaml runners
 ```
 
-A strict organization sets `MACHINE_RUNNER_SWARM_RUNNER_SHA256` too, with the SHA-256 values of the tarballs from the `checksums.txt` of that release. The distributor then installs only a tarball with one of these values, whatever the manifest says. With `current`, a new release is refused until you update the list, so set the list together with a pinned version.
+A strict organization sets `MACHINE_RUNNER_SWARM_RUNNER_SHA256` too, with the SHA-256 values of the tarballs from the `checksums.txt` of that release. The distributor then installs only a tarball with one of these values, whatever the manifest says. With a floating version, a new release is refused until you update the list, so set the list together with an exact pin.
 
 The distributor switches to a version that is installed already without any network access. Use `3.1.12` or later: it fixes the enforcement of `max_run_time`.
 
@@ -300,7 +346,7 @@ To stop all change at once, pin the version that the nodes run now. That version
 $ docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 runners_runner-distributor
 ```
 
-Set the same value in the environment of your next `docker stack deploy`. A deploy without it sets `current` again.
+Set the same value in the environment of your next `docker stack deploy`. A deploy without it sets the default pin of the stack file again.
 
 #### Roll back
 
@@ -349,7 +395,7 @@ $ mkdir -p mirror && curl -fsSL "$base/manifest.json" -o mirror/manifest.json
 $ jq -r '.releases | keys[] | select(test("^[0-9]"))' mirror/manifest.json
 $ for v in 3.1.12 3.1.13; do
     mkdir -p "mirror/$v"
-    for arch in amd64 arm64; do
+    for arch in amd64 arm64; do   # the architectures of your nodes
       curl -fsSL "$base/$v/circleci-runner_linux_$arch.tar.gz" -o "mirror/$v/circleci-runner_linux_$arch.tar.gz"
     done
   done
@@ -361,7 +407,7 @@ Serve the directory `mirror`, and point the distributor at it:
 $ sudo env MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner docker stack deploy -c deploy/runners.yaml runners
 ```
 
-- Copy the tarballs of the architectures that your nodes have. With `current`, copy the version that `current` names, and copy `manifest.json` again when you want the nodes to adopt a new release. The command `jq -r '.releases as $r | $r.current.linux.amd64.sha256 as $s | $r | to_entries[] | select(.key | test("^[0-9]")) | select(.value.linux.amd64.sha256 == $s) | .key' mirror/manifest.json` prints that version.
+- Copy the tarballs of the architectures that your nodes have (`amd64`, `arm64`, `ppc64le`, `s390x`). With an exact pin, copy that version. With a floating version, copy the versions of its line, and copy `manifest.json` again when you want the nodes to adopt a new release. With `current`, copy the version that `current` names. The command `jq -r '.releases as $r | $r.current.linux.amd64.sha256 as $s | $r | to_entries[] | select(.key | test("^[0-9]")) | select(.value.linux.amd64.sha256 == $s) | .key' mirror/manifest.json` prints that version.
 - The distributor downloads with the `wget` of the stock Alpine image and its CA bundle, so an `https` mirror needs a certificate from a public certificate authority.
 - For plain `http` inside a trusted network, set `MACHINE_RUNNER_SWARM_RUNNER_SHA256` together with a pinned version. The manifest then travels unprotected, and the list keeps it out of the chain.
 - The mirror replaces the runner download only. Every runner container still downloads its task agent from `circleci-binary-releases.s3.amazonaws.com`, and every node still pulls the `alpine` image of the distributor from a registry. Refer to [Does it work on hosts without internet access?](faq.md#does-it-work-on-hosts-without-internet-access).
@@ -376,25 +422,27 @@ The settings are the variables of [the Linux table](#settings-of-the-distributor
 
 | Variable | Effect |
 |---|---|
-| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | `current` (default) follows the manifest of CircleCI within `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` (default `3`) and looks again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` (default `24h`). A version such as `3.1.12` pins it |
-| `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | A comma-separated list of the SHA-256 values of the `circleci-runner_windows_amd64.tar.gz` tarballs that may be installed. It replaces the value of the manifest |
-| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | A mirror: `manifest.json` and `<version>/circleci-runner_windows_amd64.tar.gz` below this URL |
-| `MACHINE_RUNNER_SWARM_PROXY_VERSION`, `_PROXY_BASE_URL`, `_PROXY_SHA256` | The token proxy, as in [the Linux table](#settings-of-the-distributor): the release `v<version>` of this repository whose `machine-runner-swarm-proxy_windows_amd64` and `SHA256SUMS` the distributor installs (`proxy\versions\<version>`, behind the link `proxy\current`, the last 2 versions kept). `ci/release.sh` pins the default in the bundle |
-| `MACHINE_RUNNER_SWARM_TOOLS_BASE_URL` | A directory URL that holds `PortableGit-<version>-64-bit.7z.exe` and `7zr.exe`, the two downloads that the script pins by SHA-256. Without it they come from GitHub |
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | An exact version is a pin, and the default: the newest that CI tests (`3.1.13` in this release). `3.1`, `3` and `current` float, and the distributor then looks at the manifest again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` (default `24h`): [the version policy](#the-version-policy). `current` stays within `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` (default `3`) |
+| `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | A comma-separated list of the SHA-256 values of the `circleci-runner_windows_<arch>.tar.gz` tarballs that may be installed. It replaces the value of the manifest |
+| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | A mirror: `manifest.json` and `<version>/circleci-runner_windows_<arch>.tar.gz` below this URL |
+| `MACHINE_RUNNER_SWARM_PROXY_VERSION`, `_PROXY_LATEST_URL`, `_PROXY_BASE_URL`, `_PROXY_SHA256` | The token proxy, as in [the Linux table](#settings-of-the-distributor): the release `v<version>` of this repository whose `machine-runner-swarm-proxy_windows_<arch>` and `SHA256SUMS` the distributor installs (`proxy\versions\<version>`, behind the link `proxy\current`, the last 2 versions kept). `ci/release.sh` pins the default in the bundle, and a checkout (`unreleased`) installs the latest published release |
+| `MACHINE_RUNNER_SWARM_TOOLS_BASE_URL` | A directory URL that holds `PortableGit-<version>-64-bit.7z.exe` (arm64: `-arm64.7z.exe`) and `7zr.exe`, the two downloads that the script pins by SHA-256. Without it they come from GitHub |
+
+The architecture is `amd64` or `arm64`, read from `PROCESSOR_ARCHITECTURE`. CI runs the distributor on amd64 hosts only: the arm64 file names and manifest entries are tested there, and no Windows arm64 host runs the stack in CI.
 
 In PowerShell, set the variables in the environment of the shell that runs the deploy:
 
 ```powershell
-$env:MACHINE_RUNNER_SWARM_RUNNER_VERSION = '3.1.12'
+$env:MACHINE_RUNNER_SWARM_RUNNER_VERSION = '3.1'
 docker stack deploy -c deploy\runners.yaml runners
 ```
 
-- **Upgrade.** With the default, a new release reaches every node within one check interval, with no redeploy. To move to a version yourself, pin it as above. A deploy without the variable sets `current` again, so set the same values on every deploy.
+- **Upgrade.** The default is an exact pin, so the nodes change version only when you change it, or when you deploy a release of this repository that carries a newer one. With `3.1`, `3` or `current`, a new release reaches every node within one check interval, with no redeploy. A deploy without the variable sets the default pin again, so set the same values on every deploy.
 - **Freeze the nodes now.** Pin the version that the nodes run now. It is installed, so the pin needs no network: `docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 runners_runner-distributor-windows`.
 - **Roll back.** Pin an older version. The distributor keeps the last 3 versions that were active, so a rollback to one of them only moves the link, with no network. A version that was removed is downloaded again.
 - **See what runs.** `docker service logs runners_runner-distributor-windows` shows each flip. On the node, `docker run --rm --mount type=volume,source=runners_runner-bin,target=C:\v,readonly mcr.microsoft.com/windows/servercore:ltsc2022 powershell -Command "Get-Content C:\v\history; (Get-Item C:\v\current).Target"` shows the history and the active version.
 - **Replicas that wait for a job** keep the old version until they claim a job or exit after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack file. A forced update replaces them at once, but it also stops the containers of the service, which kills a running job after about 5 seconds. Force the update only while the class is idle: `docker service update --force runners_windows-default`.
-- **A mirror.** Copy `manifest.json` and the tarballs as for [Linux](#run-the-downloads-from-a-mirror), with `windows` and `amd64` in the names, and copy the two pinned Git downloads into the tools directory. The distributor downloads with PowerShell, so an `https` mirror needs a certificate that the stock Server Core image trusts.
+- **A mirror.** Copy `manifest.json` and the tarballs as for [Linux](#run-the-downloads-from-a-mirror), with `windows` and `amd64` (or `arm64`) in the names, and copy the two pinned Git downloads into the tools directory. The distributor downloads with PowerShell, so an `https` mirror needs a certificate that the stock Server Core image trusts.
 
 A link cannot be replaced in one step on Windows, so for a moment `current` does not exist. A container that Swarm creates in that moment does not start, and Swarm starts the next one after the restart delay of 10 seconds. The window is a few milliseconds long. On a new node, the runner tasks fail in the same way until the first download of the distributor is done. The runner has no start-time check of the binary on Windows, because no entrypoint script exists: the distributor compares the active binary with its record at every check and installs it again when it changed. Refer to [Runner binary integrity on Windows](security.md#runner-binary-integrity-on-windows).
 

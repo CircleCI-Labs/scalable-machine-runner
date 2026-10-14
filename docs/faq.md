@@ -84,8 +84,10 @@ No. Docker has no macOS containers, so Swarm cannot schedule macOS jobs. Apple's
 |---|---|
 | Linux, Ubuntu LTS, amd64 | Tested in CI, including real jobs |
 | Linux, Ubuntu LTS, arm64 | CI tests that the distributor installs the runner and that the stack starts. It runs real jobs on amd64 only |
+| Linux, ppc64le and s390x | CircleCI publishes the runner for them, and the distributor and the token proxy are built for them. CI emulates both under QEMU and checks that the distributor installs the runner and the proxy of the right architecture. Nothing else runs there in CI |
 | Linux, RHEL 8 and later | Steps documented, not tested in CI |
-| Windows Server 2025 and 2022 | Tested in CI |
+| Windows Server 2025 and 2022 | Tested in CI, on amd64 |
+| Windows on arm64 | The distributor and the token proxy are built for it, and CI checks the file names. No Windows arm64 host runs the stack in CI |
 | Windows Server 2019 | Supported by machine runner 3. Untested here, and the stack files have no label for it |
 | Windows Server 2016 and older | Not compatible with machine runner 3 |
 | macOS | Out of scope |
@@ -137,7 +139,7 @@ Not in a single-task class, on Linux or on Windows, with or without sudo: the ru
 
 It is the service `token-proxy` in the Linux `runners.yaml` (`token-proxy-windows` in the Windows one). It holds the resource class tokens, so that the runner containers and their jobs never do. The runners hold a made-up placeholder and send their API calls to the proxy, which adds the real token to the task claim of a runner that Swarm lists in the DNS set of its class, once for each container. Refer to [Concepts](concepts.md#the-token-proxy) and [Security](security.md#the-token-proxy).
 
-When it is down, no runner can claim, and the jobs wait in CircleCI. Idle runners fail their claims and try again. They send nothing to CircleCI on their own, because they hold no token. Swarm restarts a failed proxy after 5 seconds. A job that already runs keeps its container, but its API calls, such as step output, go through the proxy too, so keep outages to a restart. Refer to [Monitor the token proxy](operations.md#monitor-the-token-proxy), including what a restart does to idle runners. The persistent classes do not use the proxy.
+When it is down, no runner can claim, and the jobs wait in CircleCI. Idle runners fail their claims and try again. They send nothing to CircleCI on their own, because they hold no token. Swarm restarts a failed proxy after 5 seconds. A job that already runs keeps its container, but its API calls, such as step output, go through the proxy too, so keep outages to a restart. Refer to [Monitor the token proxy](operations.md#monitor-the-token-proxy), including what a restart does to idle runners. The proxy runs on a manager by default and needs no label. Refer to [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves) for what happens when it moves to another node. The persistent classes do not use the proxy.
 
 ## Why does a Windows job end when I update or stop a service?
 
@@ -145,9 +147,13 @@ Stopping a busy stock Server Core container from outside kills its job after abo
 
 ## Which runner version do the nodes run?
 
-The `runner-distributor` service of the stack decides, and the setup helper installs nothing. With the default setting, `current`, it follows the current release of CircleCI within major version 3, looks again every 24 hours, and verifies the SHA-256 of every download. To stay on a version, pin it with `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, and to go back, pin an older one. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+The `runner-distributor` service of the stack decides, and the setup helper installs nothing. The default is an exact pin: the newest runner version that the CI of this repository tests, which each release of this repository bumps. The nodes keep it until you change it, and the distributor verifies the SHA-256 of every download. To follow CircleCI's manifest instead, set `MACHINE_RUNNER_SWARM_RUNNER_VERSION` to `3.1` (the newest `3.1.x`), `3` (the newest `3.x.y`) or `current` (CircleCI's current release); the distributor then looks again every 24 hours. To go back, pin an older version. Refer to [The version policy](operations.md#the-version-policy).
 
 On Windows, `runner-distributor-windows` decides in the same way, with the same variables. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
+
+## How does the runner version policy compare with machine runner 3, container runner and the orchestrator?
+
+It follows them. Machine runner 3 on a host has no auto-update: you update the package. Container runner takes the image tag from the Helm values that you set, and publishes a floating tag for each major and minor version next to a fixed tag for each patch release. The orchestrator takes its pool image from the Helm chart, with a floating default tag and a dated tag that pins it. Here the version is a setting of the distributor service: an exact pin by default, and `3.1`, `3` or `current` when you want the newest release of a line. Refer to [How this compares](operations.md#how-this-compares-with-machine-runner-3-container-runner-and-the-orchestrator).
 
 ## How do I verify a release?
 

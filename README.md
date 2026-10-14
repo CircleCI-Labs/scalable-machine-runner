@@ -60,7 +60,7 @@ You need Docker Engine 24 or later, the [CircleCI CLI](https://circleci.com/docs
 - [Quickstart on Linux](docs/quickstart-linux.md): one node as a trial, or the start of a cluster. Start Swarm, create the secrets, and deploy. Nothing is installed on a node by hand.
 - [Quickstart on Windows Server](docs/quickstart-windows.md): Server 2022 or 2025, in six steps.
 
-Linux runs on Ubuntu LTS and RHEL 8 or later, on amd64 and arm64. Refer to the [FAQ](docs/faq.md#which-operating-systems-does-it-support) for what CI tests on each, and to [Security](docs/security.md) before you give a class to a team.
+Linux runs on Ubuntu LTS and RHEL 8 or later, on amd64, arm64, ppc64le and s390x (CI tests the first two, and emulates the install on the other two). Refer to the [FAQ](docs/faq.md#which-operating-systems-does-it-support) for what CI tests on each, and to [Security](docs/security.md) before you give a class to a team.
 
 ## Documentation
 

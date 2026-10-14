@@ -74,7 +74,7 @@ Each Linux test prints `RESULT` lines and exits 0 when it passes. `run-all.sh` r
 | `token.sh` | What a job can read in the default class and in the hardened class |
 | `task.sh` | The real runner runs tasks as the job user, against a fake API. Also the failure with `CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true`, and a persistent runner |
 | `placement.sh` | Placement on a manager and a worker, and `docker-build.yaml` |
-| `distributor.sh` | The `runner-distributor` service: runners that wait for it and then exit 80, a node with no install, a joining node, an upgrade under three busy jobs, a rollback without a download, `current` that follows the manifest, the major-version guard, pruning to 3 versions, a tampered binary, a wrong SHA-256, and CircleCI's real manifest. Needs network access |
+| `distributor.sh` | The `runner-distributor` service: runners that wait for it and then exit 80, a node with no install, a joining node, an upgrade under three busy jobs, a rollback without a download, an exact pin that never changes by itself, `3.1`, `3` and `current` that follow the manifest, the major-version guard, `unreleased` as the latest published release, pruning to 3 versions, a tampered binary, a wrong SHA-256, and CircleCI's real manifest. Needs network access |
 | `persistent.sh` | Continuous mode and `persistent.yaml` |
 | `microvm.sh` | The microVM add-on with Kata Containers: the node label, a guest kernel, DNS through the forwarder, a read-only node directory, dockerd in the VM, and the entrypoint guard. Skipped without `/dev/kvm`. Downloads Kata (about 1 GB) unless `SWARM_TEST_KATA_DIR` or `SWARM_TEST_KATA_TARBALL` points at a copy. Not part of `run-all.sh` |
 | `drain.sh` | SIGTERM during a job: the job finishes |
@@ -116,7 +116,7 @@ docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.18.1 '**/*.md
 
 ### Pinned versions
 
-This repository does not use Renovate. Update pinned versions by hand, and change the version and its checksum together. The Linux runner version is not pinned in this repository: the distributor follows the current release of CircleCI, or the version that a user sets, and the `alpine:3` image of the distributor is pinned by digest in `linux/stack/runners.yaml`. The Windows runner version is not pinned either. The pinned Git and 7-Zip versions and their SHA-256 values are in `windows/stack/runner-distributor.ps1`, and a change of the script needs `ci/config-names.sh --write`. Pin images by tag and digest.
+This repository does not use Renovate. Update pinned versions by hand, and change the version and its checksum together. The runner version that the stack files install by default is pinned, in three places that must stay equal (`linux/stack/runners.yaml`, `linux/stack/microvm.yaml` and `windows/stack/runners.yaml`): the newest version that CI tests, bumped by each release ([how](docs/releasing.md#bump-the-runner-version)). The `alpine:3` image of the distributor is pinned by digest in `linux/stack/runners.yaml`. The pinned Git and 7-Zip versions and their SHA-256 values are in `windows/stack/runner-distributor.ps1`, and a change of the script needs `ci/config-names.sh --write`. Pin images by tag and digest.
 
 ## Releases
 

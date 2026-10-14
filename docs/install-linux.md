@@ -51,11 +51,13 @@ Each [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/r
 |---|---|
 | `machine-runner-swarm-<version>.tar.gz` | The bundle for Linux: the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, without the tests |
 | `machine-runner-swarm-<version>.zip` | The same bundle for Windows |
-| `machine-runner-swarm-proxy_linux_amd64`, `_linux_arm64`, `_windows_amd64` | The static token proxy binary for each platform. Refer to [The token proxy](concepts.md#the-token-proxy): the distributor of the stack installs it, so you only download it for an air-gapped mirror |
+| `machine-runner-swarm-proxy_linux_amd64`, `_linux_arm64`, `_linux_ppc64le`, `_linux_s390x`, `_windows_amd64`, `_windows_arm64` | The static token proxy binary for each platform of CircleCI's runner manifest. Refer to [The token proxy](concepts.md#the-token-proxy): the distributor of the stack installs the one of its architecture, so you only download them for an air-gapped mirror |
 | `SHA256SUMS` | The SHA-256 checksum of both bundles and of the proxy binaries |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of `SHA256SUMS` |
 
 The bundle has a top-level `VERSION` file with the release number and a `CHANGELOG.md` with the notes of every release.
+
+A release is the recommended source, because its stack files name the release whose token proxy they install. A `git clone` of the default branch or a "Download ZIP" works too: the stack files there say `unreleased`, which means the latest published release of this repository, so the distributor installs the proxy of that release. It needs a published release, and says so in its log when there is none.
 
 ### Verify a release
 
@@ -160,10 +162,9 @@ On a single node, start Swarm so that it listens on the loopback address only. N
 ```console
 $ docker swarm init --advertise-addr 127.0.0.1 --listen-addr 127.0.0.1:2377
 $ docker swarm update --task-history-limit 2
-$ docker node update --label-add machine-runner-swarm.proxy=true "$(docker info --format '{{.Swarm.NodeID}}')"
 ```
 
-The second command keeps fewer stopped containers on the node. The third labels the node that runs the token proxy, which keeps its state there (`setup.sh --swarm-init` does all three). Without the label the proxy stays pending and no runner can claim. Each finished job leaves a stopped container until Swarm prunes its task, and every stopped container keeps its writable layer on disk.
+The second command keeps fewer stopped containers on the node (`setup.sh --swarm-init` does both). The node is a manager, and the token proxy runs on a manager by default, with no label. In a cluster with several managers, you can pin it to one: refer to [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves). Each finished job leaves a stopped container until Swarm prunes its task, and every stopped container keeps its writable layer on disk.
 
 A node that listens on the loopback address cannot accept other nodes. For several nodes, initialize Swarm with a routable address instead. Refer to [Multi-Node Clusters](multi-node.md#create-the-swarm). A node that joins needs nothing else, because the distributor service starts on it by itself.
 
@@ -249,7 +250,7 @@ To add the optional classes, pass your copies of their files with more `-c` flag
 $ docker stack deploy -c deploy/runners.yaml -c deploy/persistent.yaml runners
 ```
 
-This command is the whole install. The service `runner-distributor` starts on every Linux node, also on a node that joins later. It downloads the runner of CircleCI, checks its SHA-256, and puts it in the volume `runner-bin` of the node. A runner container that starts first waits up to 120 seconds for it. To deploy with other distributor settings, for example a pinned version, set them as variables of this command. A host with `sudo` drops the environment, so write `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 docker stack deploy ...`, or run the command as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+This command is the whole install. The service `runner-distributor` starts on every Linux node, also on a node that joins later. It downloads the runner of CircleCI (the exact version that the stack file pins, the newest that CI tests), checks its SHA-256, and puts it in the volume `runner-bin` of the node. A runner container that starts first waits up to 120 seconds for it. To deploy with other distributor settings, for example a floating version such as `3.1`, set them as variables of this command. A host with `sudo` drops the environment, so write `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 docker stack deploy ...`, or run the command as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
 ## Verify the deployment
 
@@ -288,8 +289,8 @@ This command is the whole install. The service `runner-distributor` starts on ev
 
 | Step | Effect |
 |---|---|
-| `--check` | Preflight: Linux, amd64 or arm64, Docker running and 24 or later, Swarm state, NTP |
-| `--swarm-init` | Runs `docker swarm init` on the loopback address unless Swarm is active, and sets the task history limit to 2 |
+| `--check` | Preflight: Linux, amd64, arm64, ppc64le or s390x, Docker running and 24 or later, Swarm state, NTP |
+| `--swarm-init` | Runs `docker swarm init` on the loopback address unless Swarm is active, and sets the task history limit to 2. The node is a manager, which is where the token proxy runs |
 | `--secret <service>` | Creates the secret `<service>-token` from a token read on stdin |
 | `--deploy` | Runs `docker stack deploy` with each `--stack-file`. Without one it deploys the shipped `linux/stack/runners.yaml`, so pass your copy from step 5 |
 
@@ -303,7 +304,7 @@ sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml
 
 Create one secret for every service of the stack files you deploy. `--deploy` fails with `secret not found` when one is missing, and `linux-hardened` is in `runners.yaml` too. Every command needs `sudo` or membership of the `docker` group, because each one talks to the Docker daemon. The helper is a bash script with a `#!/usr/bin/env bash` line, so it runs from any shell, including zsh. To script one secret, pipe the token: `printf %s "$TOKEN" | sudo linux/setup.sh --secret linux-default`. Several `--secret` values need a terminal, because stdin carries one token.
 
-The distributor reads its settings from the environment of `--deploy`: `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`, `MACHINE_RUNNER_SWARM_CHECK_INTERVAL`, `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL`, and `MACHINE_RUNNER_SWARM_RUNNER_SHA256`. A host with `sudo` drops the environment, so to deploy with these variables, run `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 linux/setup.sh --deploy`, or run `docker stack deploy` as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+The distributor reads its settings from the environment of `--deploy`: `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`, `MACHINE_RUNNER_SWARM_CHECK_INTERVAL`, `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL`, and `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, and for the token proxy the variables `MACHINE_RUNNER_SWARM_PROXY_*`. A host with `sudo` drops the environment, so to deploy with these variables, run `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 linux/setup.sh --deploy`, or run `docker stack deploy` as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
 The helper accepts a token that has only letters, digits, `.`, `_`, and `-`, and it keeps an existing secret unchanged. To replace a token, refer to [Rotate a runner token](operations.md#rotate-a-runner-token). The preflight warns when the clock is not NTP-synchronized. The helper does not label nodes. For a docker-build class, run `docker node update --label-add machine-runner-swarm.docker-build=true <worker node>` yourself.
 

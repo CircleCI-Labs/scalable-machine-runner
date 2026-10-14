@@ -91,10 +91,20 @@ for s in "${services[@]}"; do
   check "$s" 'secret uid 2000 (the runner)' '^        uid: "2000"$'
   check "$s" 'secret gid 2000' '^        gid: "2000"$'
   check "$s" 'secret mode 0400' '^        mode: 256$'
-  check "$s" 'the per-node volume runner-bin at /opt/machine-runner-swarm' '^        source: runner-bin$'
-  check "$s" 'the volume mounted read-only' '^        read_only: true$'
-  # an upgrade changes only the distributor: no version and no hash in a runner service, and no host directory
-  if grep -qE 'MACHINE_RUNNER_SWARM_(RUNNER_VERSION|RUNNER_SHA256|DOWNLOAD_BASE_URL)|source: /opt/machine-runner-swarm' <<< "$block"; then
+  if [[ $s != linux-microvm* ]]; then
+    check "$s" 'the per-node volume runner-bin at /opt/machine-runner-swarm' '^        source: runner-bin$'
+    check "$s" 'the volume mounted read-only' '^        read_only: true$'
+  fi
+  # an upgrade changes only the distributor: no version and no hash in a runner service, and no host directory. A microVM class has no
+  # distributor on its node (no shared volume): it carries the settings that its entrypoint downloads the runner with, and no volume.
+  if [[ $s == linux-microvm* ]]; then
+    check "$s" 'the runner version it downloads' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: '
+    check "$s" 'the distributor script as a config (the entrypoint runs it once)' '^        target: /runner-distributor.sh$'
+    if grep -qE 'source: runner-bin|source: /opt/machine-runner-swarm' <<< "$block"; then
+      echo "  $s: mounts the runner volume (a guest with SYS_ADMIN could remount it read-write)"
+      problems=$((problems + 1))
+    fi
+  elif grep -qE 'MACHINE_RUNNER_SWARM_(RUNNER_VERSION|RUNNER_SHA256|DOWNLOAD_BASE_URL)|source: /opt/machine-runner-swarm' <<< "$block"; then
     echo "  $s: carries a runner version, hash, mirror or host directory: only runner-distributor may"
     problems=$((problems + 1))
   fi
@@ -295,25 +305,31 @@ check microvm-netkeep 'the class network linux-microvm-docker' '^      linux-mic
 check microvm-netkeep 'the microVM node constraint (microvm == true)' '^          - node.labels.machine-runner-swarm.microvm == true$'
 check microvm-netkeep 'to stay off Docker-build nodes' '^          - node.labels.machine-runner-swarm.docker-build != true$'
 check microvm-netkeep 'cap_drop ALL' '^      - ALL$'
-# The distributor of the microVM nodes: the distributor of runners.yaml with the node file, on microVM nodes only. Same script, same settings.
-block=$(service_block microvm-runner-distributor)
-check microvm-runner-distributor 'a global service' '^      mode: global$'
-check microvm-runner-distributor 'the microVM node constraint (microvm == true)' '^          - node.labels.machine-runner-swarm.microvm == true$'
-check microvm-runner-distributor 'the read-only /etc/resolv.conf bind of the node file' '^        source: /etc/machine-runner-swarm/microvm-resolv.conf$'
-check microvm-runner-distributor 'a writable runner-bin volume' '^        source: runner-bin$'
-env_of() { service_block "$1" | awk '/^    environment:$/ { f = 1; next } /^    [a-z]/ { f = 0 } f'; }
-same_settings() { # the settings of both distributors must be equal (the defaults, then with the deploy-time variables set)
-  if ! diff_out=$(diff <(env_of runner-distributor) <(env_of microvm-runner-distributor)); then
-    echo "  microvm-runner-distributor has other settings than runner-distributor ($1; keep them in step):"
-    printf '%s\n' "$diff_out" | sed 's/^/    /'
-    problems=$((problems + 1))
-  fi
-}
-same_settings defaults
-cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_CHECK_INTERVAL=1h \
-  MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc \
-  MACHINE_RUNNER_SWARM_PROXY_VERSION=0.3.0 MACHINE_RUNNER_SWARM_PROXY_SHA256=def docker stack config -c "$dir/runners.yaml" -c "$dir/microvm.yaml")
-same_settings "the deploy-time variables"
+# A microVM node has no distributor and no runner volume: each container downloads its own runner. The default version is the same pin as in
+# runners.yaml, and the deploy-time variables reach both.
+if grep -q 'microvm-runner-distributor' <<< "$cfg"; then
+  echo "  microvm-runner-distributor still exists: a microVM class downloads its own runner, and no node needs a copy of the distributor"
+  problems=$((problems + 1))
+fi
+if grep -q 'source: runner-bin' <<< "$(service_block linux-microvm)$(service_block linux-microvm-docker)"; then
+  echo "  a microVM class mounts runner-bin"
+  problems=$((problems + 1))
+fi
+pin_of() { sed -n 's/^  MACHINE_RUNNER_SWARM_RUNNER_VERSION: \${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-\([0-9][0-9.]*\)}.*/\1/p' "$1"; }
+pin=$(pin_of "$dir/runners.yaml")
+[[ -n $pin ]] || { echo "  runners.yaml has no exact default of MACHINE_RUNNER_SWARM_RUNNER_VERSION"; problems=$((problems + 1)); }
+[[ $(pin_of "$dir/microvm.yaml") == "$pin" ]] || { echo "  microvm.yaml pins another runner version than runners.yaml ($pin): keep them equal"; problems=$((problems + 1)); }
+if [[ -f $dir/../../windows/stack/runners.yaml ]]; then
+  [[ $(pin_of "$dir/../../windows/stack/runners.yaml") == "$pin" ]] || { echo "  windows/stack/runners.yaml pins another runner version than runners.yaml ($pin): keep them equal"; problems=$((problems + 1)); }
+fi
+cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner \
+  MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc docker stack config -c "$dir/runners.yaml" -c "$dir/microvm.yaml")
+for s in linux-microvm linux-microvm-docker; do
+  block=$(service_block "$s")
+  check "$s" 'the floating version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: "3.1"$'
+  check "$s" 'the mirror from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://mirror.example.com/circleci-runner$'
+  check "$s" 'the explicit SHA-256 from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_SHA256: abc$'
+done
 
 # every Swarm config is named after its content (ci/config-names.sh)
 if ! out=$("$dir/../../ci/config-names.sh" 2>&1); then

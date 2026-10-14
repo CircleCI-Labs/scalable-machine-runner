@@ -9,6 +9,10 @@
 # ONCE, so a later flip changes the next container only and never this one, and exits 80 unless the binary matches its record.
 # The record comes from the distributor, so the services carry no version and no hash: an upgrade changes the distributor only.
 # A runner that sits as /opt/machine-runner-swarm/bin/circleci-runner (the unit tests, or an image of your own that carries it) is used as it is.
+# A microVM class (MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true) mounts no volume, because a guest with SYS_ADMIN could remount a shared one
+# read-write: it runs /runner-distributor.sh --once (a Swarm config) first, which downloads the runner of MACHINE_RUNNER_SWARM_RUNNER_VERSION
+# from CircleCI's release bucket into this container, verifies its SHA-256 (the manifest's, or MACHINE_RUNNER_SWARM_RUNNER_SHA256) and
+# writes the same record. Everything below then runs as it does with the volume. docs/microvm.md
 #
 # The token never passes through here. The Swarm secret is a runner config file holding only
 # api.auth_token, owned by the runner user (uid 2000, mode 0400); the runner reads it with --config.
@@ -20,7 +24,8 @@
 #                                             steps jobs down with setpriv --no-new-privs, even when the image has sudo:
 #                                             Swarm ignores no-new-privileges, so a setuid binary could otherwise still elevate
 #              MACHINE_RUNNER_SWARM_REQUIRE_MICROVM  default false; true exits 80 unless this container runs in a Kata Containers
-#                                             microVM (microvm.yaml sets it: a node that silently uses runc must not run those classes)
+#                                             microVM (microvm.yaml sets it: a node that silently uses runc must not run those classes),
+#                                             and downloads the runner into the container (see above)
 # Arguments replace the runner's default: machine --config /run/secrets/circleci_runner_config.yaml
 # Exit: 80 when a prerequisite is missing (for JOB_SUDO=false, util-linux setpriv with --no-new-privs) or an existing circleci-runner
 # account is not uid 2000, otherwise the runner's own code (it is exec'd, so it
@@ -53,6 +58,12 @@ esac
 # Wait for the runner-distributor of this node, pin this container to the version directory that the link names now, and check the
 # binary against its record. A runner that is in the image already as bin/circleci-runner needs none of it.
 if [ ! -e "$bin" ]; then
+  if [ "${MACHINE_RUNNER_SWARM_REQUIRE_MICROVM:-false}" = true ]; then
+    # A microVM has no shared volume: this job downloads and verifies its own runner, from the source of the task agent.
+    [ -r /runner-distributor.sh ] || die "/runner-distributor.sh is missing: a microVM class gets it as the Swarm config distributor (stack/microvm.yaml)"
+    echo "circleci-runner-entrypoint: downloading the runner into this microVM" >&2
+    sh /runner-distributor.sh --once >&2 || die "cannot download and verify the runner in this microVM: see the lines above (MACHINE_RUNNER_SWARM_RUNNER_VERSION, _DOWNLOAD_BASE_URL, _RUNNER_SHA256; DNS and egress to circleci-binary-releases.s3.amazonaws.com)"
+  fi
   total=${MACHINE_RUNNER_SWARM_RUNNER_WAIT:-120}
   case $total in '' | *[!0-9]*) die "MACHINE_RUNNER_SWARM_RUNNER_WAIT must be a number of seconds, got '$total'" ;; esac
   left=$total

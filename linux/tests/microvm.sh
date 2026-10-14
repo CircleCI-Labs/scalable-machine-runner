@@ -5,15 +5,18 @@
 #   manager  runc is the default runtime; it runs the DNS forwarder (microvm-dns)
 #   worker   Kata (Cloud Hypervisor, runtime-rs) is the default runtime, labelled machine-runner-swarm.microvm=true
 # The daemon.json of the worker is the JSON block of docs/microvm.md, so the docs are tested too. The REAL stack files runners.yaml
-# and microvm.yaml are deployed, and the runner and the token proxy reach the nodes through the distributors, from a test mirror. Checks:
-#   1. placement      the microVM classes stay pending until a node has the label; each node runs its own distributor, the forwarder runs on runc
+# and microvm.yaml are deployed, the runner and the token proxy reach the runc node through its distributor, and each microVM downloads its
+# own runner, both from a test mirror. Checks:
+#   1. placement      the microVM classes stay pending until a node has the label; the Kata node runs no distributor and has no runner volume, the
+#                     forwarder runs on runc
 #   2. in the VM      the guest kernel is not the host's, /proc/cmdline names kata-containers, no class token is in the VM, public and service DNS
 #                     work through the forwarder (a plain Kata service shows the problem it fixes), /etc/resolv.conf is read-only, the VM's size,
 #                     and a rolling update replaces a VM (microvm-netkeep)
 #   3. the proxy      the real runner claims through the real token proxy from a VM, and the API sees the class token that the proxy added
 #   4. dockerd in VM  a job starts dockerd in its VM (remounts, tmpfs data-root), builds an image and runs a container, no host socket. Then the
-#                     runner volume: a guest with SYS_ADMIN writes the volume of the node (the control), a changed binary and record run, and a
-#                     changed binary alone is refused at the next start
+#                     runner: it was downloaded into the VM, there is no shared volume to write, a guest with SYS_ADMIN that rewrites its own copy
+#                     (binary and record) changes nothing for the next VM, which downloads a fresh one; a download that does not match the SHA-256
+#                     is refused (exit 80); a floating version resolves in the VM
 #   5. the guard      a node labelled microvm that runs runc makes both classes exit 80
 #   6. a control      without microvm-netkeep a rolling update hangs (informational)
 #
@@ -126,10 +129,8 @@ idocker "$MGR" swarm update --task-history-limit 20 > /dev/null
 COREDNS_IMAGE=$(sed -n 's/^    image: \(coredns\/coredns:[^ ]*\).*/\1/p' "$stack_dir/microvm.yaml")
 DIST_IMAGE=$(sed -n 's/^    image: \(alpine:3@sha256:[0-9a-f]*\).*/\1/p' "$stack_dir/runners.yaml")
 PROXY_IMAGE=$(sed -n 's/^    image: \(alpine:3\.[0-9]*\).*$/\1/p' "$stack_dir/runners.yaml")
-for n in "$MGR" "$KN"; do
-  dind_load "$n" "$CIMG_IMAGE"
-  dind_load "$n" "$DIST_IMAGE"
-done
+for n in "$MGR" "$KN"; do dind_load "$n" "$CIMG_IMAGE"; done
+dind_load "$MGR" "$DIST_IMAGE"   # the distributor runs on the runc node only: a microVM downloads its own runner
 dind_load "$MGR" "$COREDNS_IMAGE"
 dind_load "$MGR" "$PROXY_IMAGE"
 host_kernel=$(docker exec "$KN" uname -r)
@@ -155,8 +156,8 @@ api_ip=$(docker exec "$MGR" hostname -i | awk '{ print $1 }')
 MICROVM_SERVICES=(linux-microvm linux-microvm-docker)
 TOKEN_CLASS=CLASS-TOKEN-MICROVM-5e9c1d7a3b2f4086   # made up; only the proxy's secret holds it
 PLACEHOLDER=machine-runner-swarm-placeholder
+ZEROS=0000000000000000000000000000000000000000000000000000000000000000
 BUILD_BASE=busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e   # the base image of the build in the docker class
-vol_dir=/var/lib/docker/volumes/${STACK}_runner-bin/_data   # the runner volume on a node
 
 # ---------------------------------------------------------------------------------------------
 # Helpers
@@ -177,25 +178,22 @@ phase_begin() {
   printf '.:53 {\n  errors\n  forward . 127.0.0.11\n  cache 30\n}\n' | idocker "$MGR" config create microvm-corefile - > /dev/null
 }
 # phase_deploy VERSION PROXY "SPEC"...: SPEC = "service replicas [ENV=value ...]" for the two classes (an unlisted one gets 0 replicas). VERSION is the
-# runner that both distributors install (from the mirror). PROXY is the replicas of token-proxy: 1 points it at the fake API. The forwarder keeps its
+# runner that the distributor of the runc node installs and that each microVM downloads (from the mirror). PROXY is the replicas of token-proxy: 1 points it at the fake API. The forwarder keeps its
 # replicas from the stack file: a second -c file that mentions microvm-dns merges its ports by published port, and drops the UDP one.
 phase_deploy() {
-  local version=$1 proxy=$2 s spec specs=()
+  local version=$1 proxy=$2 s spec specs=() given=()
   shift 2
   for s in "${MICROVM_SERVICES[@]}"; do
     for spec in "$@"; do [[ ${spec%% *} == "$s" ]] && continue 2; done
     specs+=("$s 0")
   done
+  for spec in "$@"; do   # a microVM class downloads its own runner: it needs the mirror and the version (an explicit setting of the spec wins)
+    case " $spec " in *" MACHINE_RUNNER_SWARM_RUNNER_VERSION="*) given+=("$spec MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL") ;; *) given+=("$spec MACHINE_RUNNER_SWARM_RUNNER_VERSION=$version MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL") ;; esac
+  done
   DIST_VERSION=$version
-  make_override "$work/ov.yaml" "$@" "${specs[@]}" "token-proxy $proxy"
+  make_override "$work/ov.yaml" "${given[@]}" "${specs[@]}" "token-proxy $proxy"
   {
     echo "services:"
-    echo "  microvm-runner-distributor:"   # the same settings as runner-distributor (make_override)
-    echo "    environment:"
-    echo "      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: \"$MIRROR_URL\""
-    echo "      MACHINE_RUNNER_SWARM_RUNNER_VERSION: \"$version\""
-    echo "      MACHINE_RUNNER_SWARM_PROXY_VERSION: \"$PROXY_VERSION\""
-    echo "      MACHINE_RUNNER_SWARM_PROXY_BASE_URL: \"$MIRROR_URL/proxy\""
     echo "  token-proxy:"
     echo "    command: [\"-upstream\", \"http://$api_ip:8099\", \"-state-dir\", \"/var/tmp\"]"
   } > "$work/mv-ov.yaml"
@@ -234,10 +232,11 @@ echo "RESULT test=microvm step=placement label=absent linux-microvm=Pending micr
 label "$KN"
 idocker "$MGR" node update --availability active "$KN" > /dev/null
 wait_for "$TIMEOUT" has_cid "$KN" linux-microvm || fail "linux-microvm did not start on the labelled Kata node"
-wait_for "$TIMEOUT" has_cid "$KN" microvm-runner-distributor || fail "microvm-runner-distributor did not start on the Kata node"
 [[ -z $(cid_on "$KN" microvm-dns) && -n $(cid_on "$MGR" microvm-dns) ]] || fail "microvm-dns must run on the runc node only"
-[[ -z $(cid_on "$KN" runner-distributor) && -z $(cid_on "$MGR" microvm-runner-distributor) ]] || fail "each node must run its own distributor only"
-echo "RESULT test=microvm step=placement label=present linux-microvm=Running node=kata microvm-dns_on=manager distributor=microvm-runner-distributor"
+[[ -z $(cid_on "$KN" runner-distributor) ]] || fail "a microVM node must run no runner-distributor: its classes download their own runner"
+[[ -z $(idocker "$KN" volume ls -q | grep runner-bin || true) ]] || fail "the Kata node has a runner-bin volume: no microVM class may mount a shared runner volume"
+[[ -z $(idocker "$MGR" service ls -q --filter name=microvm-runner-distributor) ]] || fail "the service microvm-runner-distributor still exists"
+echo "RESULT test=microvm step=placement label=present linux-microvm=Running node=kata microvm-dns_on=manager distributor_on_kata_node=none runner_volume_on_kata_node=none"
 
 # ---------------------------------------------------------------------------------------------
 # 2. in the VM (the fake runner keeps the job container up)
@@ -251,6 +250,14 @@ echo "RESULT test=microvm step=kernel host=$host_kernel guest=$guest_kernel"
 [[ $guest_kernel != "$host_kernel" ]] || fail "the container sees the host kernel ($host_kernel): not a VM"
 [[ $cmdline == *kata-containers* ]] || fail "/proc/cmdline of the guest does not name kata-containers: $cmdline"
 service_logs "$MGR" linux-microvm | grep -aq 'circleci-runner-entrypoint: runner=2000 job=circleci sudo=true' || fail "the entrypoint did not start the runner in the VM"
+# the runner of this VM was downloaded into it (from the mirror here, from CircleCI's bucket in production), verified, and recorded; nothing is mounted
+vm_log=$(service_logs "$MGR" linux-microvm)
+[[ $vm_log == *"circleci-runner-entrypoint: downloading the runner into this microVM"* && $vm_log == *"downloading circleci-runner $FAKE_VERSION linux/"* && $vm_log == *"installed circleci-runner $FAKE_VERSION"* ]] ||
+  fail "the entrypoint did not download the runner into the VM: $(tail -n 5 <<< "$vm_log")"
+mounted=$(job "$KN" "$c" 'grep -c " /opt/machine-runner-swarm " /proc/mounts || true')
+vm_record=$(job "$KN" "$c" 'cd /opt/machine-runner-swarm/current && sha256sum -c SHA256 && cat VERSION && readlink /opt/machine-runner-swarm/current')
+echo "RESULT test=microvm step=runner_in_vm downloaded_into_the_vm=yes mounts_at_runner_path=$mounted record_checks=\"$(tr '\n' ' ' <<< "$vm_record")\""
+[[ $mounted == 0 && $vm_record == *"bin/circleci-runner: OK"* && $vm_record == *"versions/$FAKE_VERSION"* ]] || fail "the runner in the VM is mounted, or does not match its record: $vm_record"
 [[ $log_line == *"user=circleci"* && $log_line == *"sudo=yes"* ]] || fail "the job in the VM did not run as circleci with sudo: $log_line"
 secrets_in_vm=$(job "$KN" "$c" 'sudo sh -c "cat /run/secrets/* 2>/dev/null; cat /proc/[0-9]*/environ 2>/dev/null" | tr "\0" "\n" | grep -c "CLASS-TOKEN" || true')
 echo "RESULT test=microvm step=no_class_token class_token_strings_in_vm_secrets_and_environ=$secrets_in_vm"
@@ -322,7 +329,7 @@ node_of=$(idocker "$MGR" service ps --format '{{.Node}}' "${STACK}_linux-microvm
 [[ $node_of == "$KN" ]] || fail "the task ran on $node_of, not on the Kata node"
 
 # ---------------------------------------------------------------------------------------------
-# 4. linux-microvm-docker: dockerd in the VM, then the runner volume
+# 4. linux-microvm-docker: dockerd in the VM, then the runner of each VM
 # ---------------------------------------------------------------------------------------------
 phase_begin
 label "$KN"
@@ -363,30 +370,43 @@ echo "RESULT test=microvm step=dockerd_in_vm $(tr '\n' ' ' <<< "$out")"
 [[ $out == *"driver=overlay2 data_root_fs=tmpfs"* ]] || fail "dockerd in the VM does not use overlay2 on a tmpfs data-root: $out"
 [[ $out == *"build=ok run=built in $guest_kernel"* ]] || fail "the image build or run in the VM failed, or ran on another kernel: $out"
 
-# The runner volume: root with SYS_ADMIN in the VM remounts the share read-write and writes the VOLUME OF THE NODE. A node cannot make the volume
-# read-only (the distributor writes it), so this is the control that the docs state plainly.
-job "$KN" "$dc" 'sudo mount -o remount,rw /opt/machine-runner-swarm && sudo touch /opt/machine-runner-swarm/WRITTEN-FROM-VM' > /dev/null 2>&1 || true
-if docker exec "$KN" test -e "$vol_dir/WRITTEN-FROM-VM"; then written=yes; else written=no; fi
-echo "RESULT test=microvm step=runner_volume_control guest_with_SYS_ADMIN_wrote_the_node_volume=$written"
-[[ $written == yes ]] || fail "the VM could not write the runner volume of the node: the documented risk is gone (or the check is wrong), update docs/microvm.md"
-docker exec "$KN" rm -f "$vol_dir/WRITTEN-FROM-VM"
-# The binary AND its record changed (the job rewrites both): the next container starts it. The change prints a line, so the log shows that it ran.
-job "$KN" "$dc" 'cd /opt/machine-runner-swarm && sudo mount -o remount,rw . && cd versions/'"$FAKE_VERSION"' && sudo sed -i "2i echo CHANGED-BINARY-RAN" bin/circleci-runner &&
-  sha256sum bin/circleci-runner | sudo tee SHA256 > /dev/null'
+# The runner is the container's own copy: there is no shared volume to remount, so root with SYS_ADMIN in the VM can rewrite its own binary and its record and
+# nothing else. The change dies with the VM: the next container downloads a fresh runner.
+rec_before=$(job "$KN" "$dc" 'cat /opt/machine-runner-swarm/current/SHA256')
+old_dc=$dc
+job "$KN" "$dc" 'cd /opt/machine-runner-swarm/current && sudo sed -i "2i echo CHANGED-BINARY-RAN" bin/circleci-runner && sha256sum bin/circleci-runner | sudo tee SHA256 > /dev/null'
+[[ $(job "$KN" "$dc" 'cat /opt/machine-runner-swarm/current/SHA256') != "$rec_before" ]] || fail "the guest could not rewrite its own copy of the runner: the check is wrong"
+[[ -z $(idocker "$KN" volume ls -q | grep runner-bin || true) ]] || fail "a runner-bin volume exists on the Kata node: a guest could write it"
 idocker "$MGR" service update -d --force "${STACK}_linux-microvm-docker" > /dev/null
-wait_for "$TIMEOUT" bash -c "docker exec $MGR docker service logs --raw ${STACK}_linux-microvm-docker 2>&1 | grep -aq CHANGED-BINARY-RAN" ||
-  fail "with the binary and its record both changed, the next container did not run the changed binary: $(service_logs "$MGR" linux-microvm-docker | tail -n 3)"
-echo "RESULT test=microvm step=runner_volume_binary_and_record_changed next_container=runs_it (the check is not a boundary against SYS_ADMIN)"
-# The binary alone changed: the entrypoint of the next container refuses it (exit 80), because it checks the binary against its record.
-wait_for "$TIMEOUT" job_up linux-microvm-docker || fail "the container with the changed binary and record did not start a job"
+wait_for "$TIMEOUT" bash -c "c=\$(docker exec $KN docker ps -q --filter label=com.docker.swarm.service.name=${STACK}_linux-microvm-docker | head -n 1); [ -n \"\$c\" ] && [ \"\$c\" != $old_dc ] && docker exec $KN docker exec \$c test -L /opt/machine-runner-swarm/current" ||
+  fail "the replacement VM of linux-microvm-docker did not get a runner"
 dc=$(cid_on "$KN" linux-microvm-docker)
-job "$KN" "$dc" 'cd /opt/machine-runner-swarm/versions/'"$FAKE_VERSION"' && sudo mount -o remount,rw /opt/machine-runner-swarm && sudo sed -i "2i # changed again" bin/circleci-runner'
-idocker "$MGR" service update -d --force "${STACK}_linux-microvm-docker" > /dev/null
-wait_for "$TIMEOUT" bash -c "docker exec $MGR docker service logs --raw ${STACK}_linux-microvm-docker 2>&1 | grep -aq 'does not match its SHA-256 record'" ||
-  fail "a changed runner binary was not refused at the next start: $(service_logs "$MGR" linux-microvm-docker | tail -n 3)"
-bad=$(idocker "$MGR" service ps --no-trunc --format '{{.Error}}' "${STACK}_linux-microvm-docker" | grep -c 'non-zero exit (80)' || true)
-echo "RESULT test=microvm step=runner_volume_binary_changed next_container=refused exit80_tasks=$bad"
-[[ $bad -ge 1 ]] || fail "the container with a changed binary did not exit 80"
+rec_after=$(job "$KN" "$dc" 'cat /opt/machine-runner-swarm/current/SHA256')
+changed=$(job "$KN" "$dc" 'grep -c CHANGED-BINARY-RAN /opt/machine-runner-swarm/current/bin/circleci-runner || true')
+echo "RESULT test=microvm step=runner_per_job changed_runner_in_the_old_vm=yes next_vm_record_is_a_fresh_download=$([[ $rec_after == "$rec_before" ]] && echo yes || echo NO) changed_binary_in_the_next_vm=$changed shared_volume=none"
+[[ $rec_after == "$rec_before" && $changed == 0 ]] || fail "the next VM got the changed runner of the old one (record $rec_after, expected $rec_before; $changed changed lines)"
+service_logs "$MGR" linux-microvm-docker | grep -aq CHANGED-BINARY-RAN && fail "the changed runner of the old VM ran in the next one"
+
+# ---------------------------------------------------------------------------------------------
+# 4b. the download is verified, and a floating version resolves in the VM
+# ---------------------------------------------------------------------------------------------
+phase_begin
+label "$KN"
+phase_deploy "$FAKE_VERSION" 0 "linux-microvm 1 MACHINE_RUNNER_SWARM_RUNNER_SHA256=$ZEROS"
+for ((i = 0; i < TIMEOUT; i++)); do
+  n=$(idocker "$MGR" service ps --no-trunc --format '{{.Error}}' "${STACK}_linux-microvm" | grep -c 'non-zero exit (80)' || true)
+  [[ $n -ge 1 ]] && break
+  sleep 1
+done
+mm_log=$(service_logs "$MGR" linux-microvm)
+echo "RESULT test=microvm step=sha256_mismatch exit80_tasks=$n message=\"$(grep -a 'SHA-256 mismatch' <<< "$mm_log" | head -n 1 | cut -c1-110)\""
+[[ $n -ge 1 && $mm_log == *"SHA-256 mismatch for circleci-runner_linux_"* && $mm_log == *"refusing to install"* ]] || fail "a runner download that does not match the SHA-256 was not refused in the VM: $(tail -n 4 <<< "$mm_log")"
+[[ $mm_log != *"circleci-runner-entrypoint: runner=2000"* ]] || fail "the runner started although its SHA-256 did not match"
+phase_deploy 1 0 "linux-microvm 1 $KEEP"   # 1 is floating: the newest 1.x.y of the manifest
+wait_for "$TIMEOUT" job_up linux-microvm || fail "the floating version 1 did not start a job in the VM: $(service_logs "$MGR" linux-microvm | tail -n 4)"
+fl_log=$(service_logs "$MGR" linux-microvm)
+echo "RESULT test=microvm step=floating_version_in_vm want=1 resolved_to=$FAKE_VERSION"
+[[ $fl_log == *"installed circleci-runner $FAKE_VERSION"* ]] || fail "the floating version 1 did not resolve to $FAKE_VERSION in the VM: $(tail -n 4 <<< "$fl_log")"
 
 # ---------------------------------------------------------------------------------------------
 # 5. the guard: a node that has the label but runs runc
@@ -431,4 +451,4 @@ done
 if [[ -n $second ]]; then outcome="the replacement started: the race is gone, microvm-netkeep may not be needed"; else outcome="the replacement HUNG for 45 s, as without microvm-netkeep"; fi
 echo "RESULT test=microvm step=netkeep_control rolling_update_without_netkeep=\"$outcome\""
 
-pass "the microVM classes run only on labelled nodes, each node has its own distributor; jobs run in a Kata VM (guest kernel $guest_kernel, host $host_kernel) with working public, service and token-proxy DNS; the real runner claims through the real proxy from a VM; the class token never reaches the VM; a SYS_ADMIN guest writes the runner volume, and a changed binary is refused at the next start; dockerd builds inside the VM; a rolling update works; the entrypoint exits 80 on runc"
+pass "the microVM classes run only on labelled nodes, and a microVM node runs no distributor and has no runner volume; jobs run in a Kata VM (guest kernel $guest_kernel, host $host_kernel) with working public, service and token-proxy DNS; each VM downloads and verifies its own runner (a wrong SHA-256 exits 80, a floating version resolves), so a SYS_ADMIN guest that rewrites its runner changes nothing for the next job; the real runner claims through the real proxy from a VM; the class token never reaches the VM; dockerd builds inside the VM; a rolling update works; the entrypoint exits 80 on runc"

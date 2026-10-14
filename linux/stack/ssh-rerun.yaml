@@ -96,7 +96,7 @@ secrets:
   linux-default-ssh-token: {external: true}
 
 configs:   # as in runners.yaml (ci/config-names.sh keeps the name in step with the file), so that this file also loads alone
-  entrypoint: {name: machine-runner-swarm-entrypoint-0770da4384e6, file: circleci-runner-entrypoint}
+  entrypoint: {name: machine-runner-swarm-entrypoint-bb6e7e5fecac, file: circleci-runner-entrypoint}
 
 volumes:
   runner-bin: {}   # the volume that runner-distributor fills (runners.yaml)

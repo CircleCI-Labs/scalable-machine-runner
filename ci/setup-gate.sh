@@ -24,6 +24,9 @@
 #   e2e-linux    --e2e true, an e2e branch, and E2E_RUNNER_TOKEN_LINUX non-empty
 #   e2e-windows  the same with E2E_RUNNER_TOKEN_WINDOWS
 #   release      branch main and both e2e flags
+#   publish      branch main, and not docs-only: the jobs that push the token proxy image to Docker Hub (edge and sha-<12>) run, with the
+#                context scalable-machine-runner-dockerhub. No other branch, a pull request included, can reach it. It does not need the
+#                e2e tokens (the image of main is published whatever the e2e says), and the release requires the publication
 #   docs-only    --changed lists at least one path and every path is documentation (docs/, site/, *.md, but not
 #                docs/microvm.md, which linux/tests/microvm.sh reads), --full is false, and on main no commit of the push
 #                would make a release (cliff.toml: a `fix(docs):` commit releases, a `docs:` commit does not). It
@@ -74,8 +77,9 @@ if [ "${scan}" = true ]; then
     echo "e2e-windows: false (a scan has no e2e context)"
     echo "release:     false"
     echo "docs-only:   false"
+    echo "publish:     false"
   } >&2
-  jq -n -c '{"full-suite": false, "e2e-linux": false, "e2e-windows": false, "release": false, "docs-only": false, "security-scan": true}'
+  jq -n -c '{"full-suite": false, "e2e-linux": false, "e2e-windows": false, "release": false, "publish": false, "docs-only": false, "security-scan": true}'
   exit 0
 fi
 
@@ -140,13 +144,20 @@ elif [ -n "${changed_file}" ] && [ -f "${changed_file}" ]; then
     docs_reason="a commit of this push would make a release (cliff.toml), so main runs the whole pipeline"
   fi
 fi
+publish=false
 if [ "${docs_only}" = true ]; then
   echo "docs-only:   true (${docs_reason}): the flags above are turned off; lint and the docs site build still run" >&2
   full=false linux=false windows=false release=false
 else
   echo "docs-only:   false (${docs_reason})" >&2
+  [ "${branch}" != main ] || publish=true
+fi
+if [ "${publish}" = true ]; then
+  echo "publish:     true (main: the token proxy image is pushed when the context has the Docker Hub credentials)" >&2
+else
+  echo "publish:     false (only main publishes, and not for a change of documentation only)" >&2
 fi
 
 jq -n -c --argjson full "${full}" --argjson linux "${linux}" --argjson windows "${windows}" --argjson release "${release}" \
-  --argjson docs "${docs_only}" \
-  '{"full-suite": $full, "e2e-linux": $linux, "e2e-windows": $windows, "release": $release, "docs-only": $docs, "security-scan": false}'
+  --argjson publish "${publish}" --argjson docs "${docs_only}" \
+  '{"full-suite": $full, "e2e-linux": $linux, "e2e-windows": $windows, "release": $release, "publish": $publish, "docs-only": $docs, "security-scan": false}'

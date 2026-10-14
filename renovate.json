@@ -18,8 +18,8 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Every image reference that carries a digest, in any file: name[:tag]@sha256:<digest> (.circleci/*.yml, the stack files, ci/ and the tests, the docs)",
-      "managerFilePatterns": ["/\\.(ya?ml|sh|ps1|md|html)$/"],
+      "description": "Every image reference that carries a digest, in any file: name[:tag]@sha256:<digest> (.circleci/*.yml, the stack files, ci/ and the tests, the docs, and the Dockerfiles, among them proxy/Dockerfile with the Go builder and the distroless base of the token proxy image). The stack default ccilabs/machine-runner-swarm-proxy:edge is a tag with no digest, so Renovate leaves it; a release bundle pins its own digest (ci/release.sh)",
+      "managerFilePatterns": ["/\\.(ya?ml|sh|ps1|md|html)$/", "/(^|/)Dockerfile[^/]*$/"],
       "matchStrings": [
         "(?<depName>[a-z0-9][a-z0-9._/-]*[a-z0-9])(?::(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*))?@(?<currentDigest>sha256:[a-f0-9]{64})"
       ],
@@ -27,7 +27,7 @@
     },
     {
       "customType": "regex",
-      "description": "A version after a '# renovate: datasource=... depName=... [extractVersion=...]' comment: the tools of .circleci/continue.yml (Hugo, lychee, the CircleCI CLI) and of ci/*.sh (git-cliff, cosign, gh, Go, govulncheck)",
+      "description": "A version after a '# renovate: datasource=... depName=... [extractVersion=...]' comment: the tools of .circleci/continue.yml (Hugo, lychee, the CircleCI CLI) and of ci/*.sh (git-cliff, cosign, crane, gh, Go, govulncheck)",
       "managerFilePatterns": ["/^\\.circleci/.+\\.ya?ml$/", "/^ci/[^/]+\\.sh$/"],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n\\s*(?:local |export )?[A-Za-z0-9_]+=(?<currentValue>[^\\s\"']+)"
@@ -103,7 +103,7 @@
       "semanticCommitType": "fix"
     },
     {
-      "description": "One Go version for the proxy build (golang image of ci/build-proxy.sh and proxy-test, the Go tarball of the release job) and the docs site (cimg/go). The proxy binaries are shipped, so a fix.",
+      "description": "One Go version for the proxy build (golang image of proxy/Dockerfile, ci/build-proxy.sh and proxy-test, the Go tarball of the release job) and the docs site (cimg/go). The proxy image is shipped, so a fix.",
       "matchDepNames": ["golang", "cimg/go", "go"],
       "groupName": "Go toolchain",
       "semanticCommitType": "fix"
@@ -156,6 +156,7 @@
         "CircleCI-Public/circleci-cli",
         "orhun/git-cliff",
         "sigstore/cosign",
+        "google/go-containerregistry",
         "cli/cli",
         "go",
         "kata-containers/kata-containers",

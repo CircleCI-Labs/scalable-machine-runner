@@ -1,7 +1,7 @@
 version: 2.1
 
 # Continuation config for CircleCI-Labs/scalable-machine-runner (see docs/ci.md).
-# .circleci/config.yml (the setup phase) sets the six parameters below.
+# .circleci/config.yml (the setup phase) sets the parameters below.
 #
 # One workflow, `ci`. Expression filters on the parameters switch jobs in and out:
 #   lint and docs   the lint jobs and the docs site build: every pipeline, docs-only changes included
@@ -10,6 +10,7 @@ version: 2.1
 #   full-suite      the Windows Server 2025 Swarm tests
 #   e2e-linux       job A hosts a Swarm service, probes B1, B2, B3 run on it
 #   e2e-windows     the same on Windows (2022, then 2025)
+#   publish         main only, not for a change of documentation: the jobs that push the token proxy image
 #   release         the release job, which requires every job above
 #
 # A second workflow, `docs-site`, publishes the docs site to GitHub Pages on main only. It is not a job
@@ -18,7 +19,9 @@ version: 2.1
 # With the parameter security-scan (the weekly schedule), neither of them runs: the workflow `security-scan` does
 # (docs/ci.md, "Security scan").
 #
-# Nothing here publishes an image. Scan reports and logs are stored as job artifacts.
+# The jobs of the token proxy image (docs/releasing.md, "The token proxy image") build it for every platform and test it in every pipeline,
+# and on main they push it to Docker Hub (edge and sha-<12>) with the context scalable-machine-runner-dockerhub; the release job gives the
+# release tags to the image of its commit. No other job publishes an image. Scan reports and logs are stored as job artifacts.
 
 parameters:
   full-suite:
@@ -37,6 +40,13 @@ parameters:
       main only, and only when both e2e tokens exist (the setup phase decides). It switches the
       release job on, and full-suite, e2e-linux and e2e-windows with it, so that every job the
       release requires really runs.
+  publish:
+    type: boolean
+    default: false
+    description: >
+      main only, and not for a change of documentation only (the setup phase decides). The jobs that push the token proxy image to
+      Docker Hub run instead of the jobs that only build and test it, and they have the context scalable-machine-runner-dockerhub. Without
+      DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the context they build, test, say that nothing was pushed, and pass.
   docs-only:
     type: boolean
     default: false
@@ -210,12 +220,12 @@ jobs:
     steps:
       - checkout
       - run:
-          name: hadolint (Linux and Windows Dockerfiles, .hadolint.yaml)
+          name: hadolint (Linux, Windows and token proxy Dockerfiles, .hadolint.yaml)
           command: |
-            find linux windows -type f \( -name Dockerfile -o -name 'Dockerfile.*' -o -name '*.Dockerfile' \) 2>/dev/null \
+            find linux windows proxy -type f \( -name Dockerfile -o -name 'Dockerfile.*' -o -name '*.Dockerfile' \) 2>/dev/null \
               | sort > /tmp/dockerfiles
             echo "Checking:"; cat /tmp/dockerfiles
-            [ -s /tmp/dockerfiles ] || { echo "no Dockerfiles found under linux/ or windows/"; exit 1; }
+            [ -s /tmp/dockerfiles ] || { echo "no Dockerfiles found under linux/, windows/ or proxy/"; exit 1; }
             xargs hadolint --config .hadolint.yaml < /tmp/dockerfiles
 
   lint-yaml:
@@ -360,10 +370,10 @@ jobs:
 
   proxy-test:
     description: >
-      The token proxy (proxy/): gofmt, go vet, the unit tests with the race detector, and the static builds that the
-      release attaches, one for every platform of CircleCI's runner manifest (linux amd64, arm64, ppc64le and s390x, windows
-      amd64 and arm64: ci/build-proxy.sh). The proxy in a Swarm is tested by linux-swarm (linux/tests/proxy.sh), and the builds
-      of the other architectures by linux-mixed-arch.
+      The token proxy (proxy/): gofmt, go vet, the unit tests with the race detector, and the static builds for every platform of
+      CircleCI's runner manifest (linux amd64, arm64, ppc64le and s390x, windows amd64 and arm64: ci/build-proxy.sh). The windows/amd64
+      build goes on in the workspace: the Windows jobs put it into the Windows image. The Linux image is built by proxy-image-linux, and
+      the proxy in a Swarm is tested by linux-swarm (linux/tests/proxy.sh).
     docker:
       - image: golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
     resource_class: small
@@ -377,13 +387,13 @@ jobs:
             go vet ./...
             go test -race -count=1 ./...
       - run:
-          name: Static builds for every platform of the release (ci/build-proxy.sh)
+          name: Static builds for every platform (ci/build-proxy.sh)
           command: |
-            # 0.0.0-e2e is the version that the Windows e2e host serves the windows/amd64 build as (ci/E2E-Host.ps1):
-            # the distributor checks that the binary reports the version of its release
-            ci/build-proxy.sh /tmp/proxy-bin 0.0.0-e2e
-            if [ "$(ls /tmp/proxy-bin | sort)" != "$(ci/build-proxy.sh --assets | sort)" ]; then
-              echo "the builds are not the assets that the release uploads"; exit 1
+            # the version is the one of the image: sha-<12 characters of the commit>
+            version="sha-$(printf '%s' "${CIRCLE_SHA1}" | cut -c1-12)"
+            ci/build-proxy.sh /tmp/proxy-bin "${version}"
+            if [ "$(ls /tmp/proxy-bin | sort)" != "$(ci/build-proxy.sh --list | sort)" ]; then
+              echo "the builds are not the platforms that the script lists"; exit 1
             fi
             for f in /tmp/proxy-bin/*; do
               platform="${f##*/machine-runner-swarm-proxy_}"   # <os>_<arch>
@@ -392,14 +402,148 @@ jobs:
               echo "$info" | grep -q "GOOS=${platform%_*}" || { echo "$f is not built for the OS of $platform"; exit 1; }
               echo "$info" | grep -q "GOARCH=${platform#*_}" || { echo "$f is not built for the architecture of $platform"; exit 1; }
             done
-            /tmp/proxy-bin/machine-runner-swarm-proxy_linux_amd64 -version
+            [ "$(/tmp/proxy-bin/machine-runner-swarm-proxy_linux_amd64 -version)" = "machine-runner-swarm-proxy ${version}" ]
       - store_artifacts:
           path: /tmp/proxy-bin
           destination: proxy
-      # The Windows e2e jobs install the windows/amd64 build through the distributor, from a local mirror (no release exists yet).
+      # The Windows jobs put the windows/amd64 build into the Windows image (ci/Build-ProxyImage.ps1).
       - persist_to_workspace:
           root: /tmp/proxy-bin
           paths: [machine-runner-swarm-proxy_windows_amd64]
+
+  # ---------------------------------------------------------------------------
+  # The token proxy image (docs/releasing.md, "The token proxy image"): ccilabs/machine-runner-swarm-proxy on Docker Hub. Every platform
+  # is built and tested in every pipeline, and no pipeline but main pushes. On main (the parameter publish) the publish variant of each
+  # job runs instead of the plain one: the same steps, then the push, with the context scalable-machine-runner-dockerhub (main only).
+  # proxy-image-publish then joins the three pushes into one manifest list, tags it edge and sha-<12>, and signs every digest.
+  # ---------------------------------------------------------------------------
+  proxy-image-linux:
+    description: >
+      The Linux image (proxy/Dockerfile: a static Go binary in a distroless static base, as 65534) for linux/amd64, arm64, ppc64le and
+      s390x, built with buildx (QEMU registers the handlers; the Go build itself runs natively and cross-compiles). Each image is run, also
+      under QEMU: it reports its version, runs non-root with a read-only root and no capabilities, takes a token file and a state volume, and
+      becomes healthy (ci/proxy-image.sh test). Then ci/tests/proxy-image.sh publishes to a registry of its own (registry:2): the index of
+      the four platforms, the manifest list with the Windows images, edge, and the release tags, with the failures that must stop them.
+      With the parameter publish, the same job pushes the four platforms as ONE index, sha-<12>-linux, and keeps the digest. The push is
+      skipped, with a message, when the context has no credentials.
+    parameters:
+      publish:
+        type: boolean
+        default: false
+    executor: linux-vm
+    steps:
+      - checkout
+      - run:
+          name: crane and cosign (pinned, SHA-256 verified)
+          command: ci/proxy-image.sh install-tools
+      - run:
+          name: QEMU, the builder, then build and test every platform (ci/proxy-image.sh test)
+          no_output_timeout: 25m
+          command: ci/proxy-image.sh test
+      - run:
+          name: The publication against a registry of its own (ci/tests/proxy-image.sh)
+          no_output_timeout: 20m
+          command: ci/tests/proxy-image.sh
+      - when:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: Push the four platforms as one index (ci/proxy-image.sh push; nothing without DOCKERHUB_USERNAME and DOCKERHUB_TOKEN)
+                no_output_timeout: 25m
+                command: ci/proxy-image.sh push
+
+  proxy-image-windows:
+    description: >
+      The Windows image (proxy/Dockerfile.windows: the windows/amd64 build of proxy-test on Nano Server, pinned by digest) for one Windows
+      tag, built on the machine image of that Server version (ci/Build-ProxyImage.ps1). The image is run: it reports its version, and with a
+      token file and a state directory it becomes healthy and writes its state. With the parameter publish, the same job pushes it as
+      sha-<12>-windows-<tag> (skipped, with a message, when the context has no credentials). Windows on Arm has no machine executor:
+      docs/install-windows.md says what to do on such a host.
+    parameters:
+      os:
+        type: executor
+      tag:
+        type: enum
+        enum: [ltsc2022, ltsc2025]
+      publish:
+        type: boolean
+        default: false
+    executor: << parameters.os >>
+    steps:
+      - checkout
+      - attach_workspace:
+          at: proxy-bin   # the windows/amd64 build that proxy-test made
+      - run:
+          name: Docker engine (Windows containers)
+          command: |
+            docker version
+            $osType = docker info --format '{{.OSType}}'
+            if ($osType -ne 'windows') { Write-Host "Docker OSType is '$osType', expected windows"; exit 1 }
+      - unless:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: Build the image for << parameters.tag >> and test it (ci\Build-ProxyImage.ps1 -Test)
+                no_output_timeout: 30m
+                command: |
+                  $global:LASTEXITCODE = 1
+                  $short = $env:CIRCLE_SHA1.Substring(0, 12)
+                  & .\ci\Build-ProxyImage.ps1 -Tag << parameters.tag >> -Name machine-runner-swarm-proxy:ci `
+                    -Version "sha-$short" -Revision $env:CIRCLE_SHA1 -Test
+                  exit $LASTEXITCODE
+      - when:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: Build for << parameters.tag >>, test, push sha-<12>-windows-<< parameters.tag >> (nothing without the credentials)
+                no_output_timeout: 40m
+                command: |
+                  $global:LASTEXITCODE = 1
+                  $short = $env:CIRCLE_SHA1.Substring(0, 12)
+                  $name = "ccilabs/machine-runner-swarm-proxy:sha-$short-windows-<< parameters.tag >>"
+                  & .\ci\Build-ProxyImage.ps1 -Tag << parameters.tag >> -Name $name `
+                    -Version "sha-$short" -Revision $env:CIRCLE_SHA1 -Test -Push
+                  exit $LASTEXITCODE
+
+  proxy-image-publish:
+    description: >
+      main only (the parameter publish; the context scalable-machine-runner-dockerhub). Joins the Linux index and the two Windows images that
+      the jobs before it pushed into ONE manifest list (crane index append), tags it sha-<12> and edge (edge only when no newer commit is on
+      main), signs every digest keyless with the CircleCI OIDC token, as ci/release.sh signs, and checks the signatures and the platforms.
+      The release requires it, and finds the digest of its commit by the tag sha-<12>. A publication is recorded as a deploy of the component
+      token-proxy-image, environment docker-hub, version sha-<12> (ci/deploy-marker.sh, docs/ci.md "Deploys"). Without the credentials the
+      job says that nothing was pushed, records no deploy, and passes.
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+    resource_class: small
+    environment:
+      PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+    steps:
+      - checkout
+      - run:
+          name: crane and cosign (pinned, SHA-256 verified)
+          command: ci/proxy-image.sh install-tools
+      - run:
+          name: Plan the deploy (a deploy marker; only when the image will be published)
+          command: |
+            if [ -n "${DOCKERHUB_TOKEN:-}" ] && [ -n "${DOCKERHUB_USERNAME:-}" ]; then
+              ci/deploy-marker.sh plan proxy-image token-proxy-image docker-hub "sha-$(printf '%s' "${CIRCLE_SHA1}" | cut -c1-12)"
+            else
+              echo "no DOCKERHUB_USERNAME and DOCKERHUB_TOKEN: nothing is published, so no deploy is recorded"
+            fi
+      - run:
+          name: Deploy is running
+          command: ci/deploy-marker.sh update proxy-image RUNNING
+      - run:
+          name: One manifest list, sha-<12> and edge, signed (ci/proxy-image.sh assemble; nothing without the credentials)
+          command: ci/proxy-image.sh assemble
+      - run:
+          name: Deploy succeeded
+          command: ci/deploy-marker.sh update proxy-image SUCCESS
+      - run:
+          name: Deploy failed
+          when: on_fail
+          command: ci/deploy-marker.sh update proxy-image FAILED "the job proxy-image-publish failed, see ${CIRCLE_BUILD_URL}"
 
   linux-swarm:
     description: >
@@ -810,7 +954,7 @@ jobs:
       - attach_workspace:
           at: proxy-bin   # the token proxy that proxy-test built for windows/amd64
       - run:
-          name: docker swarm init (with an advertise address), then the distributor installs the runner, Git and the token proxy
+          name: Build the token proxy image, docker swarm init (with an advertise address), then the distributor installs the runner and Git
           no_output_timeout: 30m
           command: |
             $global:LASTEXITCODE = 1
@@ -990,11 +1134,14 @@ jobs:
             # A change of documentation only runs the lint jobs and the docs site build. `process` leaves the expression filters
             # in the compiled config, so read them from the source: a job of ci with no filter must be a lint job or the docs
             # site build, and every other filter is `not pipeline.parameters.docs-only` or a parameter that the setup gate
-            # turns off for a docs-only change (full-suite, e2e-linux, e2e-windows, release). A new job without a filter would
-            # otherwise run on every docs pull request.
+            # turns off for a docs-only change (full-suite, e2e-linux, e2e-windows, release, publish), alone or with
+            # `and not pipeline.parameters.publish` (the jobs that the publish variants replace on main). A new job without a
+            # filter would otherwise run on every docs pull request.
             yq -o=json '.workflows.ci.jobs' .circleci/continue.yml | jq -r '
               ["not pipeline.parameters.docs-only", "pipeline.parameters.full-suite", "pipeline.parameters.e2e-linux",
-               "pipeline.parameters.e2e-windows", "pipeline.parameters.release"] as $gated
+               "pipeline.parameters.e2e-windows", "pipeline.parameters.release", "pipeline.parameters.publish",
+               "not pipeline.parameters.docs-only and not pipeline.parameters.publish",
+               "pipeline.parameters.full-suite and not pipeline.parameters.publish"] as $gated
               | map(if type == "string" then {key: ., value: {}} else to_entries[0] end)
               | map(select(.key | startswith("lint-") or . == "docs-site-build" | not))
               | map(select((.value.filters // "") | IN($gated[]) | not))
@@ -1152,7 +1299,10 @@ jobs:
     description: >
       Version from the Conventional Commits, notes, bundle, SHA256SUMS, keyless cosign signature and the
       GitHub release (ci/release.sh). The context holds GITHUB_TOKEN. Without it the job does everything
-      except publishing. The context also gives the job its OIDC token for the signature.
+      except publishing. The context also gives the job its OIDC token for the signature. The job pins the token proxy
+      image of its commit (the digest of sha-<12>, which proxy-image-publish pushed, with its signature checked) in the stack
+      files of the bundle, and gives that image the release tags (X.Y.Z, X.Y, X, latest) before it creates the GitHub release; the
+      context scalable-machine-runner-dockerhub holds the credentials for the tags. A release publishes nothing without them.
     docker:
       - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
     resource_class: small
@@ -1164,7 +1314,7 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Install git-cliff, cosign and gh (pinned, SHA-256 verified)
+          name: Install git-cliff, cosign, crane, gh and Go (pinned, SHA-256 verified)
           command: ci/release.sh install-tools
       - run:
           name: Release (nothing is published without GITHUB_TOKEN)
@@ -1296,6 +1446,48 @@ workflows:
           filters: not pipeline.parameters.docs-only
       - proxy-test:
           filters: not pipeline.parameters.docs-only
+      # The token proxy image: built and tested everywhere; on main the publish variants run instead and push (docs/ci.md, "The token
+      # proxy image"). The Windows jobs need the windows/amd64 build of proxy-test.
+      - proxy-image-linux:
+          filters: not pipeline.parameters.docs-only and not pipeline.parameters.publish
+      - proxy-image-linux:
+          name: proxy-image-linux-publish
+          publish: true
+          context: [scalable-machine-runner-dockerhub]
+          filters: pipeline.parameters.publish
+      - proxy-image-windows:
+          name: proxy-image-windows-ltsc2022
+          os: windows-2022
+          tag: ltsc2022
+          requires: [proxy-test]
+          filters: not pipeline.parameters.docs-only and not pipeline.parameters.publish
+      - proxy-image-windows:
+          name: proxy-image-windows-ltsc2022-publish
+          os: windows-2022
+          tag: ltsc2022
+          publish: true
+          context: [scalable-machine-runner-dockerhub]
+          requires: [proxy-test]
+          filters: pipeline.parameters.publish
+      - proxy-image-windows:
+          name: proxy-image-windows-ltsc2025
+          os: windows-2025
+          tag: ltsc2025
+          requires: [proxy-test]
+          filters: pipeline.parameters.full-suite and not pipeline.parameters.publish
+      - proxy-image-windows:
+          name: proxy-image-windows-ltsc2025-publish
+          os: windows-2025
+          tag: ltsc2025
+          publish: true
+          context: [scalable-machine-runner-dockerhub]
+          requires: [proxy-test]
+          filters: pipeline.parameters.publish
+      - proxy-image-publish:
+          context: [scalable-machine-runner-dockerhub]
+          serial-group: << pipeline.project.slug >>/proxy-image-publish
+          requires: [proxy-image-linux-publish, proxy-image-windows-ltsc2022-publish, proxy-image-windows-ltsc2025-publish]
+          filters: pipeline.parameters.publish
       - linux-swarm:
           filters: not pipeline.parameters.docs-only
       - linux-image-example:
@@ -1341,7 +1533,7 @@ workflows:
       # race for a version: a newer pipeline's release waiting in the group makes an older
       # pipeline's release job skip, and the newer one releases both.
       - release:
-          context: [scalable-machine-runner-release]
+          context: [scalable-machine-runner-release, scalable-machine-runner-dockerhub]
           serial-group: << pipeline.project.slug >>/release
           filters: pipeline.parameters.release
           requires:
@@ -1357,6 +1549,10 @@ workflows:
             - docs-site-build
             - e2e-simulation
             - proxy-test
+            - proxy-image-linux
+            - proxy-image-windows-ltsc2022
+            - proxy-image-windows-ltsc2025
+            - proxy-image-publish
             - linux-swarm
             - linux-image-example
             - linux-setup

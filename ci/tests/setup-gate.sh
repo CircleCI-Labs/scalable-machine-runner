@@ -17,7 +17,8 @@ trap 'rm -f "$err"' EXIT
 failed=0
 rows=0
 # expect NAME BRANCH E2E FULL LINUX_TOKEN WINDOWS_TOKEN EXPECTED(full e2e-linux e2e-windows release)
-# The four values are completed with "false false" (docs-only, security-scan): these rows give no changed files.
+# The four values are completed with "false false" (docs-only, security-scan): these rows give no changed files. A seventh value, publish,
+# is derived from the rule (main, not docs-only, not a scan) and checked on every row.
 # GATE_ARGS (a global) adds arguments to the call.
 GATE_ARGS=()
 expect() {
@@ -27,7 +28,11 @@ expect() {
   out=$(CIRCLE_BRANCH=$branch E2E_RUNNER_TOKEN_LINUX=$tl E2E_RUNNER_TOKEN_WINDOWS=$tw "$gate" --e2e "$e2e" --full "$full" "${GATE_ARGS[@]}" 2>"$err") || {
     echo "FAIL ${name}: the gate exited non-zero"; cat "$err"; failed=$((failed + 1)); return
   }
-  got=$(jq -r '[.["full-suite"], .["e2e-linux"], .["e2e-windows"], .release, .["docs-only"], .["security-scan"]] | map(tostring) | join(" ")' <<< "$out")
+  got=$(jq -r '[.["full-suite"], .["e2e-linux"], .["e2e-windows"], .release, .["docs-only"], .["security-scan"], .publish] | map(tostring) | join(" ")' <<< "$out")
+  # publish: main, and neither a docs-only change nor a scan (the last two values of want), whatever the tokens and the e2e flags say
+  pub=false
+  if [ "$branch" = main ] && [ "$(awk '{ print $5 $6 }' <<< "$want")" = falsefalse ]; then pub=true; fi
+  want="$want $pub"
   if [ "$got" != "$want" ]; then
     echo "FAIL ${name}: branch='${branch}' e2e=${e2e} full=${full} ${GATE_ARGS[*]:-} -> '${got}', want '${want}'"
     failed=$((failed + 1))

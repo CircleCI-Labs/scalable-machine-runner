@@ -2,8 +2,10 @@
 #
 #   list  repository   (a shell pattern; the tag and the digest are not part of it, they come from the files that pin the image)
 #
-#   infra   an image that a stack runs as infrastructure on a user's cluster, not a job image: the distributor and proxy base
-#           (alpine) and the microVM DNS forwarder (CoreDNS). A CRITICAL finding with a fix FAILS the scan.
+#   infra   an image that a stack runs as infrastructure on a user's cluster, not a job image: the distributor (alpine), the microVM DNS
+#           forwarder (CoreDNS) and the token proxy (ccilabs/machine-runner-swarm-proxy, the tag edge: the latest commit of main, which is
+#           what the stack files name; the scan reports that it cannot pull it until the first publication). A CRITICAL finding with a
+#           fix FAILS the scan.
 #   report  a job image that users choose (cimg/*, maintained by the CircleCI image team) or an image that only CI or a test
 #           uses (linters, Hugo, lychee, Trivy, Docker-in-Docker). HIGH and CRITICAL findings are listed, in a table and a JSON
 #           file for each image, and never fail the scan.
@@ -13,9 +15,12 @@
 # `ci/security-scan.sh lists` (run by lint-circleci) fails in the pull request: add the image here and choose its list.
 infra   alpine
 infra   coredns/coredns
+infra   ccilabs/machine-runner-swarm-proxy
 report  cimg/*
 report  busybox
 report  tonistiigi/binfmt
+report  moby/buildkit
+report  registry
 report  docker
 report  golang
 report  aquasec/trivy

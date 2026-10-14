@@ -120,6 +120,8 @@ Until you do this, the `release` job runs every step except the last one. It pri
 1. In the project settings (**Advanced**), keep **Build forked pull requests** and **Pass secrets to builds from forked pull requests** off. The project uses the GitHub OAuth integration, and these settings are the ones that decide whether the code of a fork runs here.
 1. Protect `main` on GitHub: require a pull request and a review, and do not let anyone push to it. Whoever can change `.circleci/` or `ci/release.sh` on `main` controls what runs with the token.
 
+The documentation site, its optional pull request comment and the weekly security scan have their own contexts and a schedule, and [What a maintainer creates once](ci.md#what-a-maintainer-creates-once) lists them with the release context. Do not reuse this token for them: it can publish releases.
+
 The next release run on `main` publishes. To check the setup before then, read the log of the `release` job for `publishing skipped`.
 
 ## Merge method

@@ -91,7 +91,7 @@ flowchart TD
 | every pipeline | `lint-markdown` | `davidanson/markdownlint-cli2:v0.18.1` | `.markdownlint-cli2.yaml` on every Markdown file; `docs/ci.md` with the same rules (the repository config ignores it) |
 | every pipeline | `lint-docs-links` | `lycheeverse/lychee:0.24.2` | Relative links and `#heading` anchors in every Markdown file, offline (external URLs are not fetched: the job is fast and never flaky) |
 | every pipeline | `lint-docs-mermaid` | `minlag/mermaid-cli:12.0.1`, medium | Renders every `mermaid` block in every Markdown file; a syntax error fails the job |
-| every pipeline | `docs-site-build` | `cimg/go:1.27.2`, small | The documentation site ([below](#docs-site)): `site/stage.sh`, `hugo --minify --panicOnWarning` and `site/check.sh` (lychee offline on the built site). The site is stored as the artifact `docs-site.tgz` |
+| every pipeline | `docs-site-build` | `cimg/go:1.27.2`, small, optional context `scalable-machine-runner-pr-comments` | The documentation site ([below](#docs-site)): `site/stage.sh`, `hugo --minify --panicOnWarning` and `site/check.sh` (lychee offline on the built site). The site is stored as the artifact `docs-site.tgz`, and a [preview](#docs-site-previews) as the artifacts `docs-site-preview` |
 | not docs-only | `e2e-simulation` | `ubuntu-2604:current` | `ci/tests/e2e-sim.sh`: the Linux e2e host and probe scripts against a fake runner in `docker:dind` (below) |
 | not docs-only | `linux-swarm` | `ubuntu-2604:current`, xlarge (two test nodes share the VM) | `linux/tests/run-all.sh`: stack validation (with the config names), the setup helper, ephemerality with a negative control, exit 80, token readability, real runner tasks through the step-down (`task.sh`), placement, persistent mode, draining, network isolation, limits, the runner distributor (a node with no install, a joining node, an upgrade under load, a rollback, `current` following the manifest, the major-version guard, pruning, a tampered binary, a wrong SHA-256, and CircleCI's real manifest) and the entrypoint unit tests. The distributor downloads from a local HTTP mirror of the harness. Everything runs in a single-node and a two-node Swarm inside privileged `docker:dind` containers: the CI VM's own engine never becomes a Swarm node for these |
 | not docs-only | `linux-image-example` | `ubuntu-2604:current` | Builds `linux/images/example`, checks that the tools it adds run, then Trivy (below) |
@@ -105,7 +105,8 @@ flowchart TD
 | `e2e-linux-arm64` | `e2e-linux-arm64-host`, `e2e-linux-arm64-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`, `arm.medium`; probes: the same class | The same e2e with the arm64 runner. It uses the class and the token of `e2e-linux` and runs after it in the same serial group. Every probe records `uname -m`, and the host requires it to equal its own `aarch64` |
 | `e2e-windows` | `e2e-windows-2022-host` and `-b1`, `-b2`, `-b3`; then the same for 2025 | host: `windows-server-2022-gui:current` / `windows-server-2025-gui:current`; probes: `cci-labs/scalable-machine-runner-e2e-windows` | Real runner e2e (below) |
 | `release` | `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release` | The release (below). It requires every job above except the optional `linux-mixed-arch` |
-| `main` only, workflow `docs-site` | `docs-site-publish` | `cimg/go:1.27.2`, small, context `scalable-machine-runner-docs`, `serial-group` | The same build, then `site/publish.sh` pushes the site to the `gh-pages` branch. The release does not wait for it ([below](#docs-site)) |
+| `main` only, workflow `docs-site` | `docs-site-publish` | `cimg/go:1.27.2`, small, context `scalable-machine-runner-docs`, `serial-group` | The same build, then `site/publish.sh` pushes the site to the `gh-pages` branch, and the publication is recorded as a [deploy](#deploys). The release does not wait for it ([below](#docs-site)) |
+| scheduled, workflow `security-scan` | `security-scan-images`, `security-scan-go` | `ubuntu-2604:current`; `golang:1.27.2`, small | The weekly [security scan](#security-scan). Never part of the `ci` workflow |
 
 **Executor images.** These were checked against the CircleCI docs on 2026-10-12:
 
@@ -398,6 +399,8 @@ The documentation is also a site on GitHub Pages: <https://circleci-labs.github.
 | `site/stage.sh` | Copies the Markdown into `site/content/` (generated, not tracked) and leaves the sources unchanged |
 | `site/check.sh` | lychee, offline, on the built site: links and heading anchors |
 | `site/publish.sh` | Pushes the built site to `gh-pages` |
+| `site/preview.sh` | Builds the pull request preview with relative URLs and prints its address |
+| `site/preview-comment.sh` | Posts or updates one comment with that address on the pull request (optional) |
 
 ### Preview locally
 
@@ -432,12 +435,44 @@ What Hextra does with the Markdown of this repository:
 
 | Job | Workflow | When | What |
 |---|---|---|---|
-| `docs-site-build` | `ci` | every pipeline | Stage, `hugo --minify --panicOnWarning` and `site/check.sh`. The release requires it |
-| `docs-site-publish` | `docs-site` | `main` only | The same steps, then `site/publish.sh` |
+| `docs-site-build` | `ci` | every pipeline | Stage, `hugo --minify --panicOnWarning` and `site/check.sh`, then the [preview](#docs-site-previews) and the optional comment. The release requires it |
+| `docs-site-publish` | `docs-site` | `main` only | The same build steps, then `site/publish.sh`, and a [deploy marker](#deploys) |
 
 `lint-circleci` fails when a job of `ci` that no other job requires is not a requirement of the release. A publication in `ci` would therefore make every release wait for it, and a failed publication would block a release. The publication is a job of its own workflow, `docs-site`, on `main`. It rebuilds the site with the same `docs-site` command and does not wait for the other tests, because the pages describe `main`. `serial-group` allows one publication at a time.
 
 `site/publish.sh` replaces everything on `gh-pages` with `site/public`, adds `.nojekyll`, and commits only when something changed. The first run creates the branch without a parent. The commit message ends with `[skip ci]`, so the push starts no pipeline. The commit contains the bytes as built: the pages carry integrity hashes for their scripts, and the script switches off every line-ending conversion of git.
+
+### Docs site previews
+
+`docs-site-build` runs on every pipeline, so every branch and pull request gets a preview of its site. The production build links to its pages under `/scalable-machine-runner/`, so it can work only at the GitHub Pages address. CircleCI serves the artifacts of a job from `https://output.circle-artifacts.com/output/job/<job id>/artifacts/<node>/<path>`, and the job id is new on every run. [`site/preview.sh`](../site/preview.sh) therefore builds a second copy, `site/public-preview`, that works from any address:
+
+- Hugo builds it with relative URLs (a link from `docs/maintainers/ci.html` to the home page is `../../index.html`) and with `uglyURLs`, so that a page is a file (`ci.html`).
+- The script then makes every relative link name a file: a server of artifacts does not serve the `index.html` of a directory, and the menu links to directories. It also rewrites the `url(/fonts/...)` of the inline style, and removes the `integrity` attributes: CircleCI sends script and style files to storage on another origin, and a browser refuses a script with an integrity hash from there.
+- lychee then checks the links and the anchors of the preview with directory links turned off, and the script stops on a link that begins with a slash. The GitHub links of the pages point at the commit of the build, so a file that the pull request adds has a link that works.
+
+The job stores the preview as the artifacts `docs-site-preview`, and prints and stores the address:
+
+```text
+Docs preview: https://output.circle-artifacts.com/output/job/<job id>/artifacts/0/docs-site-preview/index.html
+```
+
+The same line is in the file `docs-site/preview-url.txt` among the artifacts of the job. CircleCI has no job summary page, so the log line, that file and the **Artifacts** tab are the places to look. Who can open the link follows the visibility of the project on CircleCI, and the artifacts expire (30 days by default). Search and the Mermaid diagrams load files by absolute path and may not work from the artifacts. To see the exact site, download `docs-site.tgz` or run the commands of [Preview locally](#preview-locally).
+
+**A comment on the pull request (optional).** When the job has a `GITHUB_PR_COMMENT_TOKEN` and the build belongs to a pull request, `site/preview-comment.sh` posts ONE comment with the address, and updates that comment on later pushes (it finds it by a hidden marker, and posts a new one only if the update fails). Without the token, without a pull request (CircleCI sets `CIRCLE_PULL_REQUEST` only when the branch has one at the time of the push), or when GitHub refuses a call, it skips the comment and the job stays green. It sends the token to `curl` on its standard input, so the token is in no command line and no log. `ci/tests/preview-comment.sh` tests all of this against a fake `curl`.
+
+To turn the comment on, a maintainer does this once:
+
+1. Create a fine-grained personal access token with the resource owner `CircleCI-Labs`, **only** this repository, and the repository permission **Pull requests: Read and write**, and nothing else.
+2. Create the context `scalable-machine-runner-pr-comments` with the variable `GITHUB_PR_COMMENT_TOKEN`. The `docs-site-build` job already names the context. Without the context or the variable the job posts nothing.
+3. Restrict the context to this project, and refuse SSH reruns:
+
+   ```bash
+   circleci context restriction create scalable-machine-runner-pr-comments --org <org> --type project --value <project-id>
+   circleci context restriction create scalable-machine-runner-pr-comments --org <org> --type expression \
+     --value 'not job.ssh.enabled and not (pipeline.config_source starts-with "api")'
+   ```
+
+   The context cannot be limited to one branch: pull requests come from branches of any name. So anyone who can push a branch to the repository can make a job print the token. That is why the token can only comment on pull requests and is not the release token. A pull request from a fork gets no secret ([Secrets and public logs](#secrets-and-public-logs)), so it gets no comment.
 
 ### GitHub Pages and the token
 
@@ -457,6 +492,20 @@ A maintainer does this once:
 The site has its own context and not the release context. The release token can publish releases, and the docs job downloads and runs a theme, a Mermaid script and a Hugo binary at build time, so it gets only the token that it needs. If one token for both is wanted, attach `scalable-machine-runner-release` to `docs-site-publish` instead: that context holds a `GITHUB_TOKEN` that can write to the repository, and no other change is needed.
 
 When the repository is renamed to `machine-runner-swarm`, the Pages address changes with it and GitHub does not redirect the old one. Change the two lines of `site/hugo.yaml` that name the repository (`baseURL` and the GitHub link of the menu). The publication follows the repository that the pipeline runs in.
+
+## What a maintainer creates once
+
+Nothing below is created by the repository. Without an item the pipeline still runs and stays green, and the part that needs it does nothing.
+
+| What | Where | Needed for | Details |
+|---|---|---|---|
+| Context `scalable-machine-runner-e2e` | CircleCI organization | The e2e jobs on `main` and `smr-swarm/*` | [Secrets and public logs](#secrets-and-public-logs) |
+| Context `scalable-machine-runner-release` | CircleCI organization | Publishing a GitHub release | [Enable publishing](releasing.md#enable-publishing) |
+| Context `scalable-machine-runner-docs` | CircleCI organization | Publishing the site to GitHub Pages, and Pages set to `gh-pages` | [GitHub Pages and the token](#github-pages-and-the-token) |
+| Context `scalable-machine-runner-pr-comments` (optional) | CircleCI organization | The comment with the preview address on a pull request | [Docs site previews](#docs-site-previews) |
+| A schedule `weekly-security-scan` | The CircleCI project | The weekly security scan | [Create the schedule](#create-the-schedule) |
+
+The Renovate GitHub App is already installed on the organization, and [`renovate.json`](../renovate.json) is its configuration ([Pinned versions](#pinned-versions)). The deploys of the [Deploys](#deploys) section need nothing: CircleCI creates the components and the environments on the first deploy.
 
 ## Security scan
 

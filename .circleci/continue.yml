@@ -1009,12 +1009,13 @@ jobs:
             yq -o=json '.workflows | has("security-scan") | not' /tmp/compiled.yml | jq -e . > /dev/null \
               || { echo "the security-scan workflow runs without security-scan: true"; exit 1; }
       - run:
-          name: The setup gate (table test), the three exclusive setup workflows (compiled per branch), the changed-files script and the deploy marker script
+          name: Table tests of the setup gate, the setup workflows (compiled per branch) and the scripts (changed files, deploy marker, preview comment)
           command: |
             ci/tests/setup-gate.sh
             ci/tests/setup-config.sh /tmp/cli/circleci
             ci/tests/changed-files.sh
             ci/tests/deploy-marker.sh
+            ci/tests/preview-comment.sh
       - run:
           name: The release job requires every other job (docs/releasing.md)
           command: |
@@ -1073,7 +1074,11 @@ jobs:
   docs-site-build:
     description: >
       The docs site builds and its links work: site/stage.sh, hugo --minify and site/check.sh. The release requires it.
-      The site is stored as one artifact, docs-site.tgz. The publication is the job docs-site-publish, of its own workflow.
+      The site is stored as one artifact, docs-site.tgz. Then a preview of it, with relative URLs, is stored as the
+      artifacts docs-site-preview (site/preview.sh), and its address is printed in the job output, kept in
+      docs-site/preview-url.txt, and, when the context scalable-machine-runner-pr-comments holds a
+      GITHUB_PR_COMMENT_TOKEN, posted as ONE comment on the pull request (site/preview-comment.sh). Without the
+      token the comment is skipped, and nothing else changes. The publication is the job docs-site-publish, of its own workflow.
     docker:
       - image: cimg/go:1.27.2@sha256:d370371192063607c1237351759d8ab0c49f5e37ab7c3bd7553b09c8b62247d5
     resource_class: small
@@ -1085,9 +1090,24 @@ jobs:
           command: |
             mkdir -p /tmp/docs-site
             tar -czf /tmp/docs-site/docs-site.tgz -C site/public .
+      - run:
+          name: Build the preview with relative URLs and check its links (site/preview.sh)
+          command: |
+            site/preview.sh build site/public-preview
+            site/preview.sh url > /tmp/docs-site/preview-url.txt
       - store_artifacts:
           path: /tmp/docs-site
           destination: docs-site
+      - store_artifacts:
+          path: site/public-preview
+          destination: docs-site-preview
+      - run:
+          name: The address of the docs preview (open it from the pull request, or from the Artifacts tab of this job)
+          command: |
+            echo "Docs preview: $(cat /tmp/docs-site/preview-url.txt)"
+      - run:
+          name: Comment the address on the pull request (only with GITHUB_PR_COMMENT_TOKEN; never fails the job)
+          command: site/preview-comment.sh
 
   docs-site-publish:
     description: >
@@ -1266,7 +1286,10 @@ workflows:
       - lint-docs-links
       - lint-docs-mermaid
       - lint-circleci
-      - docs-site-build
+      # The context holds GITHUB_PR_COMMENT_TOKEN, a token that can only comment on pull requests. It is optional: without the
+      # context or the variable the job posts no comment (docs/ci.md, "Docs site previews").
+      - docs-site-build:
+          context: [scalable-machine-runner-pr-comments]
       - e2e-simulation:
           filters: not pipeline.parameters.docs-only
       - proxy-test:

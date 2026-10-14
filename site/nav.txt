@@ -23,6 +23,7 @@ docs/multi-node.md
 docs/resource-classes.md
 docs/images.md
 docs/docker-builds.md
+docs/microvm.md | MicroVMs
 
 == Operate
 docs/operations.md

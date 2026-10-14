@@ -203,6 +203,7 @@ cycle() {
 
 mkdir -p "$root"
 rm -rf "$root"/.work.* "$root"/.tmp.*   # what a stopped run left
+log "version $want (major $major), check every ${interval}s, from $base"
 while :; do
   if cycle; then wait_for=$interval; else
     [ -L "$root/current" ] || exit 1   # nothing to run yet: the restart policy tries again

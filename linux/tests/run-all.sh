@@ -2,8 +2,8 @@
 # run-all.sh: every Linux test, sharing one pair of DinD containers (a Swarm manager and a worker) so
 # the large images are loaded once. Prints one RESULT line per test and exits non-zero if any fails.
 #
-#   run-all.sh              stack-config, install, helper, ephemerality, exit80, token, task, placement,
-#                           upgrade, persistent, drain, limits, network, distributor (draft), then the bats unit tests on cimg,
+#   run-all.sh              stack-config, helper, ephemerality, exit80, token, task, placement, persistent, drain,
+#                           limits, network, distributor (install, upgrade, rollback, auto, pruning), then the bats unit tests on cimg,
 #                           Alpine and UBI
 #   run-all.sh token drain  only these tests ("bats" is the unit-test matrix)
 #
@@ -13,13 +13,13 @@ set -uo pipefail
 # shellcheck source=linux/tests/lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-all=(stack-config install helper ephemerality exit80 token task placement upgrade persistent drain limits network distributor bats)
+all=(stack-config helper ephemerality exit80 token task placement persistent drain limits network distributor bats)
 tests=("$@")
 [[ ${#tests[@]} -gt 0 ]] || tests=("${all[@]}")
 
 needs_session=false
 for t in "${tests[@]}"; do
-  case $t in stack-config | install | helper | bats) ;; *) needs_session=true ;; esac
+  case $t in stack-config | helper | bats) ;; *) needs_session=true ;; esac
 done
 if [[ $needs_session == true ]]; then
   session_begin --worker

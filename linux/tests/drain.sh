@@ -38,7 +38,7 @@ restart_and_time() {
 }
 
 # --- a running job survives SIGTERM -----------------------------------------------------------
-install_swarm "$SWARM_TEST_MGR" fake
+publish_runner fake
 make_override "$work/ov.yaml" "linux-persistent 1 FAKE_JOB_INTERVAL=1 FAKE_JOB_SLEEP=12"
 deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml persistent.yaml
 wait_for 120 bash -c "docker exec $SWARM_TEST_MGR docker service logs --raw ${STACK}_linux-persistent 2>/dev/null | grep -q '^FAKEJOB'" ||
@@ -59,7 +59,7 @@ echo "RESULT test=drain phase=job jobs_started=$started jobs_finished=$ended exi
 # --- the real runner, idle --------------------------------------------------------------------
 # A tiny fake API (fake-api.py, in a cimg container beside the Swarm) lets the real runner get past
 # its start-up and idle in the claim loop, as it does against runner.circleci.com.
-install_swarm "$SWARM_TEST_MGR" real
+publish_runner real
 inner_reset "$SWARM_TEST_MGR"
 create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
 docker cp "$tests_dir/fake-api.py" "$SWARM_TEST_MGR:/fake-api.py"

@@ -16,7 +16,7 @@ JOBS=${JOBS:-4}
 TIMEOUT=${TIMEOUT:-180}
 
 session_begin
-install_swarm "$SWARM_TEST_MGR" fake
+publish_runner fake
 create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" linux-persistent
 export SWARM_TEST_HOST=$SWARM_TEST_MGR   # the DinD container's hostname is its name; replaces CHANGE-ME
 make_override "$work/ov.yaml" "linux-persistent 1 FAKE_JOB_INTERVAL=1"

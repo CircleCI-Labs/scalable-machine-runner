@@ -26,7 +26,7 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 session_begin
-install_swarm "$SWARM_TEST_MGR" real
+publish_runner real
 create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
 make_override "$work/ov.yaml" \
   "linux-default 1 CIRCLECI_RUNNER_API_URL=http://127.0.0.1:9" \
@@ -40,7 +40,7 @@ cexec() { # container user script...
 }
 # shellcheck disable=SC2016  # the single-quoted script runs in the container
 runner_pid() { # container
-  idocker "$SWARM_TEST_MGR" exec "$1" sh -c 'for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = circleci-runner ] && echo ${p#/proc/} && break; done'
+  idocker "$SWARM_TEST_MGR" exec "$1" sh -c 'for p in /proc/[0-9]*; do [ "$(cat $p/comm 2>/dev/null)" = circleci-runner ] && tr "\0" " " < $p/cmdline | grep -q "circleci-runner machine" && echo ${p#/proc/} && break; done'
 }
 
 # Prints key=value lines. $RP is the runner's pid; $SENTINEL is a shell variable, deliberately not
@@ -52,7 +52,7 @@ echo "whoami=$(id -un)"
 echo "secret_file=$(sees cat $secret)"
 echo "runner_environ=$(sees cat /proc/$RP/environ)"
 echo "own_environment=$(sees env)"
-echo "opt_swarm_writable=$(touch /opt/machine-runner-swarm/bin/x 2>/dev/null && echo yes || echo no)"
+echo "opt_swarm_writable=$(touch /opt/machine-runner-swarm/x 2>/dev/null && echo yes || echo no)"
 if sudo -n true 2>/dev/null; then
   echo "sudo=works"
   echo "sudo_secret_file=$(sees sudo -n cat $secret)"
@@ -69,7 +69,7 @@ wait_runner() { # service -> prints container id, sets pid
   local svc=$1 c pid
   wait_for 120 bash -c "docker exec $SWARM_TEST_MGR docker ps -q --filter label=com.docker.swarm.service.name=${STACK}_$svc | grep -q ." || fail "$svc did not start"
   c=$(running_container "$SWARM_TEST_MGR" "$svc")
-  wait_for 60 bash -c "[ -n \"\$(docker exec $SWARM_TEST_MGR docker exec $c sh -c 'for p in /proc/[0-9]*; do [ \"\$(cat \$p/comm 2>/dev/null)\" = circleci-runner ] && echo y; done')\" ]" ||
+  wait_for 60 bash -c "[ -n \"\$(docker exec $SWARM_TEST_MGR docker exec $c sh -c 'for p in /proc/[0-9]*; do [ \"\$(cat \$p/comm 2>/dev/null)\" = circleci-runner ] && tr \"\\0\" \" \" < \$p/cmdline | grep -q \"circleci-runner machine\" && echo y; done')\" ]" ||
     fail "the real runner is not running in $svc"
   pid=$(runner_pid "$c")
   echo "$c $pid"

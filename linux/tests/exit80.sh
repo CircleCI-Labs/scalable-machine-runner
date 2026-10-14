@@ -19,7 +19,7 @@ set -euo pipefail
 WAIT=${WAIT:-45}
 
 session_begin
-install_swarm "$SWARM_TEST_MGR" real
+publish_runner real
 
 # observe CASE: sets tasks, bad_codes, min_gap, gaps for the tasks of linux-default so far.
 observe() {
@@ -72,9 +72,9 @@ run_case() { # name token-value ENV...
 run_case empty-token "" ""
 run_case bad-setting "$SENTINEL_TOKEN" "CIRCLECI_RUNNER_LOGGING_LEVEL=bogus"
 
-inner_reset "$SWARM_TEST_MGR"
-out=$(idocker "$SWARM_TEST_MGR" run --rm --user 0 --entrypoint /opt/machine-runner-swarm/bin/circleci-runner-entrypoint -v /opt/machine-runner-swarm/current:/opt/machine-runner-swarm:ro \
-  -e CIRCLECI_RUNNER_NAME=x "$CIMG_IMAGE" 2>&1) && rc=0 || rc=$?
+stack_down "$SWARM_TEST_MGR"   # the volume of the distributor stays: the runner it installed starts, and finds no config file
+out=$(idocker "$SWARM_TEST_MGR" run --rm --user 0 --entrypoint /circleci-runner-entrypoint -v /entrypoint/circleci-runner-entrypoint:/circleci-runner-entrypoint:ro \
+  -v "${STACK}_runner-bin:/opt/machine-runner-swarm:ro" -e CIRCLECI_RUNNER_NAME=x "$CIMG_IMAGE" 2>&1) && rc=0 || rc=$?
 echo "RESULT test=exit80 case=no-config-file exit=$rc message=\"$(grep -o 'circleci-runner: error.*' <<< "$out" | cut -c1-120)\""
 [[ $rc -eq 1 ]] || fail "a missing config file should make the runner exit 1, got $rc"
 

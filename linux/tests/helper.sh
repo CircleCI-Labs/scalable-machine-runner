@@ -12,14 +12,15 @@ node=swarm-test-helper-$$
 dind_start "$node"
 work=$(mktemp -d)
 trap 'docker rm -f -v "$node" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
-# a copy of the stack with no replicas: only the helper's steps are under test, not the tasks
-sed -E 's/^( +replicas: )[0-9]+/\10/' "$stack_dir/runners.yaml" > "$work/runners.yaml"
+# a copy of the stack with no replicas (also for the global distributor): only the helper's steps are under test, not the tasks
+sed -E 's/^( +replicas: )[0-9]+/\10/; s/^( +)mode: global.*/\1mode: replicated\n\1replicas: 0/' "$stack_dir/runners.yaml" > "$work/runners.yaml"
 dind_load "$node" "$CIMG_IMAGE"
 dind_load "$node" alpine:3
 
 setup() { # args... ; stdin is passed through
   docker run --rm -i --network "container:$node" -e DOCKER_HOST=tcp://127.0.0.1:2375 \
-    -v "$repo_dir:/src:ro" -v "$work:/work:ro" "$CIMG_IMAGE" bash /src/linux/setup.sh "$@" 2>&1
+    -v "$repo_dir:/src:ro" -v "$work:/work:ro" -v "$repo_dir/linux/entrypoint:/entrypoint:ro" -v "$repo_dir/linux/runner-distributor.sh:/runner-distributor.sh:ro" \
+    "$CIMG_IMAGE" bash /src/linux/setup.sh "$@" 2>&1
 }
 
 out=$(setup --check </dev/null)
@@ -57,6 +58,6 @@ for s in linux-java linux-hardened; do printf '%s' "$SENTINEL_TOKEN" | setup --s
 setup --deploy --stack-file /work/runners.yaml </dev/null >/dev/null
 services=$(idocker "$node" stack services runners --format '{{.Name}}' | sort | paste -sd, -)
 echo "RESULT test=helper step=deploy services=$services"
-[[ $services == runners_linux-default,runners_linux-hardened,runners_linux-java ]] || fail "unexpected services: $services"
+[[ $services == runners_linux-default,runners_linux-hardened,runners_linux-java,runners_runner-distributor ]] || fail "unexpected services: $services"
 
 pass "setup.sh: preflight, single-node swarm init, secrets from stdin (a runner config, never echoed), deploy; all idempotent"

@@ -23,8 +23,7 @@ TIMEOUT=${TIMEOUT:-120}
 DIAG_NODES=""
 session_begin --worker
 DIAG_NODES=$SWARM_TEST_MGR
-install_swarm "$SWARM_TEST_MGR" real
-install_swarm "$SWARM_TEST_WRK" real
+publish_runner real
 create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" linux-docker-build
 api="CIRCLECI_RUNNER_API_URL=http://127.0.0.1:9"
 make_override "$work/ov.yaml" "linux-default 2 $api" "linux-docker-build 1 $api"
@@ -82,8 +81,11 @@ idocker "$SWARM_TEST_MGR" node update --label-add machine-runner-swarm.docker-bu
 wait_for "$TIMEOUT" running_on linux-docker-build "$SWARM_TEST_WRK" || fail "linux-docker-build did not start on the labelled worker"
 echo "RESULT test=placement step=label_on_worker state=Running node=$SWARM_TEST_WRK"
 c=$(idocker "$SWARM_TEST_WRK" ps -q --filter "label=com.docker.swarm.service.name=${STACK}_linux-docker-build" | head -n 1)
-wait_for 60 bash -c "docker exec $SWARM_TEST_WRK docker exec $c sh -c 'for p in /proc/[0-9]*; do [ \"\$(cat \$p/comm 2>/dev/null)\" = circleci-runner ] && exit 0; done; exit 1'" ||
+wait_for 60 bash -c "docker exec $SWARM_TEST_WRK docker exec $c sh -c 'for p in /proc/[0-9]*; do [ \"\$(cat \$p/comm 2>/dev/null)\" = circleci-runner ] && tr \"\\0\" \" \" < \$p/cmdline | grep -q \"circleci-runner machine\" && exit 0; done; exit 1'" ||
   fail "the runner did not start in linux-docker-build"
+dist=$(idocker "$SWARM_TEST_WRK" ps -q --filter "label=com.docker.swarm.service.name=${STACK}_runner-distributor" | head -n 1)
+[[ -n $dist ]] || fail "runner-distributor does not run on the Docker-build node, whose runner needs the binary"
+echo "RESULT test=placement step=distributor_on_docker_build_node node=$SWARM_TEST_WRK running=yes"
 as_job=$(idocker "$SWARM_TEST_WRK" exec -u circleci "$c" sh -c 'docker version --format "{{.Server.Version}}" 2>&1; id -Gn' | tr '\n' ' ')
 sudo_used=$(idocker "$SWARM_TEST_WRK" exec -u circleci "$c" sh -c 'docker ps >/dev/null 2>&1 && echo yes || echo no')
 echo "RESULT test=placement step=pattern_a job_user=circleci docker_without_sudo=$sudo_used detail=\"${as_job% }\""

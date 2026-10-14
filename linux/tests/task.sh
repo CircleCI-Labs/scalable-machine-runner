@@ -22,7 +22,7 @@ set -euo pipefail
 TIMEOUT=${TIMEOUT:-120}
 
 session_begin
-install_swarm "$SWARM_TEST_MGR" real
+publish_runner real
 export SWARM_TEST_HOST=$SWARM_TEST_MGR   # the DinD container's hostname is its name; replaces CHANGE-ME
 docker cp "$tests_dir/fake-api.py" "$SWARM_TEST_MGR:/fake-api.py"
 api_ip=$(docker exec "$SWARM_TEST_MGR" hostname -i | awk '{ print $1 }')

@@ -12,7 +12,7 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 session_begin
-install_swarm "$SWARM_TEST_MGR" fake
+publish_runner fake
 create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
 cpus=$(($(idocker "$SWARM_TEST_MGR" node inspect self --format '{{.Description.Resources.NanoCPUs}}') / 1000000000))
 # Every replica reserves 2 CPUs. Leave room for the one linux-hardened replica; ask for 2 more

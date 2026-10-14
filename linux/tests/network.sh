@@ -16,7 +16,7 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 session_begin
-install_swarm "$SWARM_TEST_MGR" fake
+publish_runner fake
 create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
 make_override "$work/ov.yaml" "linux-default 2 FAKE_RUNNER_SERVE=1" "linux-hardened 1 FAKE_RUNNER_SERVE=1"
 deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml"

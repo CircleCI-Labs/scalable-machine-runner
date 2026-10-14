@@ -38,7 +38,7 @@ State also persists. The images, containers, volumes, and build cache of the hos
 
 ### Deploy on Linux
 
-1. Join a dedicated worker node and install `/opt/machine-runner-swarm/current` on it. Refer to [Multi-Node Clusters](multi-node.md).
+1. Join a dedicated worker node. Refer to [Multi-Node Clusters](multi-node.md). Nothing is installed on it: the `runner-distributor` service also runs on a docker-build node and installs the runner there.
 2. Label the node:
 
    ```console
@@ -52,7 +52,7 @@ State also persists. The images, containers, volumes, and build cache of the hos
    $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml runners
    ```
 
-The file `linux/stack/docker-build.yaml` defines `linux-docker-build`. It mounts the socket, and constrains the service to `node.platform.os == linux`, `node.role == worker`, and `node.labels.machine-runner-swarm.docker-build == true`. Every other service in the stack files carries `node.labels.machine-runner-swarm.docker-build != true`, so labeling a node moves the other classes off it. The entrypoint adds the job user to the group of the socket, so jobs need no sudo to run `docker`. The `cimg/base` image includes the Docker CLI.
+The file `linux/stack/docker-build.yaml` defines `linux-docker-build`. It mounts the socket, and constrains the service to `node.platform.os == linux`, `node.role == worker`, and `node.labels.machine-runner-swarm.docker-build == true`. Every other service in the stack files carries `node.labels.machine-runner-swarm.docker-build != true`, so labeling a node moves the other classes off it. The class mounts the runner volume read-only, like every class, and the entrypoint adds the job user to the group of the socket, so jobs need no sudo to run `docker`. A job that controls the engine can also change the volume `runner-bin` of its node, which only this class uses there. The `cimg/base` image includes the Docker CLI.
 
 Use the class in a job:
 

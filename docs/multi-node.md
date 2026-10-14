@@ -43,7 +43,7 @@ A dotted line means that the node satisfies every constraint of the service, so 
 | Node type | Role | Needs |
 |---|---|---|
 | Manager | Holds the cluster state and every secret. Schedules tasks | Docker Engine. Linux managers can manage Windows workers |
-| Linux worker | Runs Linux services | Docker Engine, `/opt/machine-runner-swarm/current` with the build for its architecture |
+| Linux worker | Runs Linux services | Docker Engine. The `runner-distributor` service installs the runner for the architecture of the node |
 | Windows worker | Runs Windows services | Docker Engine in Windows-container mode, `C:\machine-runner-swarm`, the `machine-runner-swarm.windows-ltsc*` labels |
 
 ### Managers and quorum
@@ -103,7 +103,7 @@ Nothing else is installed on the node. The `runner-distributor` service is `glob
 
 ### Arm nodes
 
-The installation steps on [Install on Linux with Docker Swarm](install-linux.md) pick the `arm64` runner build on an Arm node. Swarm reports the architecture of Arm nodes as `aarch64` and that of Intel and AMD nodes as `x86_64`.
+The `runner-distributor` service reads the architecture of the node and installs the `arm64` runner build on an Arm node. Swarm reports the architecture of Arm nodes as `aarch64` and that of Intel and AMD nodes as `x86_64`.
 
 - Give each architecture its own resource class, for example `linux-arm64`, and constrain it with `node.platform.arch == aarch64`. A class that spans both architectures places replicas unpredictably, and a job cannot pick one.
 - Use an image that publishes an `arm64` variant. For example, check with `docker buildx imagetools inspect <image>`.
@@ -164,7 +164,7 @@ Constraints on labels use the form `node.labels.<key> == <value>`. For example, 
 
 ### Keep the docker-build node to itself
 
-A job on a docker-build class controls the whole Docker engine of its node, so it can inspect and enter every other container there, and read the tokens of any class that runs on that node. The stack files keep the other classes off that node: every service except the docker-build ones carries the constraint `node.labels.machine-runner-swarm.docker-build != true`. A node without the label matches it, because Swarm treats a missing label as "not equal". A node that gets the label stops running those services: Swarm shuts their tasks down and starts replacements on other nodes, or leaves them pending when no other node matches. Add the same constraint to every service you write yourself.
+A job on a docker-build class controls the whole Docker engine of its node, so it can inspect and enter every other container there, and read the tokens of any class that runs on that node. The stack files keep the other classes off that node: every runner service except the docker-build ones carries the constraint `node.labels.machine-runner-swarm.docker-build != true`. The service `runner-distributor` has no such constraint, because the docker-build class needs the runner on its node too. A node without the label matches it, because Swarm treats a missing label as "not equal". A node that gets the label stops running those services: Swarm shuts their tasks down and starts replacements on other nodes, or leaves them pending when no other node matches. Add the same constraint to every service you write yourself.
 
 ## Network zones
 
@@ -200,7 +200,8 @@ Swarm does not share images between nodes. Each node pulls the image of a task f
 - Pin images by digest, for example `cimg/base:2026.10@sha256:<digest>`, so that every node runs the same content. Tags such as `21.0` move.
 - Pull large images ahead of time. A Windows `servercore` image is about 2.2 GB compressed.
 - Public registries apply pull rate limits. A mirror or an authenticated pull avoids failed pulls on a busy cluster.
-- A baked image and your own image must be in a registry that all nodes of their OS can reach. Refer to [Images](images.md).
+- The service `runner-distributor` runs the stock `alpine:3` image on every Linux node, so every Linux node must be able to pull it. Mirror it in your registry and change `image` in your copy of the stack file, if the nodes cannot reach Docker Hub.
+- Your own image must be in a registry that all nodes of its OS can reach. Refer to [Images](images.md).
 
 ## Inter-node ports
 
@@ -212,7 +213,7 @@ Swarm needs these ports between all nodes of the cluster. Open them only for the
 | 7946 | TCP and UDP | Node discovery | All nodes |
 | 4789 | UDP | Overlay network (VXLAN) | All nodes |
 
-The runner containers need no inbound ports, and the stack publishes none. Outbound HTTPS from each node is the only other requirement.
+The runner containers need no inbound ports, and the stack publishes none. Outbound HTTPS from each node is the only other requirement. A Linux node reaches the release bucket of CircleCI for the runner download of the distributor, or your mirror. Refer to [Egress hosts](security.md#egress-hosts).
 
 Ubuntu with `ufw`:
 

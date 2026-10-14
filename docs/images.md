@@ -6,13 +6,13 @@ page-description: Run the runner in stock Linux and Windows images with a read-o
 
 # Images
 
-This repository publishes no images. The stack files run stock images and add the runner from the host, so the image of a class is the environment that its jobs see. This page describes the stock Linux images, the stock Windows image, and how to bring your own image on each OS.
+This repository publishes no images. The stack files run stock images and mount the runner into them, so the image of a class is the environment that its jobs see. This page describes the stock Linux images, the stock Windows image, and how to bring your own image on each OS.
 
 ## Linux: stock images with the mounted runner
 
-The statically linked runner binary and `circleci-runner-entrypoint` live on the host in `/opt/machine-runner-swarm/<version>/bin`, and the link `/opt/machine-runner-swarm/current` points to the installed version. The stack mounts that link read-only at `/opt/machine-runner-swarm` in every container, and sets `entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]` and `user: "0"`. The entrypoint starts as root, prepares the users, and then runs the runner as `circleci-runner`.
+The statically linked runner binary lives in the per-node volume `runner-bin`, which the `runner-distributor` service fills. In the volume, the link `current` points to the active version, `versions/<version>/bin/circleci-runner`. The stack mounts the volume read-only at `/opt/machine-runner-swarm` in every container. The entrypoint, `circleci-runner-entrypoint`, is a Swarm config that the stack mounts at `/circleci-runner-entrypoint` with the mode `0555`. The service sets `entrypoint: ["/circleci-runner-entrypoint"]` and `user: "0"`. The entrypoint starts as root, checks the runner against its SHA-256 record, prepares the users, and then runs the runner as `circleci-runner`.
 
-The result is that the image contains none of the runner. You can use `cimg/base` or `cimg/openjdk:21.0` unmodified, and a new runner version needs no image rebuild and no restart. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+The result is that the image contains none of the runner. You can use `cimg/base` or `cimg/openjdk:21.0` unmodified, and a new runner version needs no image rebuild and no restart of a runner service. Refer to [The runner distributor on Linux](concepts.md#the-runner-distributor-on-linux) and [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
 The shipped file uses these images:
 
@@ -30,7 +30,7 @@ The shipped file uses these images:
 | `sudo`, or util-linux `setpriv` | Steps each job down to the job user. The hardened class (`MACHINE_RUNNER_SWARM_JOB_SUDO=false`) needs util-linux `setpriv` with `--no-new-privs`, even when the image has sudo |
 | `setpriv` or `su` | Starts the runner as `circleci-runner` |
 | `useradd` or `adduser` | Creates `circleci-runner`, and the job user when the image has none |
-| `sed`, `grep`, `stat`, `install`, `getent`, `id`, `cut`, `tr`, `chmod`, `env` | Used by the entrypoint. BusyBox and coreutils both provide them |
+| `sed`, `grep`, `stat`, `install`, `getent`, `id`, `cut`, `tr`, `chmod`, `env`, `sha256sum`, `readlink`, `sleep` | Used by the entrypoint. BusyBox and coreutils both provide them |
 
 The `cimg` images have everything. Alpine has only the BusyBox `su`, and UBI minimal has neither `sudo` nor `setpriv`. The tests run the entrypoint in `cimg/base` 2026.10, `cimg/openjdk` 21.0, Alpine 3 (with sudo and with `setpriv`), and UBI 9 minimal. Add the packages in a derived image:
 
@@ -75,18 +75,7 @@ image: registry.example.com/ci/linux-pg:1
 
 Every node that runs the service must be able to pull the image. Refer to [Registry needs](multi-node.md#registry-needs). Rebuild the image when its base changes, for example once a month.
 
-The Dockerfile ends with `USER circleci`, which only affects a plain `docker run` of the image. The stack starts the container as root so that the entrypoint can create users.
-
-### The baked variant
-
-The target `baked` puts the runner and the entrypoint inside the image, for hosts where you cannot mount `/opt/machine-runner-swarm`. Build it from the root of the repository, because it copies `linux/setup.sh` and `linux/entrypoint/circleci-runner-entrypoint`:
-
-```console
-$ docker build -f linux/images/example/Dockerfile --target baked \
-    -t registry.example.com/ci/linux-pg:1-baked .
-```
-
-The build downloads the runner and verifies its SHA-256 checksum, as `setup.sh` does on a host. A service that uses the baked image keeps the same `entrypoint`, and needs no `/opt/machine-runner-swarm` volume. The trade-off is a rebuild for every runner version.
+The Dockerfile has one target. It adds tools to a stock image and nothing of the runner, so the image needs no rebuild for a new runner version. It ends with `USER circleci`, which only affects a plain `docker run` of the image. The stack starts the container as root so that the entrypoint can create users.
 
 ## Windows: stock Server Core with mounts
 

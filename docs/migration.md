@@ -22,7 +22,7 @@ This page describes how to move an existing setup. It covers Linux hosts, which 
 | `deploy.replicas` | `deploy.replicas`, with placement, reservations, and limits |
 | Token in a `.env` file as `CIRCLECI_RUNNER_API_AUTH_TOKEN`, visible in `docker inspect` | Swarm secret `<service>-token`, which holds a runner config file |
 | The same `CIRCLECI_RUNNER_NAME` for every replica | `{{.Node.Hostname}}-<service>-{{.Task.Slot}}`, unique for each replica |
-| Dockerfiles that build the runner into an Ubuntu, `cimg`, or `runner-agent` image | A stock image with the runner mounted from `/opt/machine-runner-swarm`. Refer to [Images](images.md) |
+| Dockerfiles that build the runner into an Ubuntu, `cimg`, or `runner-agent` image | A stock image, with the runner mounted from the volume `runner-bin`, which the `runner-distributor` service fills. Refer to [Images](images.md) |
 | Runner logs written to a mounted file in the `machine` service | Logs on stdout, read with `docker service logs` |
 | `CIRCLECI_RUNNER_MODE` and `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` in the service environment | The same variables, in the stack file. Cleanup is `"false"` on Linux |
 | Jobs with `resource_class: <namespace>/<class>` | No change |
@@ -42,6 +42,7 @@ Your job configs do not change. Your resource classes and tokens can stay.
 
 ## Behavior to expect
 
+- **Runner updates.** With the default settings, the runner follows the current release of CircleCI within major version 3, and a new release reaches the nodes by itself. Pin a version to stop that. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 - **Sudo.** The default classes keep passwordless sudo, as the old images did. The hardened class removes it. Refer to [Concepts](concepts.md#users-and-the-runner-token-on-linux).
 - **Startup time.** A new container starts for every job, so a job waits about 10 seconds longer than before for the next claim, plus the task agent download. Add replicas for busy classes.
 - **Swarm on one host.** Swarm mode is required even on a single host. The shipped helper and the install page start it on the loopback address, so nothing is exposed.

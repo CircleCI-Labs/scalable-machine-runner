@@ -13,7 +13,7 @@ usage() {
   cat <<'EOF'
 Usage: setup.sh [STEPS] [OPTIONS]    (no steps: --check; every step is idempotent)
 Steps, run in this order:
-  --check            preflight only: Linux, amd64/arm64, Docker running and 24+, Swarm state, clock
+  --check            preflight only: Linux, amd64/arm64/ppc64le/s390x, Docker running and 24+, Swarm state, clock
   --swarm-init       docker swarm init for one node (listens on 127.0.0.1 only) unless Swarm is active
   --secret SERVICE   create the Swarm secret SERVICE-token (a runner config holding the token); the token
                      comes from stdin (hidden prompt, or one line from a pipe), never printed
@@ -21,8 +21,10 @@ Steps, run in this order:
 Options:
   --stack-file FILE  stack file for --deploy, repeatable (default: stack/runners.yaml)
   --stack-name NAME  default: runners
-The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION, _RUNNER_MAJOR, _CHECK_INTERVAL, _DOWNLOAD_BASE_URL and _RUNNER_SHA256,
-and for the token proxy _PROXY_VERSION, _PROXY_BASE_URL and _PROXY_SHA256, from the environment of --deploy (docs/operations.md).
+The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION (an exact pin by default, or 3.1, 3, current), _RUNNER_MAJOR, _CHECK_INTERVAL,
+_DOWNLOAD_BASE_URL and _RUNNER_SHA256, and for the token proxy _PROXY_VERSION, _PROXY_BASE_URL, _PROXY_LATEST_URL and _PROXY_SHA256,
+from the environment of --deploy (docs/operations.md). The token proxy runs on a manager; MACHINE_RUNNER_SWARM_PROXY_PLACEMENT pins it
+(docs/multi-node.md).
 Every runner reads the placeholder secret: printf %s machine-runner-swarm-placeholder | setup.sh --secret runner-placeholder
 EOF
 }
@@ -34,9 +36,11 @@ preflight() { # NEEDS_DOCKER
   case $(uname -m) in
     x86_64 | amd64) arch=amd64 ;;
     aarch64 | arm64) arch=arm64 ;;
+    ppc64le) arch=ppc64le ;;
+    s390x) arch=s390x ;;
     *) arch= ;;
   esac
-  if [[ -n $arch ]]; then chk ' ok ' "architecture $arch"; else chk FAIL "unsupported architecture $(uname -m): amd64 and arm64 only"; fi
+  if [[ -n $arch ]]; then chk ' ok ' "architecture $arch"; else chk FAIL "unsupported architecture $(uname -m): amd64, arm64, ppc64le and s390x only"; fi
   if v=$(docker version --format '{{.Server.Version}}' 2>/dev/null) && [[ -n $v ]]; then
     if [[ ${v%%.*} -ge 24 ]]; then chk ' ok ' "Docker Engine $v"; else chk FAIL "Docker Engine $v is too old: 24 or newer"; fi
     chk ' ok ' "Swarm: $(docker info --format '{{.Swarm.LocalNodeState}}')"

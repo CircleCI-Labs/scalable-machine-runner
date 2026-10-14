@@ -105,6 +105,7 @@ Describe 'the stack files' {
     It 'give the proxy settings to the distributor only, and pin nothing in a runner service' {
         $text = $script:files['runners.yaml']
         $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_PROXY_VERSION: \$\{MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased\}'
+        $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_PROXY_LATEST_URL: \$\{MACHINE_RUNNER_SWARM_PROXY_LATEST_URL:-https://api\.github\.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest\}'
         $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_PROXY_BASE_URL: \$\{MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github\.com/CircleCI-Labs/scalable-machine-runner/releases/download\}'
         foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Not -Match 'PROXY_VERSION|PROXY_SHA256' }
     }
@@ -147,7 +148,7 @@ Describe 'the stack files' {
         $text | Should -Match '(?ms)^  runner-distributor-windows:.*?node\.labels\.machine-runner-swarm\.windows-ltsc2022 == true'
         $text | Should -Match '(?ms)^  runner-distributor-windows:.*?- type: volume\r?\n        source: runner-bin\r?\n        target: ''C:\\runner-bin''.*\r?\n(?!        read_only)'
         $text | Should -Match '(?m)^  distributor-windows: \{name: machine-runner-swarm-distributor-windows-[0-9a-f]{12}, file: runner-distributor\.ps1\}'
-        foreach ($v in 'MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-current}', 'MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}', 'MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}') {
+        foreach ($v in 'MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-3.1.13}', 'MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}', 'MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}') {
             $text | Should -Match ([regex]::Escape($v))
         }
         # no other file defines a second distributor

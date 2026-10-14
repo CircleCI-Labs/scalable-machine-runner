@@ -5,10 +5,13 @@
 #   ci/release.sh                 version, notes, bundle, proxy binaries, SHA256SUMS, signature, then publish
 #
 # From the Conventional Commits since the last tag it computes the next version (cliff.toml),
-# checks that every Swarm config of the stack files is named after its content (ci/config-names.sh),
+# checks that every Swarm config of the stack files is named after its content (ci/config-names.sh) and that the exact runner
+# version that the stack files pin (MACHINE_RUNNER_SWARM_RUNNER_VERSION, the newest one that CI tests) is in CircleCI's manifest
+# for every platform,
 # builds the bundle from the tracked files, with the token proxy version of the stack files pinned to the
 # release it cuts (MACHINE_RUNNER_SWARM_PROXY_VERSION: ${...:-unreleased} becomes ${...:-<version>}), and the token proxy
-# binaries (ci/build-proxy.sh: linux/amd64, linux/arm64, windows/amd64, named machine-runner-swarm-proxy_<os>_<arch>),
+# binaries (ci/build-proxy.sh: every platform of CircleCI's runner manifest, linux amd64, arm64, ppc64le and s390x and windows amd64 and
+# arm64, named machine-runner-swarm-proxy_<os>_<arch>),
 # signs SHA256SUMS, which lists the bundles and the binaries, with cosign (keyless: the CircleCI OIDC token) and checks
 # the signature, then creates the GitHub release, which also creates the tag. The distributor of the stack downloads
 # the proxy from that release. It never pushes a commit or a tag with git.
@@ -30,7 +33,7 @@ tag_glob='v[0-9]*.[0-9]*.[0-9]*'
 oidc_issuer='https://oidc.circleci.com'
 goroot="${RELEASE_GOROOT:-${HOME}/.local/go}"
 export PATH="${goroot}/bin:${bin}:${PATH}"
-proxy_assets=(machine-runner-swarm-proxy_linux_amd64 machine-runner-swarm-proxy_linux_arm64 machine-runner-swarm-proxy_windows_amd64)
+proxy_assets=()   # the file names of the proxy builds: set in main, from ci/build-proxy.sh, which builds them
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -60,6 +63,29 @@ install_tools() {
   tar -xzf "${tmp}/go.tar.gz" -C "${goroot}" --strip-components=1
   rm -rf "${tmp}"
   git cliff --version; cosign version 2>&1 | grep -E '^GitVersion'; gh --version | head -n 1; go version
+}
+
+# The stack files pin one exact runner version by default, the newest that CI tests (docs/releasing.md says how a release bumps it).
+# It must be the same in every stack file, and CircleCI's manifest must still list it for every platform that the stack runs on.
+check_runner_pin() {
+  local f pin first=
+  for f in linux/stack/runners.yaml linux/stack/microvm.yaml windows/stack/runners.yaml; do
+    pin="$(sed -n 's/^  MACHINE_RUNNER_SWARM_RUNNER_VERSION: \${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-\([0-9][0-9.]*\)}.*/\1/p' "${f}")"
+    [ -n "${pin}" ] || die "${f} has no exact default of MACHINE_RUNNER_SWARM_RUNNER_VERSION"
+    [ -z "${first}" ] || [ "${pin}" = "${first}" ] || die "${f} pins runner ${pin}, another stack file pins ${first}: they must be equal"
+    first="${pin}"
+  done
+  curl -fsSL --proto '=https' --tlsv1.2 --retry 3 https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json |
+    python3 -c '
+import json, sys
+pin = sys.argv[1]
+entry = json.load(sys.stdin)["releases"].get(pin)
+want = {"linux": ["amd64", "arm64", "ppc64le", "s390x"], "windows": ["amd64", "arm64"]}
+missing = [o + "/" + a for o, archs in want.items() for a in archs if not (entry or {}).get(o, {}).get(a, {}).get("sha256")]
+if missing:
+    sys.exit("runner " + pin + " is not in the manifest of CircleCI for " + ", ".join(missing))
+' "${first}" || die "the pinned runner ${first} is not usable: bump it (docs/releasing.md)"
+  say "Runner pin ${first}: in CircleCI's manifest for every platform"
 }
 
 # Sets $version, $resume (true when this commit already has its release tag) or exits 0.
@@ -100,7 +126,7 @@ build() {
     git cliff --tag "${version}" > "${out}/CHANGELOG.md"
   fi
   printf '%s\n' "${version#v}" > "${out}/VERSION"
-  say "Token proxy ${version}: pinned in the stack files, built for linux/amd64, linux/arm64 and windows/amd64"
+  say "Token proxy ${version}: pinned in the stack files, built for ${#proxy_assets[@]} platforms"
   local os pinned
   mkdir -p "${out}/pinned"
   for os in linux windows; do   # the stack file of each OS that names the proxy: the default of its version is this release
@@ -166,8 +192,10 @@ main() {
   sha="$(git rev-parse HEAD)"
   [ -z "${CIRCLE_SHA1:-}" ] || [ "${CIRCLE_SHA1}" = "${sha}" ] || die "checked out ${sha}, but the pipeline is for ${CIRCLE_SHA1}"
   rm -rf "${out}"; mkdir -p "${out}"
+  mapfile -t proxy_assets < <(ci/build-proxy.sh --assets)
   # Swarm configs are immutable: a release whose script changed under an old config name would not reach the services.
   ci/config-names.sh > /dev/null || die "a Swarm config of a stack file has a stale name: run ci/config-names.sh --write and commit it"
+  check_runner_pin
   choose_version
   name="machine-runner-swarm-${version#v}"
   build

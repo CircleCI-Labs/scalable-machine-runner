@@ -14,6 +14,10 @@
 #                  node.platform.arch == aarch64 runs only on the arm64 node, one constrained to x86_64 only on the amd64 node, and an
 #                  unconstrained class runs on both. Draining a node leaves the class of its architecture pending ("no suitable node"):
 #                  it never moves to the node of the other architecture
+#   4. other arches CircleCI's manifest has linux ppc64le and s390x too. Under QEMU user mode the distributor script of the stack runs in a stock
+#                  Alpine of each (no Swarm, no jobs): `uname -m` names the architecture, and it installs the runner tarball and the token proxy of
+#                  that architecture (the ELF header says ppc64le and s390x, and the proxy runs under emulation to report its version), with the
+#                  proxy version "unreleased" read from a latest-release answer
 #
 # The emulated engine: QEMU user mode lacks the netlink families and socket options that iptables and nftables need, and it cannot run
 # runc (clone with namespace flags). So the arm64 engine (dockerd, containerd and the Docker CLI, all arm64 under QEMU, which is what
@@ -56,7 +60,7 @@ fi
   skip "a stock arm64 container does not run on this host although the qemu-aarch64 handler exists"
 
 work=$(mktemp -d)
-trap 'docker rm -f -v swarm-test-native-$$ >/dev/null 2>&1 || true; dind_stop_all; rm -rf "$work"' EXIT
+trap 'docker rm -f -v swarm-test-native-$$ smr-x-ppc64le-$$ smr-x-s390x-$$ >/dev/null 2>&1 || true; docker volume rm smr-x-vol-ppc64le-$$ smr-x-vol-s390x-$$ >/dev/null 2>&1 || true; dind_stop_all; rm -rf "$work"' EXIT
 t0=$(date +%s)
 phase_start=$t0
 lap() { # NAME: a RESULT line with the seconds since the last one
@@ -143,17 +147,18 @@ fake_tarball() { # VERSION TAG OUT: the fake runner; the tag makes the tarball o
 # publish KIND VERSION [TAMPERED_ARCH]: both tarballs of VERSION (real: CircleCI's, fake: the stand-in) and a manifest whose "current" is
 # VERSION. A tampered tarball is served with the SHA-256 of the genuine one in the manifest.
 publish() {
-  local kind=$1 v=$2 bad=${3:-} a dir=$work/mirror/$2 tgz
+  local kind=$1 v=$2 bad=${3:-} a dir=$work/mirror/$2 tgz key
+  local -a archs=(amd64 arm64)
+  [[ $kind == real ]] || archs+=(ppc64le s390x) # the stand-in runner is a shell script, which runs on every architecture
   mkdir -p "$dir"
-  for a in amd64 arm64; do
+  for a in "${archs[@]}"; do
     tgz=$dir/circleci-runner_linux_$a.tar.gz
     if [[ $kind == real ]]; then cp "$(ARCH=$a real_tarball "$v")" "$tgz"; else fake_tarball "$v" "built for $a" "$tgz"; fi
     SHA[$v/$a]=$(sha256sum "$tgz" | cut -d' ' -f1)
     [[ $a != "$bad" ]] || fake_tarball "$v" "tampered" "$tgz"
   done
   [[ " ${versions[*]:-} " == *" $v "* ]] || versions+=("$v")
-  : > "$work/shas"
-  for v in "${versions[@]}"; do for a in amd64 arm64; do echo "$v $a ${SHA[$v/$a]}" >> "$work/shas"; done; done
+  for key in "${!SHA[@]}"; do echo "${key%/*} ${key#*/} ${SHA[$key]}"; done > "$work/shas"
   python3 - "$MIRROR_URL" "$2" "$work/shas" "$work/mirror/manifest.json" << 'PY'
 import json, sys
 url, cur, shas, out = sys.argv[1:]
@@ -331,4 +336,46 @@ docker exec "$WRK" test ! -e "$vol/versions/$BAD" || fail "the arm64 node instal
 echo "RESULT test=mixed-arch step=sha256_per_architecture amd64_node=installed($BAD) arm64_node=refused(mismatch) arm64_node_current=$(current "$WRK")"
 lap sha256-mismatch
 
-pass "the distributor installs the runner of each node's own architecture and checks that architecture's SHA-256; classes constrained by node.platform.arch stay on their architecture ($(($(date +%s) - t0))s, the arm64 node emulated by QEMU)"
+# ---------------------------------------------------------------------------------------------
+# 4: ppc64le and s390x: the distributor script alone, in a stock Alpine of that architecture under QEMU user mode
+# ---------------------------------------------------------------------------------------------
+PV=0.0.1-test
+mkdir -p "$work/mirror/proxy/v$PV"
+"$repo_dir/ci/build-proxy.sh" "$work/mirror/proxy/v$PV" "$PV" linux/amd64 linux/arm64 linux/ppc64le linux/s390x > /dev/null
+(cd "$work/mirror/proxy/v$PV" && sha256sum machine-runner-swarm-proxy_* > SHA256SUMS)
+printf '{ "tag_name": "v%s", "draft": false, "prerelease": false }\n' "$PV" > "$work/mirror/proxy/latest.json"
+docker cp "$work/mirror/." "$MGR:/mirror/" > /dev/null
+for a in ppc64le s390x; do
+  if [[ ! -e /proc/sys/fs/binfmt_misc/qemu-$a ]]; then docker run --privileged --rm "$BINFMT_IMAGE" --install "$a" > /dev/null 2>&1 || true; fi
+  if [[ $(docker run --rm --platform "linux/$a" "$DIST_IMAGE" uname -m 2> /dev/null) != "$a" ]]; then
+    [[ ${SWARM_TEST_REQUIRE_EMULATION:-} != 1 ]] || fail "$a emulation is required here and does not work: a stock $a container does not run (binfmt handler qemu-$a)"
+    echo "RESULT test=mixed-arch step=other_arch arch=$a SKIPPED: a stock $a container does not run on this host"
+    continue
+  fi
+  name=smr-x-$a-$$
+  xvol=smr-x-vol-$a-$$
+  docker rm -f "$name" > /dev/null 2>&1 || true
+  docker volume create "$xvol" > /dev/null
+  docker run -d --name "$name" --platform "linux/$a" --network "$net" -v "$stack_dir/runner-distributor.sh:/runner-distributor.sh:ro" -v "$xvol:/opt/machine-runner-swarm" \
+    -e "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL" -e "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$FAKE" \
+    -e MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased -e "MACHINE_RUNNER_SWARM_PROXY_BASE_URL=$MIRROR_URL/proxy" \
+    -e "MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=$MIRROR_URL/proxy/latest.json" "$DIST_IMAGE" sh /runner-distributor.sh > /dev/null
+  x_done() { docker logs "$name" 2>&1 | grep -q '\[ ok \] proxy/current'; }
+  wait_until x_done || { docker logs "$name" 2>&1 | tail -n 8; fail "the distributor did not install the runner and the proxy for $a under emulation"; }
+  xlog=$(docker logs "$name" 2>&1)
+  docker rm -f "$name" > /dev/null
+  xv() { docker run --rm -v "$xvol:/v:ro" "$DIST_IMAGE" "$@"; }
+  [[ $xlog == *"downloading circleci-runner $FAKE linux/$a"* && $xlog == *"downloading the token proxy $PV linux/$a "* ]] || fail "the distributor did not download the $a builds: $xlog"
+  [[ $(xv cat "/v/versions/$FAKE/TARBALL") == "${SHA[$FAKE/$a]}  circleci-runner_linux_$a.tar.gz" ]] || fail "the record of the $a runner does not name its own tarball"
+  psha=$(xv sha256sum /v/proxy/current/bin/machine-runner-swarm-proxy | cut -d' ' -f1)
+  [[ $psha == "$(sha256sum "$work/mirror/proxy/v$PV/machine-runner-swarm-proxy_linux_$a" | cut -d' ' -f1)" ]] || fail "the proxy that the $a distributor installed is not the $a build"
+  hex=$(xv head -c 20 /v/proxy/current/bin/machine-runner-swarm-proxy | od -An -v -tx1 | tr -d ' \n')
+  case $a in ppc64le) want=1500 ;; s390x) want=0016 ;; esac   # e_machine: 0x15 little-endian, 0x16 big-endian
+  [[ ${hex:0:8} == 7f454c46 && ${hex:36:4} == "$want" ]] || fail "the proxy binary installed for $a is not an $a ELF file (machine ${hex:36:4})"
+  [[ $(xv readlink /v/proxy/current) == "versions/$PV" ]] || fail "proxy/current does not point to the release"
+  echo "RESULT test=mixed-arch step=other_arch arch=$a uname_m=$a runner_tarball=circleci-runner_linux_$a proxy_asset=machine-runner-swarm-proxy_linux_$a proxy_elf_machine_bytes=$want proxy_ran_under_qemu=yes unreleased_resolved_to=$PV"
+  docker volume rm "$xvol" > /dev/null
+done
+lap other-arches
+
+pass "the distributor installs the runner of each node's own architecture and checks that architecture's SHA-256; classes constrained by node.platform.arch stay on their architecture; the distributor also installs the runner and the proxy of ppc64le and s390x ($(($(date +%s) - t0))s, the other architectures emulated by QEMU)"

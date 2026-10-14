@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
     Proves the install path on a Windows host: the shipped windows\stack\runners.yaml is deployed with no runner replicas, and
-    its service runner-distributor-windows installs CircleCI's current runner release and portable Git from CircleCI's real
-    manifest and the pinned GitHub downloads. Windows host, Docker in Windows-container mode, Swarm manager. Needs no runner token.
+    its service runner-distributor-windows installs the runner that the stack pins (the newest release that CI tests) and portable Git
+    from CircleCI's real manifest and the pinned GitHub downloads. Windows host, Docker in Windows-container mode, Swarm manager. Needs no runner token.
 
 .DESCRIPTION
     Leaves the stack (default name "runners") deployed, so the volume runners_runner-bin stays filled for the tests that follow
@@ -10,8 +10,8 @@
     exits 0 only when every check passed.
 
       distributor        the service installs both and flips current and git\current (the first download takes minutes)
-      version            the version directory is the release that the manifest names as current (by SHA-256), within major 3
-      record             the SHA-256 recorded for circleci-runner.exe is the file's, and TARBALL is the manifest's hash
+      version            the version directory is the exact pin of the shipped stack file (the default of MACHINE_RUNNER_SWARM_RUNNER_VERSION)
+      record             the SHA-256 recorded for circleci-runner.exe is the file's, and TARBALL is the hash that the manifest lists for that version
       links              current and git\current are relative directory symbolic links to versions\<v> and git\<git version>
       runner             circleci-runner.exe --version runs through the read-only mount of a stock container
       git                git, bash and GNU tar run from C:\Program Files\Git, and a job cannot write to either mount
@@ -74,16 +74,16 @@ $v = (Get-Content C:\v\current\VERSION -TotalCount 1).Trim()
     [Console]::Out.WriteLine(($info -join "`n"))
 
     $manifest = (Invoke-WebRequest -Uri 'https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json' -UseBasicParsing).Content | ConvertFrom-Json
-    $curSha = ([string]$manifest.releases.current.windows.amd64.sha256).ToLowerInvariant()
+    $stackFile = Join-Path (Split-Path -Parent $here) 'stack\runners.yaml'
+    $pin = ([regex]::Match([IO.File]::ReadAllText($stackFile), 'MACHINE_RUNNER_SWARM_RUNNER_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)\}')).Groups[1].Value
     $version = $kv['version']
     $listed = ''
     if ($version -and $manifest.releases.$version) { $listed = ([string]$manifest.releases.$version.windows.amd64.sha256).ToLowerInvariant() }
-    $major3 = $version -match '^3\.'
-    Write-SwarmCheck 'version' ($major3 -and $listed -and $listed -eq $curSha) "installed $version; the manifest's current has SHA-256 $curSha, that version's entry has $listed"
+    Write-SwarmCheck 'version' ($pin -and $version -eq $pin -and $listed) "installed $version; the stack pins $pin; the manifest lists that version with SHA-256 $listed"
     $exeSha = $kv['exe']
     $recordSha = ($kv['record'] -split ' ')[0]
     $tarSha = ($kv['tarball'] -split ' ')[0]
-    Write-SwarmCheck 'record' ($exeSha -and $exeSha -eq $recordSha -and $kv['record'] -match '  bin/circleci-runner\.exe$' -and $tarSha -eq $curSha) "binary $exeSha, record $recordSha, tarball $tarSha"
+    Write-SwarmCheck 'record' ($exeSha -and $exeSha -eq $recordSha -and $kv['record'] -match '  bin/circleci-runner\.exe$' -and $listed -and $tarSha -eq $listed) "binary $exeSha, record $recordSha, tarball $tarSha"
     Write-SwarmCheck 'links' ($kv['curlink'] -eq "SymbolicLink versions\$version" -and $kv['gitlink'] -match '^SymbolicLink [0-9.]+$') "current: $($kv['curlink']); git\current: $($kv['gitlink'])"
 
     $stock = Get-SwarmStockMountArgument -Volume $volume

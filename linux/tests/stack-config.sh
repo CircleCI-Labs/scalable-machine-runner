@@ -204,11 +204,12 @@ check runner-distributor 'the script as a config' '^        target: /runner-dist
 check runner-distributor 'a read-only root file system' '^    read_only: true$'
 check runner-distributor 'a writable runner-bin volume' '^        source: runner-bin$'
 check runner-distributor 'every Linux node' '^          - node.platform.os == linux$'
-check runner-distributor 'to stay off microVM nodes (microvm-runner-distributor serves them, with working DNS)' '^          - node.labels.machine-runner-swarm.microvm != true$'
-check runner-distributor 'the version policy, current by default' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: current$'
+check runner-distributor 'to stay off microVM nodes (a microVM class downloads its own runner, and Docker DNS does not work there)' '^          - node.labels.machine-runner-swarm.microvm != true$'
+check runner-distributor 'the version policy: an exact pin by default' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: [0-9]+\.[0-9]+\.[0-9]+$'
 check runner-distributor 'the major version it follows' '^      MACHINE_RUNNER_SWARM_RUNNER_MAJOR: "3"$'
 check runner-distributor 'the check interval' '^      MACHINE_RUNNER_SWARM_CHECK_INTERVAL: 24h$'
 check runner-distributor 'the proxy version: unreleased in a checkout, which ci/release.sh pins' '^      MACHINE_RUNNER_SWARM_PROXY_VERSION: unreleased$'
+check runner-distributor 'the latest-release URL that unreleased resolves with (GitHub API)' '^      MACHINE_RUNNER_SWARM_PROXY_LATEST_URL: https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest$'
 check runner-distributor 'the proxy download URL (GitHub releases)' '^      MACHINE_RUNNER_SWARM_PROXY_BASE_URL: https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download$'
 check runner-distributor 'the CircleCI download URL' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://circleci-binary-releases.s3.amazonaws.com/circleci-runner$'
 check runner-distributor 'cap_drop ALL' '^      - ALL$'
@@ -221,11 +222,11 @@ if grep -q 'docker-build != true' <<< "$block"; then
   problems=$((problems + 1))
 fi
 # the version policy can be set at deploy time, and the variables reach the distributor only
-cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_CHECK_INTERVAL=1h \
+cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_CHECK_INTERVAL=1h \
   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc \
   MACHINE_RUNNER_SWARM_PROXY_VERSION=0.3.0 MACHINE_RUNNER_SWARM_PROXY_SHA256=def docker stack config -c "$dir/runners.yaml")
 block=$(service_block runner-distributor)
-check runner-distributor 'a pinned version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: 3.1.12$'
+check runner-distributor 'a floating version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: "3.1"$'
 check runner-distributor 'the mirror from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://mirror.example.com/circleci-runner$'
 check runner-distributor 'the explicit SHA-256 from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_SHA256: abc$'
 check runner-distributor 'the proxy version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_PROXY_VERSION: 0.3.0$'

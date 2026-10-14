@@ -154,12 +154,13 @@ services:
     read_only: true
     hostname: "{{.Node.Hostname}}-runner-distributor"
     environment:
-      MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-current}
+      MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-3.1.13}
       MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}
       MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}
       MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: ${MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL:-https://circleci-binary-releases.s3.amazonaws.com/circleci-runner}
       MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}
       MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}
+      MACHINE_RUNNER_SWARM_PROXY_LATEST_URL: ${MACHINE_RUNNER_SWARM_PROXY_LATEST_URL:-https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest}
       MACHINE_RUNNER_SWARM_PROXY_BASE_URL: ${MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download}
       MACHINE_RUNNER_SWARM_PROXY_SHA256: ${MACHINE_RUNNER_SWARM_PROXY_SHA256:-}
     configs:
@@ -253,7 +254,7 @@ secrets:
 configs:
   # As in runners.yaml (ci/config-names.sh keeps the names in step with the files), so that this file also loads alone.
   entrypoint: {name: machine-runner-swarm-entrypoint-0770da4384e6, file: circleci-runner-entrypoint}
-  distributor: {name: machine-runner-swarm-distributor-4bfae6c3b3b4, file: runner-distributor.sh}
+  distributor: {name: machine-runner-swarm-distributor-ae56edce0770, file: runner-distributor.sh}
   microvm-corefile: {external: true}
 
 volumes:

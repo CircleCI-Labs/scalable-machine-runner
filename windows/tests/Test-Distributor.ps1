@@ -8,12 +8,14 @@
 .DESCRIPTION
     Prints "CHECK <name> PASS|FAIL <detail>" lines and a RESULT line; exits 0 only when every check passed.
 
-      pin             a pinned version is downloaded, verified and flipped to: current is a relative symbolic link to versions\<v>
+      pin             an exact version is downloaded, verified and flipped to: current is a relative symbolic link to versions\<v>
       record          the binary SHA-256 is recorded next to the binary (sha256sum -c style), with the tarball hash and VERSION
       auto            version "current" resolves the version by the SHA-256 of the manifest's current entry, and follows it
       major           a current of another major version is not adopted: nothing is downloaded, current stays
       rollback        an installed version is switched to without the network (the mirror is gone)
       mismatch        a wrong SHA-256 installs nothing and flips nothing (exit 1); a list that holds the right one installs
+      floating        3.1 follows the newest 3.1.x and 3 the newest 3.x.y of the manifest, and never another major version
+      arm64           with -Architecture arm64 the arm64 tarball and the arm64 build of the manifest are used, and the record names the file
       prune           only the last 3 versions that were active stay, never the active one
       tamper          a changed binary is replaced by a verified copy at the next check
       running-job     a container that runs version A keeps A when current moves to B (it mounted the link when it started), the
@@ -21,7 +23,8 @@
                       a later check, when the container has ended
       proxy-*         the token proxy: installed from the release files of a mirror (SHA256SUMS next to the binary) with its record, a wrong line or
                       a hash that MACHINE_RUNNER_SWARM_PROXY_SHA256 does not allow installs nothing and the runner stays, only the last 2
-                      active versions stay, a changed binary is replaced, "unreleased" installs none
+                      active versions stay, a changed binary is replaced, "unreleased" installs the latest published release (the tag
+                      of the latest-release URL), and with no release published it says so, installs none and keeps the runner
       bad-setting     an invalid MACHINE_RUNNER_SWARM_RUNNER_VERSION exits 1 at once
 
 .EXAMPLE
@@ -64,6 +67,7 @@ function Publish-Release {
     $tgz = Join-Path $dir 'circleci-runner_windows_amd64.tar.gz'
     $null = & "$env:SystemRoot\System32\tar.exe" -czf $tgz -C $stage 'circleci-runner.exe'
     if ($LASTEXITCODE -ne 0) { throw "tar failed for $Version" }
+    Copy-Item -LiteralPath $tgz -Destination (Join-Path $dir 'circleci-runner_windows_arm64.tar.gz')   # the same bytes under the arm64 name: only the names are tested
     $published[$Version] = (Get-FileHash -LiteralPath $tgz -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $publishedProxy = @{}   # version -> SHA-256 of the fake proxy binary
@@ -77,18 +81,29 @@ function Publish-Proxy {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $asset = Join-Path $dir 'machine-runner-swarm-proxy_windows_amd64'
     Copy-Item -LiteralPath (Join-Path $stage 'machine-runner-swarm-proxy.exe') -Destination $asset
+    Copy-Item -LiteralPath $asset -Destination (Join-Path $dir 'machine-runner-swarm-proxy_windows_arm64')   # the same bytes under the arm64 name
     $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
     $line = $hash
     if ($WrongLine) { $line = '2' * 64 }
-    [IO.File]::WriteAllText((Join-Path $dir 'SHA256SUMS'), "$zeros  machine-runner-swarm-proxy_linux_amd64`n$line  machine-runner-swarm-proxy_windows_amd64`n$zeros  machine-runner-swarm-proxy_windows_arm64`n")
+    [IO.File]::WriteAllText((Join-Path $dir 'SHA256SUMS'), "$zeros  machine-runner-swarm-proxy_linux_amd64`n$line  machine-runner-swarm-proxy_windows_amd64`n$line  machine-runner-swarm-proxy_windows_arm64`n")
+    # what the latest-release URL of GitHub answers while this is the newest release (the test points at it with file://)
+    [IO.File]::WriteAllText((Join-Path $dir 'latest.json'), "{ `"tag_name`": `"v$Version`", `"draft`": false, `"prerelease`": false }`n")
     $publishedProxy[$Version] = $hash
 }
 function Write-Manifest {
     # current (and edge) name the tarball of $Current, as CircleCI's manifest does: by the SHA-256 that a versioned entry has too
     param([string] $Current)
     $releases = [ordered]@{}
-    foreach ($v in @($published.Keys | Sort-Object)) { $releases[$v] = @{ windows = @{ amd64 = @{ sha256 = $published[$v]; url = "file:///C:/mirror/$v/circleci-runner_windows_amd64.tar.gz" } } } }
-    $releases['current'] = @{ windows = @{ amd64 = @{ sha256 = $published[$Current]; url = "file:///C:/mirror/$Current/circleci-runner_windows_amd64.tar.gz" } } }
+    foreach ($v in @($published.Keys | Sort-Object)) {
+        $releases[$v] = @{ windows = @{
+                amd64 = @{ sha256 = $published[$v]; url = "file:///C:/mirror/$v/circleci-runner_windows_amd64.tar.gz" }
+                arm64 = @{ sha256 = $published[$v]; url = "file:///C:/mirror/$v/circleci-runner_windows_arm64.tar.gz" }
+            } }
+    }
+    $releases['current'] = @{ windows = @{
+            amd64 = @{ sha256 = $published[$Current]; url = "file:///C:/mirror/$Current/circleci-runner_windows_amd64.tar.gz" }
+            arm64 = @{ sha256 = $published[$Current]; url = "file:///C:/mirror/$Current/circleci-runner_windows_arm64.tar.gz" }
+        } }
     $releases['edge'] = $releases['current']
     [IO.File]::WriteAllText((Join-Path $mirror 'manifest.json'), (@{ releases = $releases } | ConvertTo-Json -Depth 8))
 }
@@ -96,12 +111,12 @@ function Write-Manifest {
 # --- one check of the distributor, in a container like the service's ----------------------------------------------------------
 $script:log = ''
 function Invoke-Distributor {
-    param([string[]] $Environment = @(), [string] $BaseUrl = 'file:///C:/mirror')
+    param([string[]] $Environment = @(), [string] $BaseUrl = 'file:///C:/mirror', [string[]] $ScriptArgument = @())
     $envArgs = @('--env', "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$BaseUrl")
     foreach ($e in $Environment) { $envArgs += @('--env', $e) }
     $r = Invoke-Docker (@('run', '--rm') + $iso + @('--mount', "type=volume,source=$volume,target=C:\runner-bin",
             '--mount', "type=bind,source=$stackDir,target=C:\dist,readonly", '--mount', "type=bind,source=$mirror,target=C:\mirror,readonly") + $envArgs +
-        @('--entrypoint', 'powershell.exe', $Image, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\dist\runner-distributor.ps1', '-Once', '-NoGit'))
+        @('--entrypoint', 'powershell.exe', $Image, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\dist\runner-distributor.ps1', '-Once', '-NoGit') + $ScriptArgument)
     $script:log = $r.Output -join "`n"
     [Console]::Out.WriteLine(($r.Output | ForEach-Object { "    | $_" }) -join "`n")
     return $r.ExitCode
@@ -201,6 +216,21 @@ try {
     $kv = Read-Volume
     Write-SwarmCheck 'running-job-removed-later' ($kv['versions'] -notmatch '3\.2\.0') "after the container ended: $($kv['versions'])"
 
+    # --- floating: 3.1 and 3 follow their line of the manifest, and never another major version ------------------------------------
+    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1')
+    $kv = Read-Volume
+    Write-SwarmCheck 'floating-minor' ($rc -eq 0 -and $kv['version'] -eq '3.1.0' -and $kv['current'] -eq 'SymbolicLink versions\3.1.0') "3.1 is the newest 3.1.x: exit $rc; version: $($kv['version'])"
+    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3')
+    $kv = Read-Volume
+    Write-SwarmCheck 'floating-major' ($rc -eq 0 -and $kv['version'] -eq '3.4.0' -and $script:log -notmatch 'downloading circleci-runner 4\.0\.0') "3 is the newest 3.x.y and no 4.x: exit $rc; version: $($kv['version'])"
+    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=5')
+    Write-SwarmCheck 'floating-none' ($rc -eq 1 -and $script:log -match 'no windows/amd64 release in 5\.x') "a line that the manifest does not have installs nothing: exit $rc"
+
+    # --- arm64: the file names and the manifest entry of the other architecture --------------------------------------------------
+    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=4.0.0') -ScriptArgument @('-Architecture', 'arm64')
+    $kv = Read-Volume
+    Write-SwarmCheck 'arm64' ($rc -eq 0 -and $script:log -match 'downloading circleci-runner 4\.0\.0 windows/arm64' -and $kv['tarball'] -match '  circleci-runner_windows_arm64\.tar\.gz$' -and $kv['version'] -eq '4.0.0') "exit $rc; record of the tarball: $($kv['tarball'])"
+
     # --- the token proxy: installed next to the runner, from the release files of a mirror -----------------------------------------
     foreach ($v in '0.0.1', '0.0.2', '0.0.3') { Publish-Proxy -Version $v }
     Publish-Proxy -Version '0.0.4' -WrongLine
@@ -248,15 +278,28 @@ if (Test-Path $cur\bin\machine-runner-swarm-proxy.exe) {
     $rc = Invoke-ProxyDistributor '0.0.3'
     $kv = Read-ProxyVolume
     Write-SwarmCheck 'proxy-tamper' ($rc -eq 0 -and $kv['pexe'] -eq $publishedProxy['0.0.3'] -and $kv['precord'] -match "^$($publishedProxy['0.0.3'])  bin/") "a changed binary is replaced by the verified one: exit $rc; binary $($kv['pexe'])"
-    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', 'MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased', 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/nowhere')
+    # "unreleased" (a checkout) is the latest published release: its tag comes from the latest-release URL
+    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', 'MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased', 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/mirror/proxy',
+        'MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=file:///C:/mirror/proxy/v0.0.3/latest.json')
     $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-unreleased' ($rc -eq 0 -and $kv['pcurrent'] -eq 'SymbolicLink versions\0.0.3') "unreleased installs and changes nothing: exit $rc; proxy current: $($kv['pcurrent'])"
+    Write-SwarmCheck 'proxy-unreleased' ($rc -eq 0 -and $script:log -match 'token proxy 0\.0\.3 is installed already' -and $kv['pcurrent'] -eq 'SymbolicLink versions\0.0.3') "unreleased is the latest published release, 0.0.3: exit $rc; proxy current: $($kv['pcurrent'])"
+    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', 'MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased', 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/mirror/proxy',
+        'MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=file:///C:/nowhere/latest.json')
+    $kv = Read-ProxyVolume
+    Write-SwarmCheck 'proxy-unreleased-none' ($rc -eq 1 -and $script:log -match 'unreleased \(a checkout of this repository\), which means its latest published release' -and $script:log -match 'published no release yet' -and $kv['pcurrent'] -eq 'SymbolicLink versions\0.0.3' -and $kv['runner'] -eq '3.4.0') "no release published: the message says so, nothing is installed and the runner stays: exit $rc; proxy current: $($kv['pcurrent']); runner: $($kv['runner'])"
+    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', 'MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased', 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/mirror/proxy',
+        'MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=file:///C:/mirror/manifest.json')
+    Write-SwarmCheck 'proxy-unreleased-bad-answer' ($rc -eq 1 -and $script:log -match 'names no release tag') "an answer without a release tag installs nothing: exit $rc"
+    # the proxy of the arm64 build is its own asset, and a release that has it installs the same way
+    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', 'MACHINE_RUNNER_SWARM_PROXY_VERSION=0.0.1', 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/mirror/proxy') -ScriptArgument @('-Architecture', 'arm64')
+    $kv = Read-ProxyVolume
+    Write-SwarmCheck 'proxy-arm64' ($rc -eq 0 -and $script:log -match 'token proxy 0\.0\.1 windows/arm64' -and $kv['pversions'] -match '0\.0\.1') "the arm64 asset installs: exit $rc; proxy versions: $($kv['pversions'])"
     $rc = Invoke-ProxyDistributor 'latest'
     Write-SwarmCheck 'proxy-bad-setting' ($rc -eq 1 -and $script:log -match 'MACHINE_RUNNER_SWARM_PROXY_VERSION must be a release') "exit $rc"
 
     # --- bad-setting -----------------------------------------------------------------------------------------------------------
     $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=latest')
-    Write-SwarmCheck 'bad-setting' ($rc -eq 1 -and $script:log -match 'must be current or a version') "exit $rc"
+    Write-SwarmCheck 'bad-setting' ($rc -eq 1 -and $script:log -match 'must be an exact version such as 3\.1\.13, or 3\.1, 3 or current') "exit $rc"
 } finally {
     $null = Invoke-Docker @('rm', '--force', "swarm-dist-job-$PID")
     $null = Invoke-Docker @('volume', 'rm', '--force', $volume)

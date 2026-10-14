@@ -12,7 +12,7 @@
 
       versions\<version>\bin\circleci-runner.exe
       versions\<version>\SHA256      "<sha256>  bin/circleci-runner.exe" (sha256sum -c), computed after the extraction
-      versions\<version>\TARBALL     "<sha256>  circleci-runner_windows_amd64.tar.gz", the verified download
+      versions\<version>\TARBALL     "<sha256>  circleci-runner_windows_<arch>.tar.gz", the verified download
       versions\<version>\VERSION
       current                        a relative directory symbolic link to versions\<version>
       history                        "<UTC time> <directory>" for every flip of current
@@ -22,19 +22,28 @@
       proxy\current                 a relative directory symbolic link to versions\<version>, mounted by the token-proxy-windows service;
                                     the last 2 versions that were active stay
 
+    <arch> is amd64 or arm64, from PROCESSOR_ARCHITECTURE (AMD64 or ARM64): the architectures of CircleCI's manifest for Windows.
+
     The service sets (and the runner services carry none of it, so an upgrade restarts this service only):
-      MACHINE_RUNNER_SWARM_RUNNER_VERSION     current (default: CircleCI's manifest) or X.Y.Z (pinned)
+      MACHINE_RUNNER_SWARM_RUNNER_VERSION     what to run. An exact version such as 3.1.13 is a pin and never changes by itself (the default of
+                                              the stack file: the newest version that this repository's CI tests). A floating value is
+                                              resolved from CircleCI's manifest and looked at again every check interval: 3.1 (the newest
+                                              3.1.x), 3 (the newest 3.x.y) or current (CircleCI's current)
       MACHINE_RUNNER_SWARM_RUNNER_MAJOR       the major version that current may adopt (default 3)
-      MACHINE_RUNNER_SWARM_CHECK_INTERVAL     how often to look again (default 24h; seconds, or a number with s, m, h or d)
-      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL  where manifest.json and <version>/circleci-runner_windows_amd64.tar.gz live
+      MACHINE_RUNNER_SWARM_CHECK_INTERVAL     how often to look again (default 24h; seconds, or a number with s, m, h or d). A floating version
+                                              asks the manifest again; an exact pin only verifies its installed copy
+      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL  where manifest.json and <version>/circleci-runner_windows_<arch>.tar.gz live
       MACHINE_RUNNER_SWARM_RUNNER_SHA256      optional: the tarball SHA-256 values that may be installed, separated by commas,
                                               instead of the hash of the manifest
-      MACHINE_RUNNER_SWARM_TOOLS_BASE_URL     optional: a directory with PortableGit-<version>-64-bit.7z.exe and 7zr.exe
+      MACHINE_RUNNER_SWARM_TOOLS_BASE_URL     optional: a directory with PortableGit-<version>-64-bit.7z.exe (arm64: -arm64.7z.exe) and 7zr.exe
                                               (default: their GitHub release downloads)
-      MACHINE_RUNNER_SWARM_PROXY_VERSION      the token proxy of the release v<version> of this repository; unreleased (a checkout) or
-                                              empty: no proxy is installed. ci/release.sh pins the default of the stack file
-      MACHINE_RUNNER_SWARM_PROXY_BASE_URL     where v<version>/machine-runner-swarm-proxy_windows_amd64 and v<version>/SHA256SUMS live
+      MACHINE_RUNNER_SWARM_PROXY_VERSION      the token proxy of the release v<version> of this repository. unreleased (the default of a
+                                              checkout; ci/release.sh pins the default of a release bundle) means the latest published release
+                                              of this repository, looked at again every check interval. Empty: no proxy is installed
+      MACHINE_RUNNER_SWARM_PROXY_BASE_URL     where v<version>/machine-runner-swarm-proxy_windows_<arch> and v<version>/SHA256SUMS live
                                               (default: the GitHub releases of this repository)
+      MACHINE_RUNNER_SWARM_PROXY_LATEST_URL   what unreleased asks for the latest release: JSON with its "tag_name" (default: the GitHub
+                                              API of this repository, releases/latest)
       MACHINE_RUNNER_SWARM_PROXY_SHA256       optional: the proxy binary SHA-256 values that may be installed, separated by commas
       HTTPS_PROXY                             optional: a proxy for every download
 
@@ -54,31 +63,60 @@
 
 .PARAMETER NoGit
     Leave portable Git alone (a check of the runner only). Tests use it; the service never does.
+
+.PARAMETER Architecture
+    amd64 or arm64: the architecture to install for. The service never sets it: it comes from PROCESSOR_ARCHITECTURE. Tests use it,
+    to check the arm64 file names on an amd64 host.
 #>
 [CmdletBinding()]
 param(
     [string] $Root = 'C:\runner-bin',
     [switch] $Once,
-    [switch] $NoGit
+    [switch] $NoGit,
+    [ValidateSet('', 'amd64', 'arm64')] [string] $Architecture = ''
 )
 
 # Pinned here, so a change is a new Swarm config and restarts this service only. 7zr.exe unpacks the self-extracting archive
 # without a GUI. PortableGit has bash, sh, tar, gzip and ssh; MinGit has no tar, gzip or bash.exe.
+$script:GitByArch = @{
+    amd64 = @{ Asset = 'PortableGit-2.56.0.2-64-bit.7z.exe'; Sha256 = '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b' }
+    arm64 = @{ Asset = 'PortableGit-2.56.0.2-arm64.7z.exe'; Sha256 = '0f21e681bd33e006e0348dfa1a2be6769efd77e3bfdb247320314facde23a46c' }
+}
 $script:Git = @{
     Version         = '2.56.0.2'
     ReleaseTag      = 'v2.56.0.windows.2'
-    Sha256          = '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b'
     SevenZipVersion = '26.04'
     SevenZipSha256  = '256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282'
 }
-$script:Tarball = 'circleci-runner_windows_amd64.tar.gz'
-$script:ProxyAsset = 'machine-runner-swarm-proxy_windows_amd64'
 $script:ProxyExe = 'machine-runner-swarm-proxy.exe'
 $script:ProxyKeep = 2   # proxy versions to keep: the last ones that were active
 $script:Keep = 3        # runner versions to keep: the last ones that were active
 $script:RetrySeconds = 300
 
 function Write-DistributorLog([string] $Message) { [Console]::Out.WriteLine("runner-distributor: $Message") }
+
+function Get-RunnerArchitecture {
+    # The architecture of CircleCI's manifest for this host: amd64 or arm64 (a 32-bit PowerShell on 64-bit Windows reports the host in
+    # PROCESSOR_ARCHITEW6432).
+    $arch = "$env:PROCESSOR_ARCHITEW6432"
+    if (-not $arch) { $arch = "$env:PROCESSOR_ARCHITECTURE" }
+    switch ($arch) {
+        'AMD64' { return 'amd64' }
+        'ARM64' { return 'arm64' }
+        default { throw "unsupported architecture '$arch': AMD64 and ARM64 only" }
+    }
+}
+
+function Initialize-Architecture {
+    # The file names that depend on the architecture: the runner tarball, the proxy binary of the release, portable Git.
+    param([ValidateSet('amd64', 'arm64')] [string] $Arch)
+    $script:Arch = $Arch
+    $script:Tarball = "circleci-runner_windows_$Arch.tar.gz"
+    $script:ProxyAsset = "machine-runner-swarm-proxy_windows_$Arch"
+    $script:GitAsset = $script:GitByArch[$Arch].Asset
+    $script:GitSha256 = $script:GitByArch[$Arch].Sha256
+}
+Initialize-Architecture 'amd64'
 
 function ConvertTo-Second {
     # "86400", "90s", "30m", "24h", "1d" -> seconds
@@ -94,11 +132,14 @@ function ConvertTo-Second {
 
 function Get-DistributorSetting {
     # The environment of the service, checked. Throws on a value that cannot work, so the service fails visibly.
+    # exact (a pin), minor (3.1: the newest 3.1.x), major (3: the newest 3.x.y) or current
     $want = "$env:MACHINE_RUNNER_SWARM_RUNNER_VERSION"
-    if (-not $want) { $want = 'current' }
-    if ($want -ne 'current' -and $want -notmatch '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z._-]*$') {
-        throw "MACHINE_RUNNER_SWARM_RUNNER_VERSION must be current or a version such as 3.1.12, got '$want'"
-    }
+    if (-not $want) { throw 'MACHINE_RUNNER_SWARM_RUNNER_VERSION is empty: set an exact version such as 3.1.13, or a floating one (3.1, 3, current)' }
+    if ($want -eq 'current') { $kind = 'current' }
+    elseif ($want -match '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z._-]*$') { $kind = 'exact' }
+    elseif ($want -match '^[0-9]+\.[0-9]+$') { $kind = 'minor' }
+    elseif ($want -match '^[0-9]+$') { $kind = 'major' }
+    else { throw "MACHINE_RUNNER_SWARM_RUNNER_VERSION must be an exact version such as 3.1.13, or 3.1, 3 or current, got '$want'" }
     $major = "$env:MACHINE_RUNNER_SWARM_RUNNER_MAJOR"
     if (-not $major) { $major = '3' }
     if ($major -notmatch '^[0-9]+$') { throw "MACHINE_RUNNER_SWARM_RUNNER_MAJOR must be a number, got '$major'" }
@@ -113,18 +154,20 @@ function Get-DistributorSetting {
     }
     $tools = "$env:MACHINE_RUNNER_SWARM_TOOLS_BASE_URL"
     $proxyVersion = "$env:MACHINE_RUNNER_SWARM_PROXY_VERSION"
-    if ($proxyVersion -eq 'unreleased') { $proxyVersion = '' }
-    if ($proxyVersion -and $proxyVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z._-]*$') {
+    if ($proxyVersion -and $proxyVersion -ne 'unreleased' -and $proxyVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z._-]*$') {
         throw "MACHINE_RUNNER_SWARM_PROXY_VERSION must be a release such as 0.3.0, got '$proxyVersion'"
     }
     $proxyBase = "$env:MACHINE_RUNNER_SWARM_PROXY_BASE_URL"
     if (-not $proxyBase) { $proxyBase = 'https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download' }
+    $proxyLatest = "$env:MACHINE_RUNNER_SWARM_PROXY_LATEST_URL"
+    if (-not $proxyLatest) { $proxyLatest = 'https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest' }
     $proxyHashes = @("$env:MACHINE_RUNNER_SWARM_PROXY_SHA256" -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
     foreach ($h in $proxyHashes) {
         if ($h -notmatch '^[0-9a-f]{64}$') { throw "MACHINE_RUNNER_SWARM_PROXY_SHA256 holds a value that is not a SHA-256: $h" }
     }
     return @{
         Want     = $want
+        Kind     = $kind
         Major    = $major
         Interval = $seconds
         Retry    = [Math]::Min($script:RetrySeconds, $seconds)
@@ -133,6 +176,7 @@ function Get-DistributorSetting {
         Tools    = $tools.TrimEnd('/')
         ProxyVersion = $proxyVersion
         ProxyBase    = $proxyBase.TrimEnd('/')
+        ProxyLatest  = $proxyLatest
         ProxyHashes  = $proxyHashes
     }
 }
@@ -279,7 +323,7 @@ function Install-Runner {
     Invoke-TreeRemoval $tmp
     New-Item -ItemType Directory -Force -Path $versions, (Join-Path $tmp 'bin') | Out-Null
     $tgz = Join-Path $tmp $script:Tarball
-    Write-DistributorLog "downloading circleci-runner $Version windows/amd64"
+    Write-DistributorLog "downloading circleci-runner $Version windows/$($script:Arch)"
     if (-not (Save-Url "$Base/$Version/$($script:Tarball)" $tgz)) { Invoke-TreeRemoval $tmp; return $null }
     $got = Get-Sha256 $tgz
     if (@($Accept) -notcontains $got) {
@@ -310,10 +354,12 @@ function Install-Runner {
 }
 
 function Get-ManifestSha256 {
-    # The SHA-256 that the manifest lists for the windows/amd64 tarball of Release (a version, current or edge), or ''.
+    # The SHA-256 that the manifest lists for the windows tarball of this architecture of Release (a version, current or edge), or ''.
     param($Manifest, [string] $Release)
     $entry = $Manifest.releases.$Release
-    if ($entry -and $entry.windows -and $entry.windows.amd64 -and $entry.windows.amd64.sha256) { return ([string]$entry.windows.amd64.sha256).ToLowerInvariant() }
+    $build = $null
+    if ($entry -and $entry.windows) { $build = $entry.windows.($script:Arch) }
+    if ($build -and $build.sha256) { return ([string]$build.sha256).ToLowerInvariant() }
     return ''
 }
 
@@ -321,22 +367,34 @@ function Resolve-Runner {
     # @{ Version; Accept } to install, @{ Version = '' } when current is a major version that is not followed, or $null.
     param($Setting)
     $accept = @($Setting.Hashes)
-    if ($Setting.Want -ne 'current') {
+    if ($Setting.Kind -eq 'exact') {
         if ($accept.Count -gt 0) { return @{ Version = $Setting.Want; Accept = $accept } }
-        # Installed and verified already: no manifest needed, so a rollback works offline.
+        # A pin that is installed and verified needs no manifest, so a rollback works offline.
         if (Find-Runner -Version $Setting.Want) { return @{ Version = $Setting.Want; Accept = @() } }
     }
     $file = Join-Path $env:TEMP "runner-distributor-manifest-$PID.json"
     if (-not (Save-Url "$($Setting.Base)/manifest.json" $file)) { return $null }
     try { $manifest = [IO.File]::ReadAllText($file) | ConvertFrom-Json } catch { Write-DistributorLog "manifest.json is not JSON: $($_.Exception.Message)"; return $null }
     finally { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
-    if ($Setting.Want -ne 'current') {
-        $sha = Get-ManifestSha256 $manifest $Setting.Want
-        if (-not $sha) { Write-DistributorLog "the manifest has no windows/amd64 build for $($Setting.Want)"; return $null }
-        return @{ Version = $Setting.Want; Accept = @($sha) }
+    $arch = $script:Arch
+    switch ($Setting.Kind) {
+        'exact' {
+            $sha = Get-ManifestSha256 $manifest $Setting.Want
+            if (-not $sha) { Write-DistributorLog "the manifest has no windows/$arch build for $($Setting.Want)"; return $null }
+            return @{ Version = $Setting.Want; Accept = @($sha) }
+        }
+        { $_ -in 'minor', 'major' } {
+            # the newest release of a line: 3.1 is the newest 3.1.x, 3 the newest 3.x.y
+            $line = '^' + [regex]::Escape($Setting.Want) + $(if ($Setting.Kind -eq 'minor') { '\.[0-9]+$' } else { '\.[0-9]+\.[0-9]+$' })
+            $newest = @($manifest.releases.PSObject.Properties | Where-Object { $_.Name -match $line -and (Get-ManifestSha256 $manifest $_.Name) } |
+                    ForEach-Object { $_.Name } | Sort-Object { [version]$_ } | Select-Object -Last 1)
+            if ($newest.Count -eq 0) { Write-DistributorLog "the manifest has no windows/$arch release in $($Setting.Want).x"; return $null }
+            if ($accept.Count -eq 0) { $accept = @(Get-ManifestSha256 $manifest $newest[0]) }
+            return @{ Version = $newest[0]; Accept = $accept }
+        }
     }
     $cur = Get-ManifestSha256 $manifest 'current'
-    if (-not $cur) { Write-DistributorLog 'the manifest has no windows/amd64 build for current'; return $null }
+    if (-not $cur) { Write-DistributorLog "the manifest has no windows/$arch build for current"; return $null }
     $version = @($manifest.releases.PSObject.Properties | Where-Object { $_.Name -match '^[0-9]+\.[0-9]+\.[0-9]+$' -and (Get-ManifestSha256 $manifest $_.Name) -eq $cur } |
             ForEach-Object { $_.Name } | Sort-Object { [version]$_ } | Select-Object -Last 1)
     if ($version.Count -eq 0) { Write-DistributorLog "current has SHA-256 $cur, which no versioned release of the manifest has: not adopting it"; return $null }
@@ -372,7 +430,7 @@ function Switch-Runner {
     if (Test-Path -LiteralPath $history) { $lines = @(Get-Content -LiteralPath $history) }
     $lines += "$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')) $Name"
     Write-Ascii $history @($lines | Select-Object -Last 200)
-    Write-DistributorLog "[ ok ] current -> versions\${Name}: circleci-runner $([IO.File]::ReadAllText((Join-Path $script:Root "versions\$Name\VERSION")).Trim()) windows/amd64"
+    Write-DistributorLog "[ ok ] current -> versions\${Name}: circleci-runner $([IO.File]::ReadAllText((Join-Path $script:Root "versions\$Name\VERSION")).Trim()) windows/$($script:Arch)"
 }
 
 function Invoke-RunnerPruning {
@@ -396,7 +454,7 @@ function Test-GitDirectory {
     param([string] $Dir)
     $record = Join-Path $Dir 'PORTABLEGIT'
     if (-not (Test-Path -LiteralPath $record -PathType Leaf)) { return $false }
-    if (([IO.File]::ReadAllText($record).Trim() -split ' ')[0] -ne $script:Git.Sha256) { return $false }
+    if (([IO.File]::ReadAllText($record).Trim() -split ' ')[0] -ne $script:GitSha256) { return $false }
     foreach ($f in 'usr\bin\bash.exe', 'usr\bin\sh.exe', 'usr\bin\tar.exe', 'usr\bin\gzip.exe', 'usr\bin\ssh.exe', 'cmd\git.exe') {
         if (-not (Test-Path -LiteralPath (Join-Path $Dir $f) -PathType Leaf)) { return $false }
     }
@@ -411,14 +469,14 @@ function Install-Git {
     $tmp = Join-Path $script:Root ".tmp-git-$PID"
     Invoke-TreeRemoval $tmp
     New-Item -ItemType Directory -Force -Path $gitRoot, $tmp | Out-Null
-    $sfxName = "PortableGit-$($script:Git.Version)-64-bit.7z.exe"
+    $sfxName = $script:GitAsset
     $sevenZipUrl = "https://github.com/ip7z/7zip/releases/download/$($script:Git.SevenZipVersion)/7zr.exe"
     $sfxUrl = "https://github.com/git-for-windows/git/releases/download/$($script:Git.ReleaseTag)/$sfxName"
     if ($Tools) { $sevenZipUrl = "$Tools/7zr.exe"; $sfxUrl = "$Tools/$sfxName" }
     $sevenZip = Join-Path $tmp '7zr.exe'
     $sfx = Join-Path $tmp $sfxName
     Write-DistributorLog "downloading portable Git $($script:Git.Version)"
-    foreach ($d in @(@($sevenZipUrl, $sevenZip, $script:Git.SevenZipSha256), @($sfxUrl, $sfx, $script:Git.Sha256))) {
+    foreach ($d in @(@($sevenZipUrl, $sevenZip, $script:Git.SevenZipSha256), @($sfxUrl, $sfx, $script:GitSha256))) {
         if (-not (Save-Url $d[0] $d[1])) { Invoke-TreeRemoval $tmp; return $null }
         $got = Get-Sha256 $d[1]
         if ($got -ne $d[2]) { Write-DistributorLog "SHA-256 mismatch for $($d[0]): got $got, wanted $($d[2]): refusing to install"; Invoke-TreeRemoval $tmp; return $null }
@@ -436,7 +494,7 @@ function Install-Git {
         if ($r.ExitCode -ne 0) { Write-DistributorLog "Git post-install exited $($r.ExitCode); the checks below decide" }
         Remove-Item -LiteralPath $post -Force -ErrorAction SilentlyContinue
     }
-    Write-Ascii (Join-Path $dir 'PORTABLEGIT') "$($script:Git.Sha256)  $sfxName"
+    Write-Ascii (Join-Path $dir 'PORTABLEGIT') "$($script:GitSha256)  $sfxName"
     $git = Invoke-Native (Join-Path $dir 'cmd\git.exe') @('--version')
     $bash = Invoke-Native (Join-Path $dir 'usr\bin\bash.exe') @('-c', 'echo bash-ok')
     if (-not (Test-GitDirectory $dir) -or $git.ExitCode -ne 0 -or ($bash.Output -join ' ') -notmatch 'bash-ok') {
@@ -506,7 +564,7 @@ function Install-Proxy {
     $tmp = Join-Path $script:Root ".tmp-proxy-$PID"
     Invoke-TreeRemoval $tmp
     New-Item -ItemType Directory -Force -Path $versions, (Join-Path $tmp 'bin') | Out-Null
-    Write-DistributorLog "downloading the token proxy $Version windows/amd64 from $Base/v$Version"
+    Write-DistributorLog "downloading the token proxy $Version windows/$($script:Arch) from $Base/v$Version"
     $sums = Join-Path $tmp 'SHA256SUMS'
     if (-not (Save-Url "$Base/v$Version/SHA256SUMS" $sums)) { Invoke-TreeRemoval $tmp; return $null }
     $want = ''
@@ -541,16 +599,38 @@ function Install-Proxy {
     return $name
 }
 
+function Get-LatestProxyVersion {
+    # The version of the latest published release of this repository (what unreleased means), from the JSON that Url returns, or $null.
+    param([string] $Url)
+    $file = Join-Path $env:TEMP "runner-distributor-latest-$PID.json"
+    if (-not (Save-Url $Url $file)) {
+        Write-DistributorLog "error: the token proxy is not installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is unreleased (a checkout of this repository), which means its latest published release, and $Url returns none. Either this repository has published no release yet, or GitHub is not reachable. Use the bundle of a release, or set MACHINE_RUNNER_SWARM_PROXY_VERSION to a release such as 0.3.0"
+        return $null
+    }
+    try { $json = [IO.File]::ReadAllText($file) | ConvertFrom-Json } catch { Write-DistributorLog "error: $Url is not JSON: the token proxy is not installed"; return $null }
+    finally { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
+    if ("$($json.tag_name)" -notmatch '^v([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z._-]*)$') {
+        Write-DistributorLog "error: $Url names no release tag of the form v0.3.0: the token proxy is not installed"
+        return $null
+    }
+    return $Matches[1]
+}
+
 function Invoke-ProxyCheck {
     # $true when the proxy is not wanted, or is installed and active. A failure never touches the runner.
     param($Setting)
     if (-not $Setting.ProxyVersion) { return $true }
+    $version = $Setting.ProxyVersion
+    if ($version -eq 'unreleased') {
+        $version = Get-LatestProxyVersion $Setting.ProxyLatest
+        if (-not $version) { return $false }
+    }
     $proxyRoot = Join-Path $script:Root 'proxy'
-    $name = Find-Proxy -Version $Setting.ProxyVersion -Accept $Setting.ProxyHashes
+    $name = Find-Proxy -Version $version -Accept $Setting.ProxyHashes
     if ($name) {
-        Write-DistributorLog "the token proxy $($Setting.ProxyVersion) is installed already (proxy\versions\$name)"
+        Write-DistributorLog "the token proxy $version is installed already (proxy\versions\$name)"
     } else {
-        $name = Install-Proxy -Version $Setting.ProxyVersion -Accept $Setting.ProxyHashes -Base $Setting.ProxyBase
+        $name = Install-Proxy -Version $version -Accept $Setting.ProxyHashes -Base $Setting.ProxyBase
         if (-not $name) { return $false }
     }
     if (Switch-Link -Link (Join-Path $proxyRoot 'current') -Target "versions\$name") {
@@ -559,7 +639,7 @@ function Invoke-ProxyCheck {
         if (Test-Path -LiteralPath $history) { $lines = @(Get-Content -LiteralPath $history) }
         $lines += "$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')) $name"
         Write-Ascii $history @($lines | Select-Object -Last 200)
-        Write-DistributorLog "[ ok ] proxy\current -> versions\${name}: the token proxy $($Setting.ProxyVersion) windows/amd64"
+        Write-DistributorLog "[ ok ] proxy\current -> versions\${name}: the token proxy $version windows/$($script:Arch)"
     }
     # keep the last ProxyKeep versions that were active, never the active one
     $active = Split-Path -Leaf "$(Get-LinkTarget (Join-Path $proxyRoot 'current'))"
@@ -617,10 +697,19 @@ if ($MyInvocation.InvocationName -ne '.') {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is many times slower with the progress bar
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    try { $setting = Get-DistributorSetting } catch { Write-DistributorLog "error: $($_.Exception.Message)"; exit 1 }
-    Write-DistributorLog "version $($setting.Want) (major $($setting.Major)), check every $($setting.Interval)s, from $($setting.Base)"
-    if ($setting.ProxyVersion) { Write-DistributorLog "token proxy $($setting.ProxyVersion) from $($setting.ProxyBase)" }
-    else { Write-DistributorLog 'no token proxy is installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is unreleased or empty (a release of this repository, such as 0.3.0)' }
+    try {
+        if ($Architecture) { Initialize-Architecture $Architecture } else { Initialize-Architecture (Get-RunnerArchitecture) }
+        $setting = Get-DistributorSetting
+    } catch { Write-DistributorLog "error: $($_.Exception.Message)"; exit 1 }
+    switch ($setting.Kind) {
+        'exact' { $what = 'an exact pin: it never changes by itself, and the manifest is asked only when it is not installed' }
+        'current' { $what = "floating: CircleCI's current, within major $($setting.Major)" }
+        default { $what = "floating: the newest $($setting.Want).x of the manifest" }
+    }
+    Write-DistributorLog "version $($setting.Want) ($what), windows/$($script:Arch), check every $($setting.Interval)s, from $($setting.Base)"
+    if ($setting.ProxyVersion -eq 'unreleased') { Write-DistributorLog "token proxy: the latest published release of this repository (unreleased), looked at every $($setting.Interval)s: $($setting.ProxyLatest)" }
+    elseif ($setting.ProxyVersion) { Write-DistributorLog "token proxy $($setting.ProxyVersion) from $($setting.ProxyBase)" }
+    else { Write-DistributorLog 'no token proxy is installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is empty' }
     while ($true) {
         $ok = $false
         try { $ok = Invoke-Check $setting } catch { Write-DistributorLog "error: $($_.Exception.Message)" }

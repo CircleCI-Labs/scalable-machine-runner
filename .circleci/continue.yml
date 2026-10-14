@@ -337,8 +337,9 @@ jobs:
   proxy-test:
     description: >
       The token proxy (proxy/): gofmt, go vet, the unit tests with the race detector, and the static builds that the
-      release attaches (linux/amd64, linux/arm64, windows/amd64: ci/build-proxy.sh). The proxy in a Swarm is tested by
-      linux-swarm (linux/tests/proxy.sh).
+      release attaches, one for every platform of CircleCI's runner manifest (linux amd64, arm64, ppc64le and s390x, windows
+      amd64 and arm64: ci/build-proxy.sh). The proxy in a Swarm is tested by linux-swarm (linux/tests/proxy.sh), and the builds
+      of the other architectures by linux-mixed-arch.
     docker:
       - image: golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
     resource_class: small
@@ -352,11 +353,18 @@ jobs:
             go vet ./...
             go test -race -count=1 ./...
       - run:
-          name: Static builds for linux/amd64, linux/arm64 and windows/amd64 (ci/build-proxy.sh)
+          name: Static builds for every platform of the release (ci/build-proxy.sh)
           command: |
             ci/build-proxy.sh /tmp/proxy-bin ci
+            if [ "$(ls /tmp/proxy-bin | sort)" != "$(ci/build-proxy.sh --assets | sort)" ]; then
+              echo "the builds are not the assets that the release uploads"; exit 1
+            fi
             for f in /tmp/proxy-bin/*; do
-              go version -m "$f" | grep -q 'CGO_ENABLED=0' || { echo "$f is not a static build"; exit 1; }
+              platform="${f##*/machine-runner-swarm-proxy_}"   # <os>_<arch>
+              info="$(go version -m "$f")"
+              echo "$info" | grep -q 'CGO_ENABLED=0' || { echo "$f is not a static build"; exit 1; }
+              echo "$info" | grep -q "GOOS=${platform%_*}" || { echo "$f is not built for the OS of $platform"; exit 1; }
+              echo "$info" | grep -q "GOARCH=${platform#*_}" || { echo "$f is not built for the architecture of $platform"; exit 1; }
             done
             /tmp/proxy-bin/machine-runner-swarm-proxy_linux_amd64 -version
       - store_artifacts:

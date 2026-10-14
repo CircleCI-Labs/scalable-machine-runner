@@ -6,8 +6,10 @@
 #   docker stack deploy -c linux/stack/runners.yaml runners
 #
 # That is the whole install: nothing is installed on the nodes by hand. The service runner-distributor runs on every Linux node, also
-# on a node that joins later, and keeps the circleci-runner and the token proxy of that node in the per-node volume runner-bin. By default it follows
-# CircleCI's current release of major version 3 and checks again every 24 hours. Every class mounts the volume read-only into a STOCK
+# on a node that joins later, and keeps the circleci-runner and the token proxy of that node in the per-node volume runner-bin. The
+# runner version is an exact pin by default (the newest one that this repository's CI tests, which a release of this repository
+# bumps), so the nodes never change version by themselves. 3.1, 3 or current make it float: the distributor then follows CircleCI's
+# manifest and checks again every 24 hours. Every class mounts the volume read-only into a STOCK
 # image (cimg/*, Alpine, UBI); its entrypoint (a Swarm config) waits for the runner, checks its SHA-256 and starts it. Which version
 # the nodes run is a setting of the distributor service only (MACHINE_RUNNER_SWARM_RUNNER_VERSION below): an upgrade, a pin and a
 # rollback change that one service, and the runner services never restart. docs/operations.md
@@ -72,22 +74,26 @@ x-placement: &placement
 
 # The distributor's settings. Deploy-time variables with defaults; they apply to the runner-distributor service only.
 x-distributor-env: &distributor-env
-  # current: follow CircleCI's manifest (the default for now), or pin a version such as 3.1.12 (the emergency pin: the version the
-  # nodes run now, to freeze them).
-  MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-current}
+  # An exact version is a pin, and the default: the newest runner version that this repository's CI tests (docs/releasing.md says how a
+  # release bumps it). The nodes keep it until you change it. A floating value follows CircleCI's manifest and is looked at again every
+  # CHECK_INTERVAL: 3.1 (the newest 3.1.x), 3 (the newest 3.x.y) or current (CircleCI's current release).
+  MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-3.1.13}
   MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}   # current is adopted only within this major version
-  MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}
+  MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}   # how often a floating version asks the manifest again; a pin never does
   # A mirror for an air-gapped site: manifest.json and <version>/circleci-runner_linux_<arch>.tar.gz below this URL.
   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: ${MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL:-https://circleci-binary-releases.s3.amazonaws.com/circleci-runner}
-  # Strict sites: the SHA-256 of the tarballs that may be installed (comma-separated, amd64 and arm64), from the release's
+  # Strict sites: the SHA-256 of the tarballs that may be installed (comma-separated, every architecture of the fleet), from the release's
   # checksums.txt. Without it the hash of the manifest is used. Set it together with a pinned version.
   MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}
   # The token proxy: machine-runner-swarm-proxy_linux_<arch> of the GitHub release v<version> of this repository, which the distributor
   # downloads next to the runner and verifies against that release's SHA256SUMS. ci/release.sh pins the default below to the release
-  # it cuts (docs/releasing.md); in a checkout it is "unreleased", and the proxy is not installed until you set a version.
+  # it cuts (docs/releasing.md). In a checkout (git clone, Download ZIP) it is "unreleased", which means the latest published release
+  # of this repository, looked at again every CHECK_INTERVAL; with no release published yet the proxy is not installed, and the
+  # distributor says so in its log.
   MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}
+  MACHINE_RUNNER_SWARM_PROXY_LATEST_URL: ${MACHINE_RUNNER_SWARM_PROXY_LATEST_URL:-https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest}
   MACHINE_RUNNER_SWARM_PROXY_BASE_URL: ${MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download}
-  # Strict sites: the SHA-256 of the proxy binaries that may be installed (comma-separated, amd64 and arm64), from SHA256SUMS.
+  # Strict sites: the SHA-256 of the proxy binaries that may be installed (comma-separated, every architecture of the fleet), from SHA256SUMS.
   MACHINE_RUNNER_SWARM_PROXY_SHA256: ${MACHINE_RUNNER_SWARM_PROXY_SHA256:-}
 
 # A class of another stack file needs the same five keys: the entrypoint and its config, user "0", the placeholder secret, and the volume.
@@ -282,7 +288,7 @@ configs:
   # renames them after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
   # services that use it.
   entrypoint: {name: machine-runner-swarm-entrypoint-0770da4384e6, file: circleci-runner-entrypoint}
-  distributor: {name: machine-runner-swarm-distributor-4bfae6c3b3b4, file: runner-distributor.sh}
+  distributor: {name: machine-runner-swarm-distributor-ae56edce0770, file: runner-distributor.sh}
   proxy-entrypoint: {name: machine-runner-swarm-proxy-entrypoint-0a46b32f494b, file: proxy-entrypoint.sh}
 
 volumes:

@@ -6,7 +6,7 @@
 #
 # 1. linux/setup.sh --check and --swarm-init (twice: idempotent).
 # 2. The shipped stack, deployed with linux/setup.sh --deploy and a made-up token. Nothing is installed by hand: the runner-distributor
-#    service downloads the runner of CircleCI's CURRENT release from CircleCI's real manifest, verifies it and flips the link. Then:
+#    service downloads the runner that the stack pins (the newest release that CI tests) from CircleCI's real manifest, verifies it and flips the link. Then:
 #      - the volume is root-owned, holds the record of the binary, and the runner runs, unmodified, in a stock cimg image through
 #        the read-only mount; the entrypoint refuses to start without a runner name (exit 80);
 #      - the services linux-default and linux-hardened start a container each, and inside them the runner runs as circleci-runner and
@@ -73,7 +73,7 @@ check setup-deploy sudo "${setup}" --deploy
 docker service update --detach --replicas 1 --reserve-cpu 0.1 --reserve-memory 64m "${stack}_linux-default" > /dev/null
 docker service update --detach --reserve-cpu 0.1 --reserve-memory 64m "${stack}_linux-hardened" > /dev/null
 docker service scale --detach "${stack}_linux-java=0" > /dev/null
-# This test makes no claim, and a checkout has no release of the token proxy to install: stop the proxy.
+# This test makes no claim, and no release of this repository may be published yet for "unreleased" to mean: stop the proxy.
 docker service scale --detach "${stack}_token-proxy=0" > /dev/null
 
 vol=/var/lib/docker/volumes/${stack}_runner-bin/_data   # the per-node volume that runner-distributor fills

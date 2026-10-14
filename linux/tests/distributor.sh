@@ -12,11 +12,17 @@
 #   auto       version "current": the distributor follows the manifest by itself (the sha256 of current names the version), with no redeploy
 #   major      the manifest's current moves to a major version we do not follow: nothing is downloaded, nothing flips
 #   prune      only the last 3 versions that were active stay on the node, never the active one
+#   pin        an exact version never changes by itself: the manifest moves on and every check passes, nothing is downloaded or flipped,
+#              and (once installed) the manifest is not asked again
+#   floating   3.1 follows the newest 3.1.x and 3 the newest 3.x.y of the manifest, each with no redeploy, and neither adopts a release
+#              outside its line
+#   unreleased the token proxy "unreleased" means the latest published release: its tag is read from the latest-release URL; with none
+#              published the distributor says so, installs no proxy and keeps the runner; a bad URL or tag installs nothing
 #   tamper     a binary in the volume is replaced: new containers exit 80 on the record; the distributor repairs it by itself
 #   mismatch   a download that does not match the pinned SHA-256 installs nothing; a list with the right one installs
 #   real       version "current" against CircleCI's real manifest: the version it names, verified, with a matching record
 # shellcheck disable=SC2329,SC2016  # functions run through wait_for; the single quotes are for the container shell
-# Usage: distributor.sh        Env: TIMEOUT=300 (each wait), OLD_VERSION=3.1.11, SWARM_TEST_RUNNER_VERSION=3.1.12
+# Usage: distributor.sh        Env: TIMEOUT=300 (each wait), OLD_VERSION=3.1.11, SWARM_TEST_RUNNER_VERSION (default: the pin of runners.yaml)
 set -euo pipefail
 # shellcheck source=linux/tests/lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -255,10 +261,56 @@ echo "RESULT test=distributor phase=prune-rollback pinned_kept=3.1.20_by_a_flip 
 docker exec "$MGR" test -x "$vol/versions/$OLD/bin/circleci-runner" || fail "the active version is missing"
 
 # ---------------------------------------------------------------------------------------------
+# pin: an exact version never changes by itself, whatever the manifest does
+# ---------------------------------------------------------------------------------------------
+manifest_requests() { dk "$MGR" logs mirror 2>&1 | grep -c 'GET /manifest.json' || true; }
+DIST_VERSION=3.1.20 dep 0   # kept in the volume: a flip, with no download
+wait_until all_current 3.1.20
+publish_runner fake 3.1.23 3.1.23   # the manifest's current moves to a newer 3.1.x
+DIST_VERSION=3.1.20 dep 0
+sleep 3
+asked=$(manifest_requests)
+sleep 14   # about three checks at 5 s
+[[ $(manifest_requests) -eq $asked ]] || fail "an installed exact pin asked the manifest again ($asked -> $(manifest_requests) requests)"
+all_current 3.1.20 || fail "an exact pin moved to $(current "$MGR")"
+[[ $(downloads 3.1.23) -eq 0 && $(versions_on "$MGR") != *3.1.23* ]] || fail "an exact pin downloaded the release that the manifest moved to"
+echo "RESULT test=distributor phase=pin pinned=3.1.20 manifest_current=3.1.23 stayed_on=$(current "$MGR") downloads_of_3.1.23=0 manifest_requests_while_installed=0"
+
+# ---------------------------------------------------------------------------------------------
+# floating: 3.1 and 3 follow their line of the manifest, and nothing outside it
+# ---------------------------------------------------------------------------------------------
+publish_runner fake 3.1.30   # releases of the manifest: 3.1.30 is the newest 3.1.x, 3.2.0 and 3.2.1 are newer 3.x, 4.0.0 is another major
+publish_runner fake 3.2.0
+publish_runner fake 3.2.1
+publish_runner fake 4.0.0 3.1.23   # the manifest's current stays at 3.1.23, which is no argument of a floating value
+DIST_VERSION=3.1 dep 0
+wait_until all_current 3.1.30
+echo "RESULT test=distributor phase=floating-minor want=3.1 resolved_to=$(current "$MGR") not_taken=3.2.1,4.0.0 downloads_of_3.1.30=$(downloads 3.1.30) downloads_of_3.2.1=$(downloads 3.2.1)"
+[[ $(downloads 3.2.1) -eq 0 && $(downloads 4.0.0) -eq 0 ]] || fail "3.1 downloaded a release outside its line"
+publish_runner fake 3.1.31   # a new 3.1.x appears: adopted by the next check, with no redeploy
+DIST_VERSION=3.1 dep 0
+publish_runner fake 3.3.0 3.1.23   # a newer minor appears: not adopted
+DIST_VERSION=3.1 dep 0
+wait_until all_current 3.1.31
+sleep 12
+all_current 3.1.31 || fail "3.1 moved to $(current "$MGR") instead of staying on the newest 3.1.x"
+[[ $(downloads 3.3.0) -eq 0 ]] || fail "3.1 downloaded 3.3.0"
+echo "RESULT test=distributor phase=floating-minor-update appeared=3.1.31,3.3.0 adopted=$(current "$MGR") not_adopted=3.3.0"
+DIST_VERSION=3 dep 0
+wait_until all_current 3.3.0
+echo "RESULT test=distributor phase=floating-major want=3 resolved_to=$(current "$MGR") not_taken=4.0.0 downloads_of_4.0.0=$(downloads 4.0.0)"
+[[ $(downloads 4.0.0) -eq 0 ]] || fail "3 downloaded a 4.x release"
+publish_runner fake 3.3.1 3.1.23
+DIST_VERSION=3 dep 0
+wait_until all_current 3.3.1
+echo "RESULT test=distributor phase=floating-major-update appeared=3.3.1 adopted=$(current "$MGR")"
+
+# ---------------------------------------------------------------------------------------------
 # mismatch: a download that does not match the pinned SHA-256 installs nothing
 # ---------------------------------------------------------------------------------------------
-dist_once() { # VOLUME ENV=VALUE...: the distributor script of this checkout in a container of its own, until it says ok or exits
-  local v=$1 i
+dist_once() { # VOLUME ENV=VALUE...: the distributor script of this checkout in a container of its own, until it says ok (or DIST_ONCE_WAIT) or exits
+  local v=$1 i pat='\[ ok \]'
+  [[ -z ${DIST_ONCE_WAIT:-} ]] || pat=$DIST_ONCE_WAIT
   shift
   local -a envs=(-e "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL")
   for i in "$@"; do envs+=(-e "$i"); done
@@ -266,7 +318,7 @@ dist_once() { # VOLUME ENV=VALUE...: the distributor script of this checkout in 
   dk "$MGR" run -d --name dist-once -v /stack/runner-distributor.sh:/runner-distributor.sh:ro -v "$v":/opt/machine-runner-swarm "${envs[@]}" "$DIST_IMAGE" sh /runner-distributor.sh >/dev/null
   for ((i = 0; i < 60; i++)); do
     [[ $(dk "$MGR" inspect -f '{{.State.Running}}' dist-once) == true ]] || break
-    dk "$MGR" logs dist-once 2>&1 | grep -q '\[ ok \]' && break
+    dk "$MGR" logs dist-once 2>&1 | grep -q "$pat" && break
     sleep 1
   done
   dist_log=$(dk "$MGR" logs dist-once 2>&1)
@@ -282,8 +334,43 @@ echo "RESULT test=distributor phase=mismatch exit=$dist_rc running=$dist_running
 dist_once bad-pin "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "MACHINE_RUNNER_SWARM_RUNNER_SHA256=$zeros,${PUBLISHED_SHA[$OLD]^^}"   # the list holds one hash that matches, in capitals
 echo "RESULT test=distributor phase=sha256-list accepted_with_the_right_hash_in_the_list=$([[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] && echo yes || echo no)"
 [[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] || fail "a list that contains the right SHA-256 was refused: $dist_log"
-dist_once bad-input "MACHINE_RUNNER_SWARM_RUNNER_VERSION=latest"
-[[ $dist_rc -ne 0 && $dist_log == *"must be current or a version"* ]] || fail "a bad version was accepted: $dist_log"
+for bad in latest 3. .1 3.1. 3..1 3x 3.1.x.; do
+  dist_once bad-input "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$bad"
+  [[ $dist_rc -ne 0 && $dist_log == *"MACHINE_RUNNER_SWARM_RUNNER_VERSION must be"* ]] || fail "the version '$bad' was accepted: $dist_log"
+done
+echo "RESULT test=distributor phase=bad-version refused=latest,3.,.1,3.1.,3..1,3x,3.1.x."
+
+# ---------------------------------------------------------------------------------------------
+# unreleased: the token proxy of a checkout is the latest published release of this repository
+# ---------------------------------------------------------------------------------------------
+publish_proxy 0.0.1-test   # the release on the mirror: v0.0.1-test/{machine-runner-swarm-proxy_linux_<arch>,SHA256SUMS} and latest.json
+docker exec "$MGR" sh -c "printf '{\"tag_name\": \"nightly\"}' > /mirror/proxy/bad.json"
+punreleased=(MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased "MACHINE_RUNNER_SWARM_PROXY_BASE_URL=$MIRROR_URL/proxy")
+DIST_ONCE_WAIT='\[ ok \] proxy/current' dist_once pv-latest "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "${punreleased[@]}" "MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=$MIRROR_URL/proxy/latest.json"
+pv=$(dk "$MGR" run --rm -v pv-latest:/v "$DIST_IMAGE" sh -c 'readlink /v/proxy/current; cat /v/proxy/versions/*/VERSION | paste -sd, -')
+echo "RESULT test=distributor phase=unreleased latest_release=0.0.1-test installed=\"$pv\""
+[[ $dist_log == *"the latest published release of this repository (unreleased)"* && $pv == "versions/0.0.1-test"*"0.0.1-test" ]] ||
+  fail "unreleased did not install the latest published release: $pv / $dist_log"
+DIST_ONCE_WAIT='not installed or not up to date' dist_once pv-none "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "${punreleased[@]}" "MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=$MIRROR_URL/proxy/none.json"
+pv=$(dk "$MGR" run --rm -v pv-none:/v "$DIST_IMAGE" sh -c 'readlink /v/current; ls /v/proxy/versions 2>/dev/null | paste -sd, -')
+echo "RESULT test=distributor phase=unreleased-none runner=${pv%%$'\n'*} proxy=nothing message=\"$(grep -o 'returns none.*' <<< "$dist_log" | head -n 1 | cut -c1-120)\""
+[[ $dist_log == *"MACHINE_RUNNER_SWARM_PROXY_VERSION is unreleased (a checkout of this repository), which means its latest published release"* &&
+  $dist_log == *"published no release yet"* && $pv == "versions/$OLD" ]] || fail "no release published: the message is unclear, or the runner was not kept: $pv / $dist_log"
+DIST_ONCE_WAIT='names no release tag' dist_once pv-bad "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "${punreleased[@]}" "MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=$MIRROR_URL/proxy/bad.json"
+[[ $dist_log == *"names no release tag of the form v0.3.0"* ]] || fail "a latest release without a version tag was accepted: $dist_log"
+# a floating runner version keeps working at the later checks after the proxy install (the install must not touch the settings of the runner)
+dk "$MGR" rm -f dist-later >/dev/null 2>&1 || true
+dk "$MGR" run -d --name dist-later -v /stack/runner-distributor.sh:/runner-distributor.sh:ro -v pv-both:/opt/machine-runner-swarm \
+  -e "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL" -e MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 -e MACHINE_RUNNER_SWARM_CHECK_INTERVAL=3 \
+  -e MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased -e "MACHINE_RUNNER_SWARM_PROXY_BASE_URL=$MIRROR_URL/proxy" \
+  -e "MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=$MIRROR_URL/proxy/latest.json" "$DIST_IMAGE" sh /runner-distributor.sh >/dev/null
+sleep 14
+dist_log=$(dk "$MGR" logs dist-later 2>&1 || true)
+dk "$MGR" rm -f dist-later >/dev/null 2>&1 || true
+[[ $(grep -c 'circleci-runner .* is installed already' <<< "$dist_log") -ge 3 && $(grep -c 'the token proxy .* is installed already' <<< "$dist_log") -ge 3 ]] ||
+  fail "the later checks of a distributor with a floating runner and the proxy did not all run: $dist_log"
+[[ $dist_log != *"error"* ]] || fail "a later check failed after the proxy install: $dist_log"
+echo "RESULT test=distributor phase=unreleased-later-checks floating_runner_and_proxy_checked_again=yes"
 
 # ---------------------------------------------------------------------------------------------
 # real: CircleCI's own manifest and bucket, nothing mirrored
@@ -294,7 +381,7 @@ r = json.load(sys.stdin)['releases']
 sha = r['current']['linux']['$ARCH']['sha256']
 print(sorted((tuple(int(x) for x in v.split('.')), v) for v, e in r.items() if v[:1].isdigit() and e['linux']['$ARCH']['sha256'] == sha)[-1][1])")
 dk "$MGR" run -d --name dist-real -v /stack/runner-distributor.sh:/runner-distributor.sh:ro -v real-vol:/opt/machine-runner-swarm \
-  -e MACHINE_RUNNER_SWARM_RUNNER_MAJOR="${want%%.*}" "$DIST_IMAGE" sh /runner-distributor.sh >/dev/null
+  -e MACHINE_RUNNER_SWARM_RUNNER_VERSION=current -e MACHINE_RUNNER_SWARM_RUNNER_MAJOR="${want%%.*}" "$DIST_IMAGE" sh /runner-distributor.sh >/dev/null
 wait_for 180 bash -c "docker exec $MGR docker logs dist-real 2>&1 | grep -q '\[ ok \]'" || { dk "$MGR" logs dist-real 2>&1 | tail -n 5; fail "the distributor did not install the current release"; }
 real_cur=$(dk "$MGR" run --rm -v real-vol:/v "$DIST_IMAGE" readlink /v/current)
 real_sha=$(dk "$MGR" run --rm -v real-vol:/v "$DIST_IMAGE" sh -c 'cd /v/current && sha256sum -c SHA256 >/dev/null && cut -d" " -f1 SHA256')

@@ -2,16 +2,23 @@
 # runner-distributor.sh: keep circleci-runner on this node. It is the command of the runner-distributor service (stack/runners.yaml),
 # a global service from the stock alpine image, and arrives as a Swarm config. The service gives it:
 #   /opt/machine-runner-swarm                        the per-node volume runner-bin (read-write here, read-only in the runner services)
-#   MACHINE_RUNNER_SWARM_RUNNER_VERSION              current (default: CircleCI's manifest) or X.Y.Z (pinned)
+#   MACHINE_RUNNER_SWARM_RUNNER_VERSION              what to run. An exact version such as 3.1.13 is a pin and never changes by itself (the
+#                                                    default of the stack file: the newest version that this repository's CI tests). A
+#                                                    floating value is resolved from CircleCI's manifest and looked at again every
+#                                                    check interval: 3.1 (the newest 3.1.x), 3 (the newest 3.x.y) or current (CircleCI's current)
 #   MACHINE_RUNNER_SWARM_RUNNER_MAJOR                the major version that current may adopt (default 3)
-#   MACHINE_RUNNER_SWARM_CHECK_INTERVAL              how often to look again (default 24h; seconds, or a number with s, m, h or d)
+#   MACHINE_RUNNER_SWARM_CHECK_INTERVAL              how often to look again (default 24h; seconds, or a number with s, m, h or d). A floating
+#                                                    version asks the manifest again; an exact pin only verifies its installed copy
 #   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL           where manifest.json and <version>/circleci-runner_linux_<arch>.tar.gz live
 #   MACHINE_RUNNER_SWARM_RUNNER_SHA256               optional: acceptable tarball SHA-256 values, separated by commas (every
 #                                                    architecture of the fleet), instead of the hash of the manifest
-#   MACHINE_RUNNER_SWARM_PROXY_VERSION               the token proxy of this repository's release v<version>; unreleased (a checkout) or empty:
-#                                                    no proxy is installed. ci/release.sh pins the default of the stack file to the release
+#   MACHINE_RUNNER_SWARM_PROXY_VERSION               the token proxy of this repository's release v<version>. unreleased (the default of a
+#                                                    checkout, ci/release.sh pins the default of a release bundle) means the latest published
+#                                                    release of this repository, looked at again every check interval. Empty: no proxy
 #   MACHINE_RUNNER_SWARM_PROXY_BASE_URL              where <tag>/machine-runner-swarm-proxy_linux_<arch> and <tag>/SHA256SUMS live (default:
 #                                                    the GitHub releases of this repository, tag v<version>)
+#   MACHINE_RUNNER_SWARM_PROXY_LATEST_URL            what unreleased asks for the latest release: JSON with its "tag_name" (default: the
+#                                                    GitHub API of this repository, releases/latest)
 #   MACHINE_RUNNER_SWARM_PROXY_SHA256                optional: acceptable proxy binary SHA-256 values, separated by commas
 # It resolves the version, downloads the tarball when versions/<version> is missing or does not match its record, verifies the
 # tarball SHA-256, extracts circleci-runner, computes the SHA-256 of the binary and records it in versions/<version>/SHA256, and
@@ -19,18 +26,30 @@
 # rollback is a flip. A runner container resolves current once, when it starts, and verifies the binary against the record.
 # The token proxy comes the same way into proxy/versions/<version>/bin (the binary of the release, verified against the SHA256SUMS of
 # that release, and recorded in proxy/versions/<version>/SHA256), behind its own link proxy/current; the last 2 versions stay.
+#
+# With the argument --once it makes one check, installs no proxy, and exits 0 when the runner is installed and current points to it,
+# otherwise 1. The entrypoint of a microVM class (MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true) runs it that way in the container itself,
+# where nothing is shared with other jobs, so every job downloads and verifies its own runner (docs/microvm.md).
 # shellcheck disable=SC2154  # the MACHINE_RUNNER_SWARM_* variables come from the service
 set -eu
 
+once=false
+case ${1:-} in
+  '') ;;
+  --once) once=true ;;
+  *) echo "runner-distributor: error: usage: runner-distributor.sh [--once]" >&2; exit 2 ;;
+esac
 root=/opt/machine-runner-swarm
-want=${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-current}
+want=${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-}
 major=${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}
 interval=${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}
 base=${MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL:-https://circleci-binary-releases.s3.amazonaws.com/circleci-runner}
 base=${base%/}
 pver=${MACHINE_RUNNER_SWARM_PROXY_VERSION:-}
+[ "$once" = false ] || pver=   # one check of the runner only
 pbase=${MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download}
 pbase=${pbase%/}
+platest=${MACHINE_RUNNER_SWARM_PROXY_LATEST_URL:-https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest}
 keep=3        # versions to keep: the last ones that were active
 pkeep=2       # proxy versions to keep
 retry=300     # seconds until the next try after a failed check
@@ -38,18 +57,28 @@ retry=300     # seconds until the next try after a failed check
 log() { echo "runner-distributor: $*"; }
 die() { log "error: $*" >&2; exit 1; }
 
-case $(uname -m) in
+case $(uname -m) in   # the architectures of CircleCI's manifest for Linux
   x86_64) arch=amd64 ;;
   aarch64) arch=arm64 ;;
-  *) die "unsupported architecture $(uname -m): amd64 and arm64 only" ;;
+  ppc64le) arch=ppc64le ;;
+  s390x) arch=s390x ;;
+  *) die "unsupported architecture $(uname -m): amd64, arm64, ppc64le and s390x only" ;;
 esac
 tarball=circleci-runner_linux_$arch.tar.gz
 asset=machine-runner-swarm-proxy_linux_$arch
 
+# What MACHINE_RUNNER_SWARM_RUNNER_VERSION asks for: exact (a pin), minor (3.1: the newest 3.1.x), major (3: the newest 3.x.y) or current.
+[ -n "$want" ] || die "MACHINE_RUNNER_SWARM_RUNNER_VERSION is empty: set an exact version such as 3.1.13, a floating one (3.1, 3, current)"
 case $want in
-  current) ;;
-  [0-9]*.[0-9]*.[0-9]*) case $want in *[!0-9A-Za-z._-]*) die "invalid version '$want'" ;; esac ;;
-  *) die "MACHINE_RUNNER_SWARM_RUNNER_VERSION must be current or a version such as 3.1.12, got '$want'" ;;
+  current) kind=current ;;
+  [0-9]*.[0-9]*.[0-9]*) kind=exact; case $want in *[!0-9A-Za-z._-]*) die "invalid version '$want'" ;; esac ;;
+  [0-9]*.[0-9]*) kind=minor ;;
+  [0-9]*) kind=major ;;
+  *) die "MACHINE_RUNNER_SWARM_RUNNER_VERSION must be an exact version such as 3.1.13, or 3.1, 3 or current, got '$want'" ;;
+esac
+case $kind in
+  minor) case $want in *[!0-9.]* | *..* | *.) die "MACHINE_RUNNER_SWARM_RUNNER_VERSION must be 3.1 (digits and one dot) or an exact version, got '$want'" ;; esac ;;
+  major) case $want in *[!0-9]*) die "MACHINE_RUNNER_SWARM_RUNNER_VERSION must be 3 (digits only) or an exact version, got '$want'" ;; esac ;;
 esac
 case $major in '' | *[!0-9]*) die "MACHINE_RUNNER_SWARM_RUNNER_MAJOR must be a number, got '$major'" ;; esac
 n=$interval
@@ -77,10 +106,10 @@ case $pver in
   *) die "MACHINE_RUNNER_SWARM_PROXY_VERSION must be a release such as 0.3.0, got '$pver'" ;;
 esac
 
-fetch() { # URL FILE: three tries
+fetch() { # URL FILE: three tries (wget, or curl in an image that has no wget)
   local_try=1
   while :; do
-    wget -q -T 60 -O "$2" "$1" && return 0
+    if command -v wget >/dev/null 2>&1; then wget -q -T 60 -O "$2" "$1" && return 0; else curl -fsSL --connect-timeout 60 --max-time 900 -o "$2" "$1" && return 0; fi
     [ "$local_try" -lt 3 ] || return 1
     sleep "$local_try"
     local_try=$((local_try + 1))
@@ -179,32 +208,46 @@ prune() {
   done
 }
 
+# newest REGEX: the highest version of the manifest whose linux/$arch build has a SHA-256 and whose name matches the (basic) regular expression
+newest() {
+  sed -n "s|^releases/\($1\)/linux/$arch/sha256 .*|\1|p" "$work/manifest.flat" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1
+}
+
 # resolve: sets $ver and $accept (the tarball hashes to accept; empty: any already installed copy is fine)
 resolve() {
   accept=$hashes
-  if [ "$want" != current ]; then
+  if [ "$kind" = exact ]; then   # a pin: a copy that is installed and verified needs no manifest, so a rollback works offline
     ver=$want
     [ -z "$hashes" ] || return 0
-    if installed_ok "$ver"; then return 0; fi   # a version that is installed already needs no manifest, so a rollback works offline
+    if installed_ok "$ver"; then return 0; fi
   fi
   fetch "$base/manifest.json" "$work/manifest.json" || { log "cannot download $base/manifest.json" >&2; return 1; }
   flatten "$work/manifest.json" > "$work/manifest.flat"
-  if [ "$want" = current ]; then
-    cur=$(sha_of current)
-    [ -n "$cur" ] || { log "the manifest has no linux/$arch build for current" >&2; return 1; }
-    ver=$(sed -n "s|^releases/\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)/linux/$arch/sha256 $cur\$|\1|p" "$work/manifest.flat" |
-      sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
-    [ -n "$ver" ] || { log "current has SHA-256 $cur, which no versioned release of the manifest has: not adopting it" >&2; return 1; }
-    if [ "${ver%%.*}" != "$major" ]; then
-      log "current is $ver (major ${ver%%.*}), not $major: not adopting it (MACHINE_RUNNER_SWARM_RUNNER_MAJOR)"
-      ver=
-      return 0
-    fi
-    [ -n "$accept" ] || accept=$cur
-  else
-    [ -n "$accept" ] || accept=$(sha_of "$ver")
-    [ -n "$accept" ] || { log "the manifest has no linux/$arch build for $ver" >&2; return 1; }
-  fi
+  case $kind in
+    exact)
+      [ -n "$accept" ] || accept=$(sha_of "$ver")
+      [ -n "$accept" ] || { log "the manifest has no linux/$arch build for $ver" >&2; return 1; }
+      ;;
+    minor | major)   # the newest release of a line: 3.1 is the newest 3.1.x, 3 the newest 3.x.y
+      if [ "$kind" = minor ]; then line="$(echo "$want" | sed 's/\./\\./g')\.[0-9][0-9]*"; else line="$want\.[0-9][0-9]*\.[0-9][0-9]*"; fi
+      ver=$(newest "$line")
+      [ -n "$ver" ] || { log "the manifest has no linux/$arch release in $want.x" >&2; return 1; }
+      [ -n "$accept" ] || accept=$(sha_of "$ver")
+      ;;
+    current)
+      cur=$(sha_of current)
+      [ -n "$cur" ] || { log "the manifest has no linux/$arch build for current" >&2; return 1; }
+      ver=$(sed -n "s|^releases/\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)/linux/$arch/sha256 $cur\$|\1|p" "$work/manifest.flat" |
+        sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+      [ -n "$ver" ] || { log "current has SHA-256 $cur, which no versioned release of the manifest has: not adopting it" >&2; return 1; }
+      if [ "${ver%%.*}" != "$major" ]; then
+        log "current is $ver (major ${ver%%.*}), not $major: not adopting it (MACHINE_RUNNER_SWARM_RUNNER_MAJOR)"
+        ver=
+        return 0
+      fi
+      [ -n "$accept" ] || accept=$cur
+      ;;
+  esac
 }
 
 # cycle: one look at the manifest. Non-zero: this check failed.
@@ -246,17 +289,17 @@ install_proxy() {
   mkdir -m 0755 "$tmp/bin"
   log "downloading the token proxy $v linux/$arch from $pbase/v$v"
   fetch "$pbase/v$v/SHA256SUMS" "$tmp/SHA256SUMS" || { log "cannot download $pbase/v$v/SHA256SUMS" >&2; rm -rf "$tmp"; return 1; }
-  want=$(awk -v a="$asset" '$2 == a || $2 == "*" a { print $1; exit }' "$tmp/SHA256SUMS" | tr 'A-F' 'a-f')
-  [ -n "$want" ] || { log "SHA256SUMS of v$v lists no $asset" >&2; rm -rf "$tmp"; return 1; }
+  psum=$(awk -v a="$asset" '$2 == a || $2 == "*" a { print $1; exit }' "$tmp/SHA256SUMS" | tr 'A-F' 'a-f')
+  [ -n "$psum" ] || { log "SHA256SUMS of v$v lists no $asset" >&2; rm -rf "$tmp"; return 1; }
   if [ -n "$phashes" ]; then
     case " $phashes " in
-      *" $want "*) ;;
-      *) log "SHA256SUMS of v$v lists $want for $asset, which MACHINE_RUNNER_SWARM_PROXY_SHA256 does not allow: refusing to install" >&2; rm -rf "$tmp"; return 1 ;;
+      *" $psum "*) ;;
+      *) log "SHA256SUMS of v$v lists $psum for $asset, which MACHINE_RUNNER_SWARM_PROXY_SHA256 does not allow: refusing to install" >&2; rm -rf "$tmp"; return 1 ;;
     esac
   fi
   fetch "$pbase/v$v/$asset" "$tmp/bin/machine-runner-swarm-proxy" || { log "cannot download $pbase/v$v/$asset" >&2; rm -rf "$tmp"; return 1; }
   got=$(sha256sum "$tmp/bin/machine-runner-swarm-proxy" | cut -d' ' -f1)
-  [ "$got" = "$want" ] || { log "SHA-256 mismatch for $asset v$v: got $got, SHA256SUMS says $want: refusing to install" >&2; rm -rf "$tmp"; return 1; }
+  [ "$got" = "$psum" ] || { log "SHA-256 mismatch for $asset v$v: got $got, SHA256SUMS says $psum: refusing to install" >&2; rm -rf "$tmp"; return 1; }
   chmod 0755 "$tmp/bin/machine-runner-swarm-proxy"
   "$tmp/bin/machine-runner-swarm-proxy" -version 2>&1 | grep -qF " $v" ||
     { log "the downloaded proxy does not report version $v: refusing to install" >&2; rm -rf "$tmp"; return 1; }
@@ -268,25 +311,54 @@ install_proxy() {
   log "installed the token proxy $v: binary SHA-256 $(cut -d' ' -f1 "$root/proxy/versions/$v/SHA256")"
 }
 
+# proxy_latest: sets $pwant to the version of the latest published release of this repository (what unreleased means)
+proxy_latest() {
+  pwant=
+  if ! fetch "$platest" "$work/latest.json"; then
+    log "error: the token proxy is not installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is unreleased (a checkout of this repository), which means its latest published release, and $platest returns none. Either this repository has published no release yet, or GitHub is not reachable. Use the bundle of a release, or set MACHINE_RUNNER_SWARM_PROXY_VERSION to a release such as 0.3.0" >&2
+    return 1
+  fi
+  tag=$(grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$work/latest.json" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+  case $tag in
+    v[0-9]*.[0-9]*.[0-9]*) case $tag in *[!0-9A-Za-z._-]*) tag= ;; esac ;;
+    *) tag= ;;
+  esac
+  [ -n "$tag" ] || { log "error: $platest names no release tag of the form v0.3.0: the token proxy is not installed" >&2; return 1; }
+  pwant=${tag#v}
+}
+
 # proxy_cycle: keep the token proxy of MACHINE_RUNNER_SWARM_PROXY_VERSION. Non-zero: this check failed (the runner is not affected).
 proxy_cycle() {
-  case $pver in '' | unreleased) return 0 ;; esac
-  if proxy_installed_ok "$pver" "$phashes"; then
-    log "the token proxy $pver is installed already"
+  pwant=$pver
+  case $pver in
+    '') return 0 ;;
+    unreleased) proxy_latest || return 1 ;;
+  esac
+  if proxy_installed_ok "$pwant" "$phashes"; then
+    log "the token proxy $pwant is installed already"
   else
-    install_proxy "$pver" || return 1
+    install_proxy "$pwant" || return 1
   fi
-  flip "$root/proxy" "$pver" "the token proxy"
+  flip "$root/proxy" "$pwant" "the token proxy"
   prune "$root/proxy" "$pkeep" "the token proxy"
 }
 
 mkdir -p "$root"
 rm -rf "$root"/.work.* "$root"/.tmp.* "$root"/proxy/.tmp.*   # what a stopped run left
-log "version $want (major $major), check every ${interval}s, from $base"
+case $kind in
+  exact) log "version $want (an exact pin: it never changes by itself, and the manifest is asked only when it is not installed), check every ${interval}s, from $base" ;;
+  minor | major) log "version $want (floating: the newest $want.x of the manifest), check every ${interval}s, from $base" ;;
+  current) log "version current (floating: CircleCI's current, within major $major), check every ${interval}s, from $base" ;;
+esac
 case $pver in
-  '' | unreleased) log "no token proxy is installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is '${pver:-empty}' (a release of this repository, such as 0.3.0)" ;;
+  '') [ "$once" = true ] || log "no token proxy is installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is empty" ;;
+  unreleased) log "token proxy: the latest published release of this repository (unreleased), looked at every ${interval}s: $platest" ;;
   *) log "token proxy $pver from $pbase" ;;
 esac
+if [ "$once" = true ]; then
+  cycle || exit 1
+  exit 0
+fi
 while :; do
   wait_for=$interval
   if ! cycle; then

@@ -6,7 +6,7 @@
     -Mode Prepare  Pull the stock image, then `Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the
                    machine-runner-swarm.windows-ltsc* node labels). The order matters: the network is down for a few
                    seconds after the swarm is created. Then deploy the shipped stack with no runner replicas and wait until its
-                   service runner-distributor-windows has installed CircleCI's current runner and portable Git into the
+                   service runner-distributor-windows has installed the runner that the stack pins and portable Git into the
                    volume (the first download takes minutes, which must not count against the probes' deadline), and remove
                    the stack again: the volume stays.
     -Mode Run      Deploy the stack on the stock Server Core image and host three single-task jobs:

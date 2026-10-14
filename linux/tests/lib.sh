@@ -16,7 +16,8 @@
 #
 # Environment: SWARM_TEST_DIND_IMAGE (default docker:29-dind), SWARM_TEST_CIMG_IMAGE (default cimg/base:2026.10, the
 # image of the stack's classes), SWARM_TEST_CACHE (default ~/.cache/swarm-tests: the real runner tarballs),
-# SWARM_TEST_RUNNER_VERSION (default 3.1.12, the real runner of the tests), SWARM_TEST_KEEP=1 (keep DinD containers for debugging).
+# SWARM_TEST_RUNNER_VERSION (default: the exact pin that runners.yaml ships, so that the version the stack installs by default is the
+# one that CI tests; the real runner of the tests), SWARM_TEST_KEEP=1 (keep DinD containers for debugging).
 # shellcheck disable=SC2034  # variables are used by the scripts that source this file
 
 tests_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -26,7 +27,9 @@ DIND_IMAGE=${SWARM_TEST_DIND_IMAGE:-docker:29-dind}
 CIMG_IMAGE=${SWARM_TEST_CIMG_IMAGE:-cimg/base:2026.10}
 cache_dir=${SWARM_TEST_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/swarm-tests}
 BASE_SERVICES=(linux-default linux-java linux-hardened)   # the runner classes of runners.yaml (runner-distributor is the other service)
-TEST_RUNNER_VERSION=${SWARM_TEST_RUNNER_VERSION:-3.1.12}
+# shellcheck disable=SC2016  # the pattern holds a literal ${...}
+STACK_RUNNER_PIN=$(sed -n 's/^  MACHINE_RUNNER_SWARM_RUNNER_VERSION: \${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-\([0-9][0-9.]*\)}.*/\1/p' "$stack_dir/runners.yaml")
+TEST_RUNNER_VERSION=${SWARM_TEST_RUNNER_VERSION:-$STACK_RUNNER_PIN}
 REAL_BASE_URL=https://circleci-binary-releases.s3.amazonaws.com/circleci-runner
 case $(uname -m) in x86_64) ARCH=amd64 ;; aarch64) ARCH=arm64 ;; *) ARCH=unsupported ;; esac
 MIRROR_PORT=8098
@@ -265,8 +268,9 @@ publish_runner() {
   PUBLISHED_SHA[$v]=$(sha256sum "$dir/circleci-runner_linux_$ARCH.tar.gz" | cut -d' ' -f1)
 }
 # publish_proxy [VERSION]: build the token proxy from proxy/ (ci/build-proxy.sh, reporting VERSION, default 0.0.1-test) and put it on the mirror
-# as a GitHub release would have it: proxy/v<VERSION>/machine-runner-swarm-proxy_linux_<arch> and proxy/v<VERSION>/SHA256SUMS. The distributor of
-# the stack installs it from there (make_override sets PROXY_VERSION). Sets PROXY_VERSION and PROXY_SHA.
+# as a GitHub release would have it: proxy/v<VERSION>/machine-runner-swarm-proxy_linux_<arch> and proxy/v<VERSION>/SHA256SUMS, and proxy/latest.json,
+# what the latest-release URL of GitHub answers (the tag of the release that "unreleased" means). The distributor of the stack installs it from
+# there (make_override sets PROXY_VERSION). Sets PROXY_VERSION and PROXY_SHA.
 publish_proxy() {
   local v=${1:-0.0.1-test} dir
   [[ $ARCH != unsupported ]] || fail "unsupported host architecture $(uname -m)"
@@ -281,6 +285,7 @@ publish_proxy() {
     echo "$PROXY_SHA  machine-runner-swarm-proxy_linux_$ARCH"
     echo "1111111111111111111111111111111111111111111111111111111111111111  machine-runner-swarm-proxy_linux_other"
   } > "$dir/SHA256SUMS"
+  printf '{\n  "url": "https://api.github.com/repos/example/example/releases/1",\n  "tag_name": "v%s",\n  "name": "v%s",\n  "draft": false,\n  "prerelease": false\n}\n' "$v" "$v" > "$work/mirror/proxy/latest.json"
   PROXY_VERSION=$v
   docker cp "$work/mirror/." "${SWARM_TEST_MGR}:/mirror/" >/dev/null
 }

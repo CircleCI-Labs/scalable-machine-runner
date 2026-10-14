@@ -19,8 +19,8 @@
 #
 # The stack is the shipped one (E2E_STACK_FILE) with an override layered on top: the active
 # service runs one replica of a pinned stock image, every other runner service has none. The
-# runner-distributor service stays as shipped: it downloads CircleCI's current runner release from
-# CircleCI's real manifest, and the runner and the entrypoint come through the read-only volume and
+# runner-distributor service stays as shipped: it downloads the runner that the stack pins (the newest one that CI
+# tests) from CircleCI's real manifest, and the runner and the entrypoint come through the read-only volume and
 # the Swarm config that the shipped stack declares. Both services carry the same e2e class token; only one is deployed
 # at a time, so a probe is always claimed by the service it was written for.
 #

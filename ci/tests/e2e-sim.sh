@@ -144,7 +144,7 @@ scenario() {
   shift 3
   log "scenario ${scenario}"
   in_vm sh -c 'docker swarm leave --force > /dev/null 2>&1; rm -rf /tmp/e2e; mkdir -p /tmp/e2e/evidence/queue'
-  in_vm env CIRCLE_WORKFLOW_ID=wf-sim E2E_SETUP=/sim/setup.sh bash /repo/ci/e2e-host.sh prepare > /dev/null 2>&1 || { log "prepare failed"; failed=1; }
+  in_vm env CIRCLE_WORKFLOW_ID=wf-sim E2E_SETUP=/sim/setup.sh E2E_STACK_FILE=/sim/stack.yaml bash /repo/ci/e2e-host.sh prepare > /dev/null 2>&1 || { log "prepare failed"; failed=1; }
   for item in "$@"; do
     in_vm sh -c "echo '${item#*=}' > /tmp/e2e/evidence/queue/${item%%=*}"
   done

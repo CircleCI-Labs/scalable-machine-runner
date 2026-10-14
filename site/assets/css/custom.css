@@ -176,6 +176,15 @@ body {
   box-shadow: 0 0 0 1px var(--cci-border);
 }
 
+/* The icon is black line art on white: in dark mode and in the footer (always dark) it becomes light line art on the page */
+.dark .cci-brand-icon,
+.dark .cci-eyebrow-icon,
+.cci-footer-icon {
+  filter: invert(1);
+  mix-blend-mode: screen;
+  box-shadow: none;
+}
+
 .cci-brand-org {
   color: var(--cci-heading);
   font-size: 1.0625rem;

@@ -44,6 +44,11 @@ executors:
     machine:
       image: ubuntu-2604:current
     resource_class: arm.medium
+  # The Android machine image is the one CircleCI image with nested virtualization (/dev/kvm): docs/ci.md#linux-microvm.
+  linux-kvm:
+    machine:
+      image: android:current
+    resource_class: large.gen2
   windows-2022:
     machine:
       image: windows-server-2022-gui:current
@@ -348,6 +353,32 @@ jobs:
           command: |
             mkdir -p /tmp/reports
             linux/tests/run-all.sh 2>&1 | tee /tmp/reports/run-all.txt
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+
+  linux-microvm:
+    description: >
+      The microVM add-on (linux/tests/microvm.sh): Kata Containers 4.2.0 with Cloud Hypervisor inside privileged docker:dind
+      containers on the Android machine image, which has /dev/kvm. A missing /dev/kvm or vhost device FAILS here (it only skips
+      locally), so the job tells when the image loses nested virtualization. Needs no token.
+    executor: linux-kvm
+    steps:
+      - checkout
+      - run:
+          name: KVM, vhost modules and zstd
+          command: |
+            ls -l /dev/kvm
+            sudo modprobe vhost_vsock vhost_net
+            ls -l /dev/vhost-vsock /dev/vhost-net
+            command -v zstd > /dev/null || { sudo apt-get update -q > /dev/null && sudo apt-get install -y -q zstd > /dev/null; }
+            docker version --format 'docker client {{.Client.Version}}, server {{.Server.Version}}'
+      - run:
+          name: linux/tests/microvm.sh (downloads Kata, SHA-256 verified)
+          no_output_timeout: 30m
+          command: |
+            mkdir -p /tmp/reports
+            SWARM_TEST_REQUIRE_KVM=1 linux/tests/microvm.sh 2>&1 | tee /tmp/reports/microvm.txt
       - store_artifacts:
           path: /tmp/reports
           destination: reports
@@ -1018,6 +1049,8 @@ workflows:
       - linux-image-example
       - linux-setup
       - linux-arm64
+      - linux-microvm:
+          filters: pipeline.parameters.full-suite
       - windows-swarm:
           name: windows-swarm-ltsc2022
           os: windows-2022
@@ -1066,6 +1099,7 @@ workflows:
             - linux-image-example
             - linux-setup
             - linux-arm64
+            - linux-microvm
             - windows-swarm-ltsc2022
             - windows-swarm-ltsc2025
             - e2e-linux

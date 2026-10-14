@@ -137,6 +137,8 @@ write_override() {
         target: /e2e-evidence
     deploy:
       replicas: 1
+      resources:
+        reservations: {cpus: "0.5", memory: 512M}   # the shipped 2 CPUs would fill this 2-CPU VM, and the token proxy (0.1) would stay pending
 EOF
       else
         printf '  %s:\n    deploy:\n      replicas: 0\n' "${s}"

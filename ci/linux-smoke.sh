@@ -10,8 +10,9 @@
 #      - the volume is root-owned, holds the record of the binary, and the runner runs, unmodified, in a stock cimg image through
 #        the read-only mount; the entrypoint refuses to start without a runner name (exit 80);
 #      - the services linux-default and linux-hardened start a container each, and inside them the runner runs as circleci-runner and
-#        the job user is circleci; the job user cannot read the token file, nor other users' process environments; linux-default keeps
-#        sudo (so sudo can read the token: the documented outcome); linux-hardened has no sudo at all.
+#        the job user is circleci; the container mounts only the placeholder config (the class tokens belong to the token proxy, which this
+#        test stops), and the job user cannot read it, nor other users' process environments; linux-default keeps sudo (so sudo can read
+#        the placeholder); linux-hardened has no sudo at all.
 #    The runner gets 401 from CircleCI for the made-up token, which does not matter here.
 #
 # Prints RESULT lines; exits 0 only if every check passed.
@@ -64,12 +65,16 @@ done
 for svc in linux-java linux-persistent linux-docker-build; do
   printf 'unused' | docker secret create "${svc}-token" - > /dev/null 2>&1 || true
 done
+# The runners read a placeholder config; the class tokens above belong to the token proxy.
+printf '%s' "machine-runner-swarm-placeholder" | sudo "${setup}" --secret runner-placeholder > /dev/null 2>&1 || log "secret runner-placeholder failed"
 check setup-deploy sudo "${setup}" --deploy
 # The shipped sizes (2 CPUs and 4 GB each) do not fit one CI VM: shrink what the test needs, as an
 # operator would on a small host, and stop what it does not.
 docker service update --detach --replicas 1 --reserve-cpu 0.1 --reserve-memory 64m "${stack}_linux-default" > /dev/null
 docker service update --detach --reserve-cpu 0.1 --reserve-memory 64m "${stack}_linux-hardened" > /dev/null
 docker service scale --detach "${stack}_linux-java=0" > /dev/null
+# This test makes no claim, and a checkout has no release of the token proxy to install: stop the proxy.
+docker service scale --detach "${stack}_token-proxy=0" > /dev/null
 
 vol=/var/lib/docker/volumes/${stack}_runner-bin/_data   # the per-node volume that runner-distributor fills
 cur=${vol}/current
@@ -154,8 +159,10 @@ for svc in linux-default linux-hardened; do
   docker logs "${cid}" 2>&1 | grep 'circleci-runner-entrypoint:' | cut -c1-200 | sed "s/^/    ${svc}: /"
   runner_user() { docker exec "${cid}" ps -eo user:32=,comm=,args= | awk '$2 == "circleci-runner" && $0 !~ /entrypoint/ { print $1; exit }'; }
   check "${svc}-runner-user" test "$(runner_user)" = circleci-runner
+  only_placeholder() { [ "$(docker exec "${cid}" ls /run/secrets)" = circleci_runner_config.yaml ]; }
+  check "${svc}-only-the-placeholder-config-is-mounted" only_placeholder
   token_denied() { ! docker exec -u circleci "${cid}" sh -c 'cat /run/secrets/circleci_runner_config.yaml' > /dev/null 2>&1; }
-  check "${svc}-token-unreadable-by-job-user" token_denied
+  check "${svc}-config-unreadable-by-job-user" token_denied
   environ_foreign() {
     docker exec -u circleci "${cid}" sh -c 'n=0; me=$(id -u); for f in /proc/[0-9]*/environ; do [ "$(stat -c %u "$f" 2>/dev/null || echo "$me")" = "$me" ] && continue; head -c 1 "$f" >/dev/null 2>&1 && n=$((n+1)); done; echo $n'
   }
@@ -163,7 +170,7 @@ for svc in linux-default linux-hardened; do
   if [ "${svc}" = linux-default ]; then
     check "${svc}-job-user-has-sudo" docker exec -u circleci "${cid}" sudo -n true
     sudo_reads() { docker exec -u circleci "${cid}" sudo -n sh -c 'test -s /run/secrets/circleci_runner_config.yaml'; }
-    check "${svc}-sudo-can-read-token-documented" sudo_reads
+    check "${svc}-sudo-can-read-the-placeholder-config" sudo_reads
   else
     no_sudo() { ! docker exec -u circleci "${cid}" sudo -n true > /dev/null 2>&1; }
     check "${svc}-job-user-has-no-sudo" no_sudo

@@ -291,6 +291,39 @@ jobs:
           path: /tmp/reports
           destination: reports
 
+  proxy-test:
+    description: >
+      The token proxy (proxy/): gofmt, go vet, the unit tests with the race detector, and the static builds that the
+      release attaches (linux/amd64, linux/arm64, windows/amd64: ci/build-proxy.sh). The proxy in a Swarm is tested by
+      linux-swarm (linux/tests/proxy.sh).
+    docker:
+      - image: golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: gofmt, go vet and go test -race (proxy/)
+          command: |
+            cd proxy
+            test -z "$(gofmt -l .)" || { gofmt -d .; echo "run gofmt -w proxy"; exit 1; }
+            go vet ./...
+            go test -race -count=1 ./...
+      - run:
+          name: Static builds for linux/amd64, linux/arm64 and windows/amd64 (ci/build-proxy.sh)
+          command: |
+            ci/build-proxy.sh /tmp/proxy-bin ci
+            for f in /tmp/proxy-bin/*; do
+              go version -m "$f" | grep -q 'CGO_ENABLED=0' || { echo "$f is not a static build"; exit 1; }
+            done
+            /tmp/proxy-bin/machine-runner-swarm-proxy_linux_amd64 -version
+      - store_artifacts:
+          path: /tmp/proxy-bin
+          destination: proxy
+      # The Windows e2e jobs install the windows/amd64 build through the distributor, from a local mirror (no release exists yet).
+      - persist_to_workspace:
+          root: /tmp/proxy-bin
+          paths: [machine-runner-swarm-proxy_windows_amd64]
+
   linux-swarm:
     description: >
       The Linux test suite on the latest Ubuntu machine image (linux/tests/run-all.sh): a single-node
@@ -572,6 +605,10 @@ jobs:
         enum: [persist, attach, none]
         default: none
         description: B1 persists a workspace and B2 attaches it (exercises tar/gzip in the runner).
+      hold:
+        type: integer
+        default: 0
+        description: Seconds that the job waits first. The host restarts the token proxy in that time (B2), and the job must live through it.
     machine: true
     resource_class: cci-labs/scalable-machine-runner-e2e-linux
     shell: /bin/bash -eo pipefail
@@ -586,6 +623,14 @@ jobs:
               exit 1
             fi
             echo "claimed by $(tr '\n' ' ' < /e2e-evidence/host)"
+      - when:
+          condition:
+            not:
+              equal: [0, << parameters.hold >>]
+          steps:
+            - run:
+                name: Hold the job while the host restarts the token proxy, which carries the calls of the runner and its task agent
+                command: sleep << parameters.hold >>
       - checkout
       - when:
           condition:
@@ -634,8 +679,10 @@ jobs:
       E2E_WINDOWS_TAG: << parameters.tag >>
     steps:
       - checkout
+      - attach_workspace:
+          at: proxy-bin   # the token proxy that proxy-test built for windows/amd64
       - run:
-          name: docker swarm init (with an advertise address), then the distributor installs the runner and Git
+          name: docker swarm init (with an advertise address), then the distributor installs the runner, Git and the token proxy
           no_output_timeout: 30m
           command: |
             $global:LASTEXITCODE = 1
@@ -870,6 +917,7 @@ job-groups:
           probe: b2
           previous: b1
           workspace: attach
+          hold: 75
           requires: [e2e-linux-b1]
       - e2e-linux-probe:
           name: e2e-linux-b3
@@ -893,6 +941,7 @@ job-groups:
           probe: b2
           previous: b1
           workspace: attach
+          hold: 75
           requires: [e2e-linux-arm64-b1]
       - e2e-linux-probe:
           name: e2e-linux-arm64-b3
@@ -964,6 +1013,7 @@ workflows:
       - lint-docs-mermaid
       - lint-circleci
       - e2e-simulation
+      - proxy-test
       - linux-swarm
       - linux-image-example
       - linux-setup
@@ -986,10 +1036,11 @@ workflows:
           filters: pipeline.parameters.e2e-linux
       - e2e-windows-2022:
           serial-group: << pipeline.project.slug >>/e2e-windows
+          requires: [proxy-test]
           filters: pipeline.parameters.e2e-windows
       - e2e-windows-2025:
           serial-group: << pipeline.project.slug >>/e2e-windows
-          requires: [e2e-windows-2022]
+          requires: [e2e-windows-2022, proxy-test]
           filters: pipeline.parameters.e2e-windows
       # The release (docs/releasing.md): main only, after every other job has passed. Add every new
       # job of this workflow to `requires` below. One release at a time, so two quick merges cannot
@@ -1010,6 +1061,7 @@ workflows:
             - lint-docs-mermaid
             - lint-circleci
             - e2e-simulation
+            - proxy-test
             - linux-swarm
             - linux-image-example
             - linux-setup

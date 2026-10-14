@@ -39,6 +39,7 @@
 #   E2E_MAX_RUN_TIME        runner max_run_time (default 10m)
 #   E2E_DEADLINE_SECONDS    hard limit for the whole run (default 2400)
 #   E2E_SWEEPER_IMAGE       image for the sweeper (default: pinned circleci/runner-agent)
+#   E2E_PROXY_PORT          port of the local mirror that serves the token proxy of this checkout (default 8097)
 set -euo pipefail
 
 mode=${1:?usage: e2e-host.sh prepare | run | cleanup | sweep}
@@ -66,6 +67,13 @@ override="${log_dir}/stack.e2e.yaml"
 start_seconds=${SECONDS}
 logs_pid=
 events_pid=
+# There is no release of the token proxy to download yet: prepare builds the one of this checkout and serves it, with the SHA256SUMS a
+# release has, from a local mirror; the distributor of the stack installs it from there (the stack's own variables).
+use_proxy=false   # a stack with a token-proxy service (the shipped one): the runners claim through it
+if grep -q '^  token-proxy:' "${stack_file}" 2> /dev/null; then use_proxy=true; fi
+proxy_version=0.0.0-e2e
+proxy_mirror=/tmp/e2e-proxy-mirror
+proxy_port=${E2E_PROXY_PORT:-8097}
 
 log() { printf '[e2e-host %s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 die() { log "FAIL: $*"; exit 1; }
@@ -83,14 +91,26 @@ prepare() {
   log "sudo $(rel "${setup}") --swarm-init"
   sudo "${setup}" --swarm-init
   docker node ls
+  if [ "${use_proxy}" = true ]; then serve_proxy; fi
+}
+
+serve_proxy() {
+  local arch
+  case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) die "no token proxy build for $(uname -m)" ;; esac
+  rm -rf "${proxy_mirror}"; mkdir -p "${proxy_mirror}/v${proxy_version}"
+  "${repo}/ci/build-proxy.sh" "${proxy_mirror}/v${proxy_version}" "${proxy_version}" "linux/${arch}"
+  (cd "${proxy_mirror}/v${proxy_version}" && sha256sum "machine-runner-swarm-proxy_linux_${arch}" > SHA256SUMS)
+  docker rm -f e2e-proxy-mirror > /dev/null 2>&1 || true
+  docker run -d --name e2e-proxy-mirror --network host -v "${proxy_mirror}:/srv:ro" "${image}" python3 -m http.server "${proxy_port}" --directory /srv > /dev/null
+  log "serving the token proxy ${proxy_version} ($(cat "${proxy_mirror}/v${proxy_version}/SHA256SUMS")) on port ${proxy_port}"
 }
 
 # ---------------------------------------------------------------------------
 # Stack files
 # ---------------------------------------------------------------------------
-rendered_services() {  # the runner classes: runner-distributor is a global service of its own
+rendered_services() {  # the runner classes: runner-distributor and token-proxy are services of their own
   docker stack config -c "${stack_file}" | awk '/^services:/{s=1;next} /^[^ ]/{s=0} s && /^  [^ ]/{sub(/^  /,"");sub(/:$/,"");print}' |
-    grep -vx runner-distributor
+    grep -vx -e runner-distributor -e token-proxy
 }
 rendered_secrets() {
   docker stack config -c "${stack_file}" | awk '/^secrets:/{s=1;next} /^[^ ]/{s=0} s && /^    name:/{print $2}'
@@ -122,6 +142,8 @@ EOF
         printf '  %s:\n    deploy:\n      replicas: 0\n' "${s}"
       fi
     done
+    # the token proxy stays as the stack has it (every runner claims through it); the first deployment waits for the distributor
+    if [ "${use_proxy}" = true ]; then printf '  token-proxy:\n    environment:\n      MACHINE_RUNNER_SWARM_PROXY_WAIT: "600"\n'; fi
   } > "${override}"
 }
 
@@ -133,8 +155,13 @@ create_secrets() {
     printf '%s' "${E2E_RUNNER_TOKEN_LINUX}" | sudo "${setup}" --secret "${svc}" > /dev/null 2>&1 ||
       die "setup.sh --secret ${svc} failed"
   done
+  # what the runners read: the token proxy holds the e2e token
+  if [ "${use_proxy}" = true ]; then
+    printf '%s' machine-runner-swarm-e2e-placeholder | sudo "${setup}" --secret runner-placeholder > /dev/null 2>&1 ||
+      die "setup.sh --secret runner-placeholder failed"
+  fi
   for name in $(rendered_secrets); do
-    case ${name} in "${service}-token" | "${hardened}-token") continue ;; esac
+    case ${name} in "${service}-token" | "${hardened}-token" | runner-placeholder-token) continue ;; esac
     printf 'unused' | docker secret create "${name}" - > /dev/null
   done
   log "secrets: $(docker secret ls --format '{{.Name}}' | tr '\n' ' ')"
@@ -143,7 +170,30 @@ create_secrets() {
 deploy() {  # deploy ACTIVE_SERVICE
   write_override "$1"
   log "deploying ${stack}_$1 from $(rel "${stack_file}") + override: image=${image%%@*} idle_timeout=${idle} max_run_time=${max_run}"
-  docker stack deploy --detach=true -c "${stack_file}" -c "${override}" "${stack}"
+  if [ "${use_proxy}" = true ]; then
+    MACHINE_RUNNER_SWARM_PROXY_VERSION="${proxy_version}" MACHINE_RUNNER_SWARM_PROXY_BASE_URL="http://$(hostname -I | awk '{print $1}'):${proxy_port}" \
+      docker stack deploy --detach=true -c "${stack_file}" -c "${override}" "${stack}"
+  else
+    docker stack deploy --detach=true -c "${stack_file}" -c "${override}" "${stack}"
+  fi
+}
+
+# While probe b2 holds its job (the e2e-linux-probe job sleeps), restart the token proxy: the real runner and the real task agent
+# send their calls through it, and the job must live through the restart. The proxy keeps the latch in proxy-state, so the restart must
+# also restore the runner that has claimed.
+bounce_proxy() {
+  local n=0
+  [ "${use_proxy}" = true ] || return 0
+  for _ in $(seq 1 600); do
+    n=$(docker service logs "${stack}_token-proxy" 2>&1 | grep -c 'upstream status 200' || true)
+    [ "${n}" -ge 2 ] && break
+    sleep 2
+  done
+  [ "${n}" -ge 2 ] || { log "bounce: the second claim never came"; return 0; }
+  sleep 20
+  log "bounce: restarting the token proxy while probe b2 holds its job"
+  docker service update --detach --force "${stack}_token-proxy" > /dev/null
+  date -u +%FT%TZ > "${log_dir}/bounced"
 }
 
 remove_stack() {
@@ -163,8 +213,8 @@ token_rejected() {
   grep -qE '401 \(Unauthorized\)|status code: 401' "${service_log}" 2>/dev/null
 }
 
-# The events of the runner containers: the distributor's own container events (start, and die when the stack is removed) are no runner's.
-runner_events() { grep -v " ${stack}_runner-distributor\$" "${events_log}" 2>/dev/null || true; }
+# The events of the runner containers: the distributor's and the proxy's own container events (start, and die when the stack is removed or restarted) are no runner's.
+runner_events() { grep -v -e " ${stack}_runner-distributor\$" -e " ${stack}_token-proxy\$" "${events_log}" 2>/dev/null || true; }
 event_count() { runner_events | grep -c "^$1 " || true; }
 
 # nth_start SERVICE N: ID of the Nth container (1-based) that Swarm started for SERVICE.
@@ -261,8 +311,12 @@ host() {
   # Phase 1: linux-default (the job user keeps sudo), two jobs, two containers.
   deploy "${service}"
   follow_logs "${service}"
+  bounce_proxy &
+  bounce_pid=$!
   wait_probe b1 0
   wait_probe b2 1
+  wait "${bounce_pid}" || true
+  docker service logs "${stack}_token-proxy" > "${log_dir}/proxy.log" 2>&1 || true   # the proxy goes with the stack, and its log is evidence
   # Remove the stack at once: its replacement container must not claim the next probe.
   remove_stack
   stop_logs
@@ -279,7 +333,7 @@ host() {
 }
 
 verify() {
-  local ok=1 starts dies ids codes p ev
+  local ok=1 starts dies ids codes p ev bounced=no
   starts=$(event_count start); dies=$(event_count die)
   ids=$(runner_events | awk '$1 == "start" {print $2}' | sort -u | wc -l)
   codes=$(runner_events | awk '$1 == "die" {print $3}' | sort -u | tr '\n' ' ')
@@ -325,6 +379,12 @@ verify() {
       { log "${p}: the token is in the job environment or on a command line"; ok=0; }
   done
 
+  # The token proxy: every claim went through it, and it was restarted while b2 held its job, which passed.
+  if [ "${use_proxy}" = true ]; then
+    if [ -s "${log_dir}/bounced" ]; then bounced=yes; else log "the token proxy was not restarted during b2"; ok=0; fi
+    grep -q 'state restored: 1 runner' "${log_dir}/proxy.log" || { log "the restarted token proxy did not restore the runner that had claimed"; ok=0; }
+  fi
+
   # Hardened: no sudo, so no way to the token.
   ev=$(evidence b3)
   [ "$(field "${ev}" sudo_works)" = no ] || { log "b3: sudo works in ${hardened}"; ok=0; }
@@ -335,7 +395,7 @@ verify() {
   echo "RESULT e2e=linux arch=$(uname -m) probes=3 distinct_containers=${ids} b2_residue=$(field "$(evidence b2)" residue)" \
     "job_user=$(field "$(evidence b1)" user) runner_user=$(field "$(evidence b1)" runner_user) stepdown=${stepdown} token_in_job_env=$(field "$(evidence b1)" token_env) token_on_command_line=$(field "$(evidence b1)" token_ps)" \
     "token_default_nosudo=$(field "$(evidence b1)" token_nosudo) token_default_sudo=$(field "$(evidence b1)" token_sudo) runner_env_via_sudo_default=$(field "$(evidence b1)" runner_environ_via_sudo)" \
-    "token_hardened_nosudo=$(field "$(evidence b3)" token_nosudo) token_hardened_sudo=$(field "$(evidence b3)" token_sudo) hardened_sudo_works=$(field "$(evidence b3)" sudo_works) verdict=${verdict}" \
+    "proxy_restarted_during_b2=${bounced} b2_passed=$(field "$(evidence b2)" result) token_hardened_nosudo=$(field "$(evidence b3)" token_nosudo) token_hardened_sudo=$(field "$(evidence b3)" token_sudo) hardened_sudo_works=$(field "$(evidence b3)" sudo_works) verdict=${verdict}" \
     | tee "${root}/result.txt"
   [ "${ok}" -eq 1 ]
 }
@@ -344,6 +404,7 @@ verify() {
 cleanup() {
   log "cleanup: removing stack ${stack}, its secrets, and leaving the swarm"
   remove_stack
+  docker rm -f e2e-proxy-mirror > /dev/null 2>&1 || true
   docker secret ls -q 2> /dev/null | xargs -r docker secret rm > /dev/null 2>&1 || true
   docker swarm leave --force > /dev/null 2>&1 || true
   log "cleanup: swarm state is now $(docker info --format '{{.Swarm.LocalNodeState}}')"

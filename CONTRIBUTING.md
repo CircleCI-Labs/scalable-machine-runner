@@ -30,6 +30,8 @@ Before you open a pull request:
 4. Write every commit message, and the pull request title, as a Conventional Commit. The release notes are generated from them, so there is no changelog entry to add. Refer to [Commit messages](#commit-messages).
 5. Check that the diff has no tokens, host names, or customer or vendor names. The repository is public.
 
+A pull request that changes only documentation (`docs/`, `site/`, Markdown files) runs the lint jobs and the docs site build, and skips the builds and the Swarm tests ([Documentation-only changes](docs/ci.md#documentation-only-changes)).
+
 Use the pull request template. Maintainers choose the merge method for each pull request. A squash merge turns the pull request title into the commit message on `main`, and a merge commit or a rebase keeps your commits. Refer to [Merge method](docs/releasing.md#merge-method).
 
 ### Commit messages

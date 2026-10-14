@@ -23,6 +23,8 @@ This page is for maintainers. A CircleCI job makes every release of this reposit
 
 Pipelines of other branches never release, and neither do tag pipelines.
 
+A push to `main` that changes only documentation (`docs/`, `site/`, Markdown files) runs lint and the docs site build, and no e2e and no release job: the setup phase passes `docs-only: true` and turns `release` off ([Documentation-only changes](ci.md#documentation-only-changes)). That loses nothing, because [`cliff.toml`](../cliff.toml) makes no release for a `docs` commit. When a commit of the push would make a release, for example `fix(docs):` or a breaking change, the setup phase leaves `docs-only` off, so the whole pipeline runs and the release job with it. The docs site is published either way.
+
 If an e2e token is missing on `main`, the setup phase passes `release: false` and says so in its log. The pipeline then runs the `ci` workflow without the release job (and without the e2e group whose token is missing), because a release must wait for every test.
 
 **Add a new job to `requires` of the release job.** The release job lists every other job of the workflow in `requires` (in `.circleci/continue.yml`), and a comment at the job says so. The job `lint-circleci` compiles the workflow and fails when a job is missing from the list, so a pull request cannot add a test that the release does not wait for. The only exceptions are the optional jobs that `lint-circleci` names in its `$optional` list (today `linux-mixed-arch`, the emulated mixed-architecture cluster test).

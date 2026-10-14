@@ -1,11 +1,12 @@
 version: 2.1
 
 # Continuation config for CircleCI-Labs/scalable-machine-runner (see docs/ci.md).
-# .circleci/config.yml (the setup phase) sets the four parameters below.
+# .circleci/config.yml (the setup phase) sets the six parameters below.
 #
 # One workflow, `ci`. Expression filters on the parameters switch jobs in and out:
-#   every pipeline  lint, Linux Swarm tests, arm64 smoke test, setup.sh preflight, Windows
-#                   Server 2022 Swarm tests
+#   lint and docs   the lint jobs and the docs site build: every pipeline, docs-only changes included
+#   not docs-only   the builds and tests: Linux Swarm tests, arm64 smoke test, setup.sh preflight, Windows
+#                   Server 2022 Swarm tests. A change of documentation only skips them
 #   full-suite      the Windows Server 2025 Swarm tests
 #   e2e-linux       job A hosts a Swarm service, probes B1, B2, B3 run on it
 #   e2e-windows     the same on Windows (2022, then 2025)
@@ -13,6 +14,9 @@ version: 2.1
 #
 # A second workflow, `docs-site`, publishes the docs site to GitHub Pages on main only. It is not a job
 # of `ci`, so that the release never waits for the publication (docs/ci.md, "Docs site").
+#
+# With the parameter security-scan (the weekly schedule), neither of them runs: the workflow `security-scan` does
+# (docs/ci.md, "Security scan").
 #
 # Nothing here publishes an image. Scan reports and logs are stored as job artifacts.
 
@@ -33,6 +37,19 @@ parameters:
       main only, and only when both e2e tokens exist (the setup phase decides). It switches the
       release job on, and full-suite, e2e-linux and e2e-windows with it, so that every job the
       release requires really runs.
+  docs-only:
+    type: boolean
+    default: false
+    description: >
+      The push changes documentation only (docs/, site/, *.md). It switches the builds and tests off: the lint
+      jobs and the docs site build still run. The setup phase turns full-suite, e2e-linux, e2e-windows and
+      release off with it, so the release never waits for a job that was skipped. A docs commit makes no
+      release anyway (cliff.toml), and the gate runs everything when one would.
+  security-scan:
+    type: boolean
+    default: false
+    description: >
+      The weekly security scan: the workflow security-scan runs, and the workflows ci and docs-site do not.
 
 executors:
   linux-vm:
@@ -970,11 +987,31 @@ jobs:
               echo "literal parameter tags in the compiled config (escaped by a preceding backslash?)"
               exit 1
             fi
+            # A change of documentation only runs the lint jobs and the docs site build. `process` leaves the expression filters
+            # in the compiled config, so read them from the source: a job of ci with no filter must be a lint job or the docs
+            # site build, and every other filter is `not pipeline.parameters.docs-only` or a parameter that the setup gate
+            # turns off for a docs-only change (full-suite, e2e-linux, e2e-windows, release). A new job without a filter would
+            # otherwise run on every docs pull request.
+            yq -o=json '.workflows.ci.jobs' .circleci/continue.yml | jq -r '
+              ["not pipeline.parameters.docs-only", "pipeline.parameters.full-suite", "pipeline.parameters.e2e-linux",
+               "pipeline.parameters.e2e-windows", "pipeline.parameters.release"] as $gated
+              | map(if type == "string" then {key: ., value: {}} else to_entries[0] end)
+              | map(select(.key | startswith("lint-") or . == "docs-site-build" | not))
+              | map(select((.value.filters // "") | IN($gated[]) | not))
+              | map(.key)
+              | if length > 0
+                then "a docs-only change would run: " + join(", ") + " (add filters: not pipeline.parameters.docs-only)" | halt_error(1)
+                else empty end'
+            # The weekly scan sets security-scan: the ci and docs-site workflows must not run with it.
+            /tmp/cli/circleci config process .circleci/continue.yml --pipeline-parameters '{security-scan: true}' > /tmp/scan.yml
+            yq -o=json '.workflows | del(.version)' /tmp/scan.yml | jq -e 'has("ci") or has("docs-site") | not' > /dev/null \
+              || { echo "security-scan: true must not run the ci or docs-site workflow"; exit 1; }
       - run:
-          name: The setup gate (table test), the two exclusive setup workflows (compiled per branch) and the deploy marker script
+          name: The setup gate (table test), the three exclusive setup workflows (compiled per branch), the changed-files script and the deploy marker script
           command: |
             ci/tests/setup-gate.sh
             ci/tests/setup-config.sh /tmp/cli/circleci
+            ci/tests/changed-files.sh
             ci/tests/deploy-marker.sh
       - run:
           name: The release job requires every other job (docs/releasing.md)
@@ -1176,6 +1213,8 @@ workflows:
   # as a dependency (configuration reference, `requires`), so the release job can require all of
   # them: on a release pipeline the setup phase switches every parameter on.
   ci:
+    when:
+      not: << pipeline.parameters.security-scan >>
     jobs:
       - lint-shell
       - lint-dockerfiles
@@ -1187,22 +1226,30 @@ workflows:
       - lint-docs-mermaid
       - lint-circleci
       - docs-site-build
-      - e2e-simulation
-      - proxy-test
-      - linux-swarm
-      - linux-image-example
-      - linux-setup
-      - linux-arm64
+      - e2e-simulation:
+          filters: not pipeline.parameters.docs-only
+      - proxy-test:
+          filters: not pipeline.parameters.docs-only
+      - linux-swarm:
+          filters: not pipeline.parameters.docs-only
+      - linux-image-example:
+          filters: not pipeline.parameters.docs-only
+      - linux-setup:
+          filters: not pipeline.parameters.docs-only
+      - linux-arm64:
+          filters: not pipeline.parameters.docs-only
       # Required by the release: KVM on the Android image has passed in CI in every pipeline since the first one that could run it
       # (full-suite, which a release pipeline switches on).
       - linux-microvm:
           filters: pipeline.parameters.full-suite
       # Optional: it is NOT in the `requires` of the release (the release check of lint-circleci lists it as optional).
-      - linux-mixed-arch
+      - linux-mixed-arch:
+          filters: not pipeline.parameters.docs-only
       - windows-swarm:
           name: windows-swarm-ltsc2022
           os: windows-2022
           tag: ltsc2022
+          filters: not pipeline.parameters.docs-only
       - windows-swarm:
           name: windows-swarm-ltsc2025
           os: windows-2025
@@ -1260,6 +1307,8 @@ workflows:
   # nothing requires would have to be a requirement of the release (lint-circleci checks it), and the release must
   # not wait for the publication. One publication at a time, so that two quick merges cannot push to gh-pages together.
   docs-site:
+    when:
+      not: << pipeline.parameters.security-scan >>
     jobs:
       - docs-site-publish:
           context: [scalable-machine-runner-docs]

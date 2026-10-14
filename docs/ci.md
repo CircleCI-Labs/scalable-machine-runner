@@ -439,6 +439,23 @@ The site has its own context and not the release context. The release token can 
 
 When the repository is renamed to `machine-runner-swarm`, the Pages address changes with it and GitHub does not redirect the old one. Change the two lines of `site/hugo.yaml` that name the repository (`baseURL` and the GitHub link of the menu). The publication follows the repository that the pipeline runs in.
 
+## Deploys
+
+The pipeline records its two deployments in the Deploys view of CircleCI (**Deploys** in the web app), with deploy markers: `circleci run release plan` creates the deploy as pending, and `circleci run release update` moves it to `RUNNING` and then to `SUCCESS` or `FAILED`.
+
+| Deploy | Job | Component | Environment | Version |
+|---|---|---|---|---|
+| A GitHub release | `release` | `machine-runner-swarm` | `github-releases` | The release tag, for example `v0.2.0` |
+| The docs site | `docs-site-publish` | `docs-site` | `github-pages` | The commit SHA |
+
+CircleCI creates the components and the environments on the first deploy: nobody sets them up. [`ci/deploy-marker.sh`](../ci/deploy-marker.sh) makes the calls, and [`ci/tests/deploy-marker.sh`](../ci/tests/deploy-marker.sh) tests it in `lint-circleci` against a stub of the `circleci` command.
+
+- **Only a real deploy is recorded.** The release job plans its deploy after it has the version, and only when it will publish (`GITHUB_TOKEN` is set). `Nothing to release` and a run without the token record nothing. The docs job records a deploy only with `GITHUB_TOKEN` as well, because without it nothing is published.
+- **Failure.** The release script gives the deploy the status `FAILED`, with the exit status as the reason, on every way out of the script: a failed check, a failed signature, a failed `gh` call. A failed or canceled deploy gives the live version back to the last successful one in the Deploys view. The docs job does the same in a step with `when: on_fail`, with a link to the job as the reason.
+- **Cancel.** A cancel that reaches `ci/release.sh` as a signal records `CANCELED`. A canceled `docs-site-publish` job runs no later step, so its deploy stays at its last status.
+- **One job.** Plan and updates are steps of one job. A rerun from failed that starts a new job would break the link between them, and CircleCI refuses a second final status for a deploy.
+- **A marker never fails a job.** If the task agent refuses a call (for example the organization has no Deploys), the script prints a warning and exits 0.
+
 ## Pinned versions
 
 Every tool image is pinned by tag and digest, and every download by version and SHA-256 value. [Renovate](https://docs.renovatebot.com/), the GitHub App of the organization, keeps them current. [`renovate.json`](../renovate.json) is its whole configuration: the repository needs no workflow or token for it, and no GitHub Actions workflow is involved.

@@ -19,6 +19,7 @@ This page is for maintainers. A CircleCI job makes every release of this reposit
 1. The `release` job requires every other job of the workflow. If one job fails, nothing is released. Fix the problem, then use **Rerun workflow from failed**. The release job runs once everything has passed.
 1. The `release` job runs in the serial group `<project slug>/release`, so two quick merges cannot race for the same version. A newer pipeline whose release job waits in the group makes the release job of an older pipeline skip. The newer one releases both changes.
 1. `ci/release.sh` checks that every Swarm config of the stack files is named after the content of its file (`ci/config-names.sh`), and stops when a name is stale. Then it finds the next version, makes the notes, pins the token proxy version in the stack files, builds the bundles and the proxy binaries, signs `SHA256SUMS`, verifies the signature, and creates the GitHub release. The release creates the tag at the commit of the pipeline.
+1. When the job will publish (`GITHUB_TOKEN` is set), `ci/release.sh` also records the release in the Deploys view of CircleCI: component `machine-runner-swarm`, environment `github-releases`, version the tag. The deploy ends as `SUCCESS`, or as `FAILED` when any step of the script fails ([Deploys](ci.md#deploys)).
 
 Pipelines of other branches never release, and neither do tag pipelines.
 
@@ -146,6 +147,7 @@ Rerunning is safe. Before it publishes, the job looks for a release tag at the c
 | The job says that a tag exists at another commit | Stop. Somebody created `vX.Y.Z` by hand, or an older release was moved. Compare `git rev-parse vX.Y.Z` with the commit of the pipeline. Delete the wrong tag and release with `gh release delete vX.Y.Z --cleanup-tag`, then rerun the job |
 | `This commit is already part of vX.Y.Z` | A later commit was already released. The job ended green without doing anything |
 | The release job shows as skipped | A newer pipeline is waiting for the release lock, and it will release this change too |
+| The Deploys view shows the release as `FAILED` | The job failed after it planned the deploy. Read the failure reason there, fix the cause, and rerun the job: it records a new deploy of the same version, and the failed one stays in the history |
 | `Nothing to release since vX.Y.Z` | The commits since the last release are only `docs`, `test`, `ci`, `chore`, `style`, `refactor`, or `build`. This is expected |
 | `gh` fails with 401 or 403 | The token expired or lost its permission. Replace `GITHUB_TOKEN` in the context and rerun the job |
 | A release is wrong | Prefer a new release that fixes it. If you delete a release and its tag, the next run makes the same version again |

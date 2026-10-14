@@ -971,10 +971,11 @@ jobs:
               exit 1
             fi
       - run:
-          name: The setup gate (table test) and the two exclusive setup workflows (compiled per branch)
+          name: The setup gate (table test), the two exclusive setup workflows (compiled per branch) and the deploy marker script
           command: |
             ci/tests/setup-gate.sh
             ci/tests/setup-config.sh /tmp/cli/circleci
+            ci/tests/deploy-marker.sh
       - run:
           name: The release job requires every other job (docs/releasing.md)
           command: |
@@ -1014,16 +1015,35 @@ jobs:
     description: >
       Builds the site again, with the same steps, and pushes it to the gh-pages branch (site/publish.sh). Runs on main only,
       in the workflow docs-site, so that the release does not wait for it. The context holds GITHUB_TOKEN. Without it the job
-      builds and checks the site and publishes nothing.
+      builds and checks the site and publishes nothing. A publication is recorded as a deploy of the component docs-site,
+      environment github-pages, version = the commit (ci/deploy-marker.sh, docs/ci.md "Deploys").
     docker:
       - image: cimg/go:1.27.2@sha256:d370371192063607c1237351759d8ab0c49f5e37ab7c3bd7553b09c8b62247d5
     resource_class: small
     steps:
       - checkout
+      - run:
+          name: Plan the deploy (a deploy marker; only when the site will be published)
+          command: |
+            if [ -n "${GITHUB_TOKEN:-}" ]; then
+              ci/deploy-marker.sh plan docs-site docs-site github-pages "${CIRCLE_SHA1}"
+            else
+              echo "no GITHUB_TOKEN: nothing is published, so no deploy is recorded"
+            fi
       - docs-site
+      - run:
+          name: Deploy is running
+          command: ci/deploy-marker.sh update docs-site RUNNING
       - run:
           name: Publish to gh-pages (nothing is published without GITHUB_TOKEN)
           command: site/publish.sh
+      - run:
+          name: Deploy succeeded
+          command: ci/deploy-marker.sh update docs-site SUCCESS
+      - run:
+          name: Deploy failed
+          when: on_fail
+          command: ci/deploy-marker.sh update docs-site FAILED "the job docs-site-publish failed, see ${CIRCLE_BUILD_URL}"
 
   # ---------------------------------------------------------------------------
   # Release (docs/releasing.md): after every other job of the `ci` workflow has passed
@@ -1038,6 +1058,9 @@ jobs:
     resource_class: small
     environment:
       PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+      # A release that publishes is recorded as a deploy of the component machine-runner-swarm, environment github-releases,
+      # version = the tag, with its failure status (ci/deploy-marker.sh, docs/ci.md "Deploys").
+      RELEASE_DEPLOY_MARKER: "1"
     steps:
       - checkout
       - run:

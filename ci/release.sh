@@ -22,6 +22,9 @@
 #   PIPELINE_DEFINITION_ID  the pipeline definition (<< pipeline.definition.id >>), for the
 #                         certificate identity that the signature is checked against
 #   RELEASE_SKIP_SIGN=1   for a run outside CircleCI, where there is no OIDC token
+#   RELEASE_DEPLOY_MARKER=1  record the release in the Deploys view of CircleCI (docs/ci.md, "Deploys"): component
+#                         machine-runner-swarm, environment github-releases, version = the release tag. Only a run that
+#                         publishes is recorded (GITHUB_TOKEN set, signing on). A marker never fails the release.
 #   RELEASE_OUT           output directory (default /tmp/release)
 #
 # Never run this with `set -x`: the OIDC token and GITHUB_TOKEN are in the environment.
@@ -36,6 +39,7 @@ export PATH="${goroot}/bin:${bin}:${PATH}"
 proxy_assets=()   # the file names of the proxy builds: set in main, from ci/build-proxy.sh, which builds them
 
 say() { printf '==> %s\n' "$*"; }
+marker() { if [ "${RELEASE_DEPLOY_MARKER:-}" = 1 ]; then ci/deploy-marker.sh "$@"; fi; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 install_tools() {
@@ -212,9 +216,18 @@ main() {
   check_runner_pin
   choose_version
   name="machine-runner-swarm-${version#v}"
+  # A release that will publish is a deploy. Plan it before the first step that can fail, and give it the final status on
+  # every way out of the script (a die, a failed command, a cancel): the job `release` is the one job of plan and updates.
+  if [ -n "${GITHUB_TOKEN:-}" ] && [ "${RELEASE_SKIP_SIGN:-}" != 1 ]; then
+    marker plan release machine-runner-swarm github-releases "${version}"
+    # shellcheck disable=SC2154  # rc is set by the trap itself
+    trap 'rc=$?; case ${rc} in 0) ;; 130 | 143) marker update release CANCELED ;; *) marker update release FAILED "ci/release.sh exited with status ${rc}" ;; esac' EXIT
+  fi
   build
   if [ "${RELEASE_SKIP_SIGN:-}" = 1 ]; then say "Signing skipped (RELEASE_SKIP_SIGN=1)"; else sign_and_verify; fi
+  marker update release RUNNING
   publish
+  marker update release SUCCESS
 }
 
 case "${1:-}" in

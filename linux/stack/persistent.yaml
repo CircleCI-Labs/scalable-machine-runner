@@ -76,4 +76,4 @@ secrets:
   linux-persistent-token: {external: true}
 
 configs:   # as in runners.yaml (ci/config-names.sh keeps the name in step with the file), so that this file also loads alone
-  entrypoint: {name: machine-runner-swarm-entrypoint-7dfc682a944b, file: circleci-runner-entrypoint}
+  entrypoint: {name: machine-runner-swarm-entrypoint-0770da4384e6, file: circleci-runner-entrypoint}

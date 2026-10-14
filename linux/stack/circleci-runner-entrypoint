@@ -19,6 +19,8 @@
 #              MACHINE_RUNNER_SWARM_JOB_SUDO  default true; false removes the job user's sudo rights in this container and
 #                                             steps jobs down with setpriv --no-new-privs, even when the image has sudo:
 #                                             Swarm ignores no-new-privileges, so a setuid binary could otherwise still elevate
+#              MACHINE_RUNNER_SWARM_REQUIRE_MICROVM  default false; true exits 80 unless this container runs in a Kata Containers
+#                                             microVM (microvm.yaml sets it: a node that silently uses runc must not run those classes)
 # Arguments replace the runner's default: machine --config /run/secrets/circleci_runner_config.yaml
 # Exit: 80 when a prerequisite is missing (for JOB_SUDO=false, util-linux setpriv with --no-new-privs) or an existing circleci-runner
 # account is not uid 2000, otherwise the runner's own code (it is exec'd, so it
@@ -38,6 +40,15 @@ job=${MACHINE_RUNNER_SWARM_JOB_USER:-circleci}
 sudo_ok=${MACHINE_RUNNER_SWARM_JOB_SUDO:-true}
 umask 022
 case $sudo_ok in true | false) ;; *) die "MACHINE_RUNNER_SWARM_JOB_SUDO must be true or false, got '$sudo_ok'" ;; esac
+
+# microvm.yaml classes add SYS_ADMIN and other capabilities that are safe only inside a VM. On a node that falls back to runc they
+# would be a host escape, so refuse to start. The guest kernel command line of a Kata VM names kata-containers; a runc container
+# shows the host's.
+case ${MACHINE_RUNNER_SWARM_REQUIRE_MICROVM:-false} in
+  true) grep -q kata-containers /proc/cmdline 2>/dev/null || die "MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true but this container is not in a Kata microVM: check the node label and the Docker default-runtime (docs/microvm.md)" ;;
+  false) ;;
+  *) die "MACHINE_RUNNER_SWARM_REQUIRE_MICROVM must be true or false, got '${MACHINE_RUNNER_SWARM_REQUIRE_MICROVM}'" ;;
+esac
 
 # Wait for the runner-distributor of this node, pin this container to the version directory that the link names now, and check the
 # binary against its record. A runner that is in the image already as bin/circleci-runner needs none of it.

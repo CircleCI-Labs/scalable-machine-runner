@@ -279,6 +279,17 @@ dist_flip() { ln -s "versions/$1" /opt/machine-runner-swarm/.current.new && mv -
   [ "$status" -eq 80 ]
 }
 
+@test "exit 80: MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true outside a Kata microVM (microvm.sh tests the VM), and a typo" {
+  MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true run ep
+  [ "$status" -eq 80 ]
+  [[ $output == *"not in a Kata microVM"* ]]
+  [[ $output != *"ARGS="* ]]
+  MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=True run ep
+  [ "$status" -eq 80 ]
+  MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=false run ep
+  [ "$status" -eq 0 ]
+}
+
 # ---------------------------------------------------------------------------------------------
 # Users and step-down
 # ---------------------------------------------------------------------------------------------

@@ -6,7 +6,7 @@ Thank you for helping to improve the machine runner swarm. This repository is pa
 
 Search the [existing issues](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) first, and check that you use the latest release. Then open a new issue with the bug template. Include:
 
-- The release or commit of this repository, and the runner version. On Linux, run `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node. On Windows, read `C:\machine-runner-swarm\current\VERSION`.
+- The release or commit of this repository, and the runner version. On Linux, run `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node. On Windows, run `docker service logs --tail 100 runners_runner-distributor-windows`.
 - The operating system of the node and the Docker Engine version.
 - The output of `docker service ps --no-trunc runners_<service>` and `docker service logs --tail 100 runners_<service>`.
 
@@ -89,12 +89,13 @@ The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and on
 
 | Test | What it checks |
 |---|---|
-| `Test-Injection.ps1` | A stock Server Core image with the `C:\machine-runner-swarm` and Git mounts and the `PATH` of the stack: the toolchain, GNU tar as the task agent calls it, Git long paths, the exit codes of the runner, and the config file with environment overrides. `-Online` lets the real runner download its task agent. `-Baked` tests the baked image |
+| `Test-Injection.ps1` | A stock Server Core image with the mounts of the volume `runner-bin` and the `PATH` of the stack: the toolchain, GNU tar as the task agent calls it, Git long paths, the exit codes of the runner, and the config file with environment overrides. `-Online` lets the real runner download its task agent. `-Baked` tests the baked image |
 | `Test-Ephemerality.ps1` | A new container for every job and no residue, with the restart-policy negative control |
 | `Test-Exit80.ps1` | Exit 80 without a hot loop |
 | `Test-Placement.ps1` | Placement constraints and node labels |
 | `Test-StopHandling.ps1` | What a stop does to a busy stock container (it kills the job, informational), and a Swarm secret as the runner config. `-Online` stops the real runner and expects a drain |
-| `Test-Upgrade.ps1` | A junction as the bind source: the next container sees the new version, and the running one keeps the old |
+| `Test-Install.ps1` | The distributor installs the runner and portable Git from CircleCI's real manifest into the volume of the stack, and the stock mounts work and are read-only |
+| `Test-Distributor.ps1` | The distributor script against a local mirror: pin, `current` by SHA-256, the major-version guard, rollback, a wrong SHA-256, pruning, a changed binary, and a running container that keeps its version |
 | `Test-Persistent.ps1` | Continuous mode, and a named volume that outlives the container |
 
 ### Swarm config names
@@ -114,7 +115,7 @@ docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.18.1 '**/*.md
 
 ### Pinned versions
 
-This repository does not use Renovate. Update pinned versions by hand, and change the version and its checksum together. The Linux runner version is not pinned in this repository: the distributor follows the current release of CircleCI, or the version that a user sets, and the `alpine:3` image of the distributor is pinned by digest in `linux/stack/runners.yaml`. The Windows runner version appears in `windows/Setup.ps1`, `windows/images/servercore/Dockerfile`, and the manual commands in `docs/install-windows.md`. The Git and 7-Zip checksums appear in `windows/Setup.ps1`, the Dockerfile, and `docs/install-windows.md`. Pin images by tag and digest.
+This repository does not use Renovate. Update pinned versions by hand, and change the version and its checksum together. The Linux runner version is not pinned in this repository: the distributor follows the current release of CircleCI, or the version that a user sets, and the `alpine:3` image of the distributor is pinned by digest in `linux/stack/runners.yaml`. The Windows runner version is not pinned either. The pinned Git and 7-Zip versions and their SHA-256 values are in `windows/stack/runner-distributor.ps1`, and a change of the script needs `ci/config-names.sh --write`. Pin images by tag and digest.
 
 ## Releases
 

@@ -25,7 +25,7 @@ This section is the short answer for users and reviewers. The pipeline sections 
 | Step-down and the token | The default class keeps sudo and sudo can read the token. The hardened class has no sudo, and a setuid binary cannot lift the job, because of `setpriv --no-new-privs`. The token is in no environment or command line | `token.sh`, `task.sh` (the real runner binary against a fake API) and the e2e probes with real jobs |
 | Placement | A service stays pending until a node has its label. The docker-build node runs no other class | `placement.sh` and `Test-Placement.ps1`, in a one-node and a two-node Swarm on Linux |
 | Runner distributor on Linux | The runners wait for the distributor and then exit 80, and start in the same container once it is released. A fresh node and a node that joins later get the runner by themselves. An upgrade under three busy jobs: the jobs finish on their version, and the runner service is not touched. A rollback needs no download. `current` follows the manifest with no redeploy, the major-version guard keeps the nodes on major 3, and pruning keeps 3 versions. A tampered binary makes new containers exit 80 and is repaired by itself, and a wrong SHA-256 installs nothing. CircleCI's real manifest works too | `distributor.sh`, with a local HTTP mirror in the test harness |
-| Runner upgrade on Windows | Flipping `current` under load: running jobs finish on the old version, and the next container gets the new one | `Test-Upgrade.ps1` |
+| Runner distributor on Windows | The distributor installs CircleCI's current runner and portable Git from CircleCI's real manifest and the pinned GitHub downloads, with a record of the binary. Against a local mirror: a pin, `current` by SHA-256, the major-version guard, a rollback with no network, a wrong SHA-256, pruning, a changed binary, and a running container that keeps its version and keeps Windows from removing it | `Test-Install.ps1` and `Test-Distributor.ps1` |
 | Stop and runner drain | On Linux, SIGTERM lets a running job finish and the container exits 0. On Windows, a stock container is killed after about 5 seconds (the control), and an idle real runner drains | `drain.sh` (fake job) and `Test-StopHandling.ps1` |
 | Persistent class | One container serves many jobs, and the named volume survives a recycle | `persistent.sh` and `Test-Persistent.ps1`, with a fake runner on Linux |
 | Limits and network | `pids`, `ulimits`, capabilities, and reservations that leave replicas pending. Classes cannot reach each other, and replicas of one class can | `limits.sh` and `network.sh` |
@@ -48,7 +48,7 @@ This section is the short answer for users and reviewers. The pipeline sections 
 | A drain that lasts hours | The `stop_grace_period` of 5h5m is a setting, and no test waits for it |
 | The persistent class with a real task agent | Linux and Windows run a fake or an idle runner |
 | The docker-build add-on stack file with a real job | The Windows named pipe is never used by a test |
-| Real jobs on arm64 | `linux-arm64` is a smoke test: the install by the distributor and the start of the stack |
+| Real jobs on arm64 | The e2e group `e2e-linux-arm64` runs the same three probes on a real arm64 runner, which the distributor installed on an Arm VM. `linux-arm64` is the smoke test before it: the install by the distributor and the start of the stack |
 | A mirror over `https` with a private certificate authority, and a download through a proxy | The distributor test serves its mirror over plain HTTP, and `linux-setup` downloads from the real bucket over `https` |
 | RHEL and SELinux | The steps follow Docker's documentation |
 | Rerun job with SSH (`ssh-rerun.yaml`) | CI checks that the files parse and merge and keep the contract, including the host-mode port 54782, `max_replicas_per_node: 1` and the advertise address. The Swarm side was proven by hand on a Linux Swarm with a real runner: the **Enable SSH** step runs, and the task agent answers on port 54782 of the node. No test logs in over SSH, and the Windows file is untested |
@@ -93,6 +93,7 @@ flowchart TD
 | every pipeline | `windows-swarm-ltsc2022` | `windows-server-2022-gui:current`, windows.medium | The stock-image path on Windows (below) |
 | `full-suite` | `windows-swarm-ltsc2025` | `windows-server-2025-gui:current` | The same on Server 2025 |
 | `e2e-linux` | `e2e-linux-host`, `e2e-linux-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`; probes: `cci-labs/scalable-machine-runner-e2e-linux` | Real runner e2e (below) |
+| `e2e-linux-arm64` | `e2e-linux-arm64-host`, `e2e-linux-arm64-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`, `arm.medium`; probes: the same class | The same e2e with the arm64 runner. It uses the class and the token of `e2e-linux` and runs after it in the same serial group. Every probe records `uname -m`, and the host requires it to equal its own `aarch64` |
 | `e2e-windows` | `e2e-windows-2022-host` and `-b1`, `-b2`, `-b3`; then the same for 2025 | host: `windows-server-2022-gui:current` / `windows-server-2025-gui:current`; probes: `cci-labs/scalable-machine-runner-e2e-windows` | Real runner e2e (below) |
 | `release` | `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release` | The release (below). It requires every job above |
 
@@ -172,12 +173,12 @@ The decision therefore has to happen before the e2e jobs are compiled into the w
 
 ## Windows jobs
 
-`windows-swarm` runs on the stock Server Core image. There is no entrypoint script: the runner (`circleci-runner.exe machine --config C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`) is the container's main process, and the runner and portable Git come from the read-only mounts `C:\machine-runner-swarm` and `C:\Program Files\Git`. The steps are:
+`windows-swarm` runs on the stock Server Core image. There is no entrypoint script: the runner (`circleci-runner.exe machine --config C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`) is the container's main process, and the runner and portable Git come from the read-only mounts `C:\machine-runner-swarm` and `C:\Program Files\Git` of the volume `runner-bin`, which the distributor of the stack fills. The steps are:
 
 1. Engine check: `docker info` must report `OSType windows`.
 2. Windows PowerShell 5.1 unit tests (`Invoke-UnitTests.ps1`, Pester 5.7.1; the image registers both a `Nuget` and a `PSGallery` repository, so modules are installed with `-Repository PSGallery`).
-3. `windows\Setup.ps1 -StageOnly` (runner, portable Git, ACLs), then `docker pull` of the stock image, then `windows\Setup.ps1 -InitSwarm -AdvertiseAddr <ip>` (docker swarm init and the `machine-runner-swarm.windows-ltsc*` node labels). Staging and pulling come first because the network is down for a few seconds after the swarm is created.
-4. The Windows tests, each printing `CHECK` lines and a `RESULT` line: `Test-Injection.ps1 -Online`, `Test-Ephemerality.ps1`, `Test-Exit80.ps1`, `Test-Placement.ps1`, `Test-StopHandling.ps1 -Online` (stock Server Core is killed 5 s after a stop, the control, an idle real runner drains on a stop, a Swarm secret is read), `Test-Persistent.ps1`, `Test-Upgrade.ps1` (a junction as the bind source: the container after a flip sees the new version, the running one keeps the old). `ci\Invoke-Test.ps1` runs each in a child PowerShell and keeps its complete output as an ASCII report under `reports/` (artifacts). `Tee-Object` would write UTF-16 and would miss what a script writes with `[Console]::Out`.
+3. `docker pull` of the stock image, then `windows\Setup.ps1 -InitSwarm -AdvertiseAddr <ip>` (docker swarm init and the `machine-runner-swarm.windows-ltsc*` node labels). Pulling comes first because the network is down for a few seconds after the swarm is created. Then `Test-Install.ps1` deploys the shipped stack with no runner replicas, so that the distributor installs the runner and Git from the real manifest, and checks what it installed. The volume stays for the tests that follow.
+4. The Windows tests, each printing `CHECK` lines and a `RESULT` line: `Test-Injection.ps1 -Online`, `Test-Ephemerality.ps1`, `Test-Exit80.ps1`, `Test-Placement.ps1`, `Test-StopHandling.ps1 -Online` (stock Server Core is killed 5 s after a stop, the control, an idle real runner drains on a stop, a Swarm secret is read), `Test-Persistent.ps1`, and `Test-Distributor.ps1` (the distributor against a local mirror of fake releases). `ci\Invoke-Test.ps1` runs each in a child PowerShell and keeps its complete output as an ASCII report under `reports/` (artifacts). `Tee-Object` would write UTF-16 and would miss what a script writes with `[Console]::Out`.
 
 The bring-your-own-image example `windows/images/example` (stock Server Core plus Node.js, pinned with a SHA-256) is built in the same job and runs `node`, `npm` and `git` with the runner and Git mounted and the `PATH` of `custom-image.yaml`.
 
@@ -192,16 +193,16 @@ Every Windows test prints `CHECK <name> PASS|FAIL <detail>` lines and one `RESUL
 | `Test-Exit80.ps1` | `RESULT exit80 ... swarm_exits=<2..8> window=60s delay=10s verdict=PASS` | Exit 80 for a missing name, token or an invalid name, and no hot loop under Swarm (about 70 s) |
 | `Test-Placement.ps1` | `RESULT placement ... host_tag=ltsc2022 verdict=PASS` | Constrained services stay pending until the node has the label (about 2 to 4 min) |
 | `Test-StopHandling.ps1 -Online` | `RESULT stop ... job_seconds=40 verdict=PASS` | The real runner drains on `docker stop` and exits 0, and a Swarm secret is read as the runner config. A `NOTE control` line shows that a busy stock container is KILLED by a stop (`job_finished=False`, exit 3221225786, about 6 s) |
-| `Test-Upgrade.ps1` | `RESULT upgrade ... link_types=Junction verdict=PASS` | A junction as the bind source of a service: the first container sees 1.0.0, the job that runs during the flip to 2.0.0 ends on 1.0.0, and the next container sees 2.0.0 (about 2 min). `-LinkType SymbolicLink` runs the same checks with a directory symbolic link, which also works |
+| `Test-Install.ps1` | `RESULT install checks=7 failed=0 stack=runners verdict=PASS` | The distributor of the shipped stack installs the release that the real manifest names as `current`, with the SHA-256 record, the two relative links, and Git, and the stock mounts run `circleci-runner.exe`, `git`, `bash` and GNU `tar` and are read-only (the first download takes minutes) |
+| `Test-Distributor.ps1` | `RESULT distributor checks=13 failed=0 verdict=PASS` | The script in a Server Core container against a mirror read through `file://` URLs: a pin, the record, `current` resolved by SHA-256, the major-version guard, a rollback with the mirror gone, a wrong SHA-256 and a list that holds the right one, pruning to 3, a changed binary replaced, and a container that keeps its version while `current` moves and keeps its version directory from removal |
 | `Test-Persistent.ps1` | `RESULT persistent ... verdict=PASS` | Continuous mode: one long-lived container, and a named volume that survives its replacement (about 2 min) |
 
 ### Windows tests: where to look first
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
-| `Setup.ps1 -StageOnly` fails extracting Git, or `post-install` warns | `7zr.exe` could not open the PortableGit archive, or Git's post-install scripts failed | Read the output of the `7zr.exe x` and `bash.exe --norc -c` lines |
-| `runner-mount` fails with access denied | The container identity cannot read `C:\machine-runner-swarm` | `icacls C:\machine-runner-swarm` must show `*S-1-5-11` (Authenticated Users) with `(RX)`; `Setup.ps1 -StageOnly` sets it |
-| `docker run` fails creating the Git mount (`invalid mount config`) | The engine refuses a bind destination under `C:\Program Files` | The task agent needs Git at exactly that path, so this must work on the host: check the engine version |
+| `Test-Install.ps1` fails at `distributor` | The distributor could not download or unpack, or its post-install of Git warned | The report prints the log of the service: look for `cannot download`, `SHA-256 mismatch`, `7zr.exe exited` and `Git post-install` lines |
+| `docker run` fails creating a mount (`invalid mount config` or `cannot access path`) | The engine refuses a subpath that is a junction or an absolute link, or the link `current` does not exist yet | The links are relative directory symbolic links, which the distributor creates; for the Git destination under `C:\Program Files`, the task agent needs Git at exactly that path, so check the engine version | The task agent needs Git at exactly that path, so this must work on the host: check the engine version |
 | `toolchain` fails: `bash` or `git` not found | The stack's `PATH` is wrong for this image | The detail prints the container's `PATH`; compare it with `path-default`, and fix the PATH string in `runners.yaml` and `stack.e2e.yaml` |
 | `toolchain` fails: no `SeCreateSymbolicLinkPrivilege`, or `symlink_made=False` | The container user is not an administrator | The stock Server Core default is `ContainerAdministrator`; check that no `user:` is set |
 | `path-default` lists lost entries | The image's own PATH has directories that the stack's string lacks (for example on Server 2025) | Add them to the `PATH` strings in `runners.yaml` and `stack.e2e.yaml` |
@@ -222,6 +223,8 @@ e2e-linux (job group, serial-group <project slug>/e2e-linux)
   e2e-linux-b1 (B1)   service linux-default
   e2e-linux-b2 (B2)   service linux-default, requires B1
   e2e-linux-b3 (B3)   service linux-hardened, requires B2
+e2e-linux-arm64 (job group, the same serial-group, requires e2e-linux)
+  e2e-linux-arm64-host and -b1, -b2, -b3: the same on arm.medium
 ```
 
 **Host.**
@@ -262,7 +265,7 @@ e2e-windows-2025 (the same group on Server 2025, requires e2e-windows-2022)
 
 The host (`ci/E2E-Host.ps1`) follows the same shape, with one service and three probes:
 
-1. `Prepare` stages `C:\machine-runner-swarm\<version>` and the `current` junction with `windows\Setup.ps1 -StageOnly`, pulls the stock image, and only then runs `windows\Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the node label). See the facts above for the order.
+1. `Prepare` pulls the stock image, runs `windows\Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the node label), and then deploys the shipped stack with no runner replicas until its distributor has installed the runner and Git from the real manifest. It removes the stack again; the volume stays. See the facts above for the order.
 2. `Run` takes the shipped `windows/stack/runners.yaml` as text, replaces `ltsc2022` with the host's tag (`ltsc2025` on Server 2025), layers an override on it (one replica of `windows-default` on the stock image, an idle timeout, the evidence mount). `runners.yaml` holds only `windows-default`: the optional classes are the add-on stack files `persistent.yaml`, `custom-image.yaml` and `docker-build.yaml`, and the e2e deploys none of them, and deploys it with `--resolve-image never` (the image is local).
 3. The Swarm secret `windows-default-token` is the runner's config file (`api:` with `auth_token: <token>` under it), built from `E2E_RUNNER_TOKEN_WINDOWS`.
 4. Each probe's `MACHINE_RUNNER_SWARM_INSTANCE_ID` must equal the Swarm task ID of the container that Swarm started for it (the stack sets the variable to `{{.Task.ID}}`), and the computer name must be that container's ID. The host stops its `docker events` and `docker service logs` followers before it exits: a child started with `-NoNewWindow` keeps the step's console open, and the step would hang until its `no_output_timeout`.
@@ -410,7 +413,6 @@ Windows dominates the cost: every Windows job pulls the 2 GB Server Core image o
 | `setup` says an e2e group is skipped | The context is missing, or lacks the secret. The log says which token is absent. Only the `setup-e2e` workflow (`main` and `smr-swarm/*`) has the context at all |
 | `setup` of `main` or `smr-swarm/*` fails with an authorization error | The context's expression restriction refused the pipeline: it was started through the API, or it is an SSH rerun. Push a commit, or rerun without SSH |
 | A Windows step fails right after `docker swarm init` with `Unable to connect to the remote server` or `no such host` | The network drops for a few seconds after the swarm is created. Download and pull first |
-| `Access is denied` running `C:\machine-runner-swarm\bin\circleci-runner.exe` in a container, or reading `C:\machine-runner-swarm\VERSION` on the host | The files under `C:\machine-runner-swarm` have an empty ACL. `windows\Setup.ps1` sets the ACL on `C:\machine-runner-swarm` and then resets the children to inherit it; if this happens again, print `icacls C:\machine-runner-swarm C:\machine-runner-swarm\VERSION C:\machine-runner-swarm\bin\circleci-runner.exe` |
 | A Windows host step hangs instead of failing | A child process started with `-NoNewWindow` (`docker events`, `docker service logs`) keeps the step's console open. `E2E-Host.ps1` kills the child process trees on every failure path; keep that if it changes |
 | A Windows step dies with `NativeCommandError` on a harmless warning | In Windows PowerShell 5.1 a native command's stderr redirected with `2>&1` under `$ErrorActionPreference = 'Stop'` is a terminating error. Run docker through `Invoke-Docker` in `E2E-Host.ps1` |
 | Trivy fails with "no space left on device" | `/tmp` on the machine image is too small for a large image tarball plus Trivy's Java DB. The `trivy` command keeps both under `$HOME/trivy` |

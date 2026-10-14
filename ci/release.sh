@@ -1,30 +1,34 @@
 #!/usr/bin/env bash
 # The release job of this repository (docs/releasing.md).
 #
-#   ci/release.sh install-tools   install git-cliff, cosign, gh and Go (pinned, SHA-256 checked)
-#   ci/release.sh                 version, notes, bundle, proxy binaries, SHA256SUMS, signature, then publish
+#   ci/release.sh install-tools   install git-cliff, cosign, crane, gh and Go (pinned, SHA-256 checked)
+#   ci/release.sh                 version, notes, bundle, SHA256SUMS, signature, the tags of the token proxy image, then publish
 #
 # From the Conventional Commits since the last tag it computes the next version (cliff.toml),
 # checks that every Swarm config of the stack files is named after its content (ci/config-names.sh) and that the exact runner
 # version that the stack files pin (MACHINE_RUNNER_SWARM_RUNNER_VERSION, the newest one that CI tests) is in CircleCI's manifest
 # for every platform,
-# builds the bundle from the tracked files, with the token proxy version of the stack files pinned to the
-# release it cuts (MACHINE_RUNNER_SWARM_PROXY_VERSION: ${...:-unreleased} becomes ${...:-<version>}), and the token proxy
-# binaries (ci/build-proxy.sh: every platform of CircleCI's runner manifest, linux amd64, arm64, ppc64le and s390x and windows amd64 and
-# arm64, named machine-runner-swarm-proxy_<os>_<arch>),
-# signs SHA256SUMS, which lists the bundles and the binaries, with cosign (keyless: the CircleCI OIDC token) and checks
-# the signature, then creates the GitHub release, which also creates the tag. The distributor of the stack downloads
-# the proxy from that release. It never pushes a commit or a tag with git.
+# builds the bundle from the tracked files, with the token proxy image of the stack files pinned to this release
+# (MACHINE_RUNNER_SWARM_PROXY_IMAGE: ${...:-ccilabs/machine-runner-swarm-proxy:edge} becomes ${...:-ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>},
+# the digest being the image that the pipeline of this commit pushed as sha-<12 characters of the commit>: ci/proxy-image.sh),
+# signs SHA256SUMS, which lists the bundles, with cosign (keyless: the CircleCI OIDC token) and checks the signature, checks the
+# signature of the image too and gives it the release tags (X.Y.Z, which never moves, and X.Y, X and latest when this is the newest
+# of its line: ci/proxy-image.sh release-tags), then creates the GitHub release, which also creates the tag. It never pushes a
+# commit or a tag with git.
 #
 # Environment:
 #   GITHUB_TOKEN          from the context scalable-machine-runner-release. Without it every
 #                         step runs except the last one.
+#   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN   from the context scalable-machine-runner-dockerhub. They give the token proxy image its release
+#                         tags. Without them the release is not published: a bundle that names an image tag that does not exist would be
+#                         broken, so every step runs except the tags and the last one.
 #   PIPELINE_DEFINITION_ID  the pipeline definition (<< pipeline.definition.id >>), for the
 #                         certificate identity that the signature is checked against
 #   RELEASE_SKIP_SIGN=1   for a run outside CircleCI, where there is no OIDC token
 #   RELEASE_DEPLOY_MARKER=1  record the release in the Deploys view of CircleCI (docs/ci.md, "Deploys"): component
-#                         machine-runner-swarm, environment github-releases, version = the release tag. Only a run that
-#                         publishes is recorded (GITHUB_TOKEN set, signing on). A marker never fails the release.
+#                         machine-runner-swarm, environment github-releases, version = the release tag; and the tags of the image:
+#                         component token-proxy-image, environment docker-hub, version = X.Y.Z. Only a run that publishes is recorded
+#                         (both tokens set, signing on). A marker never fails the release.
 #   RELEASE_OUT           output directory (default /tmp/release)
 #
 # Never run this with `set -x`: the OIDC token and GITHUB_TOKEN are in the environment.
@@ -36,7 +40,12 @@ tag_glob='v[0-9]*.[0-9]*.[0-9]*'
 oidc_issuer='https://oidc.circleci.com'
 goroot="${RELEASE_GOROOT:-${HOME}/.local/go}"
 export PATH="${goroot}/bin:${bin}:${PATH}"
-proxy_assets=()   # the file names of the proxy builds: set in main, from ci/build-proxy.sh, which builds them
+ci_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CI_TOOLS_BIN="${bin}"
+# shellcheck source=ci/tools.sh
+. "${ci_dir}/tools.sh"   # fetch, install_cosign and install_crane
+image_repo=ccilabs/machine-runner-swarm-proxy
+proxy_digest=   # the digest of the image that the pipeline of this commit pushed: set in main
 
 say() { printf '==> %s\n' "$*"; }
 marker() { if [ "${RELEASE_DEPLOY_MARKER:-}" = 1 ]; then ci/deploy-marker.sh "$@"; fi; }
@@ -45,13 +54,10 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 install_tools() {
   [ "$(uname -m)" = x86_64 ] || die "install-tools supports x86_64 Linux only"
   # Each tool: its version and the SHA-256 value of its download, which Renovate cannot compute. A Renovate pull request
-  # changes the version only: put the new value next to it (docs/releasing.md, "Pinned tools").
+  # changes the version only: put the new value next to it (docs/releasing.md, "Pinned tools"). cosign and crane are in ci/tools.sh.
   # renovate: datasource=github-releases depName=orhun/git-cliff extractVersion=^v(?<version>.*)$
   local git_cliff_version=2.14.2
   local git_cliff_sha256=24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4
-  # renovate: datasource=github-releases depName=sigstore/cosign extractVersion=^v(?<version>.*)$
-  local cosign_version=3.1.3
-  local cosign_sha256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
   # renovate: datasource=github-releases depName=cli/cli extractVersion=^v(?<version>.*)$
   local gh_version=2.102.0
   local gh_sha256=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
@@ -59,18 +65,13 @@ install_tools() {
   local go_version=1.27.2
   local go_sha256=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
   local tmp; tmp="$(mktemp -d)"
-  fetch() { # url sha256 file
-    curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$3" "$1"
-    echo "$2  $3" | sha256sum -c --quiet -
-  }
   mkdir -p "${bin}"
   fetch "https://github.com/orhun/git-cliff/releases/download/v${git_cliff_version}/git-cliff-${git_cliff_version}-x86_64-unknown-linux-gnu.tar.gz" \
     "${git_cliff_sha256}" "${tmp}/git-cliff.tar.gz"
   tar -xzf "${tmp}/git-cliff.tar.gz" -C "${tmp}"
   install -m 0755 "${tmp}/git-cliff-${git_cliff_version}/git-cliff" "${bin}/git-cliff"
-  fetch "https://github.com/sigstore/cosign/releases/download/v${cosign_version}/cosign-linux-amd64" \
-    "${cosign_sha256}" "${tmp}/cosign"
-  install -m 0755 "${tmp}/cosign" "${bin}/cosign"
+  install_cosign
+  install_crane
   fetch "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_amd64.tar.gz" \
     "${gh_sha256}" "${tmp}/gh.tar.gz"
   tar -xzf "${tmp}/gh.tar.gz" -C "${tmp}"
@@ -80,7 +81,7 @@ install_tools() {
   rm -rf "${goroot}"; mkdir -p "${goroot}"
   tar -xzf "${tmp}/go.tar.gz" -C "${goroot}" --strip-components=1
   rm -rf "${tmp}"
-  git cliff --version; cosign version 2>&1 | grep -E '^GitVersion'; gh --version | head -n 1; go version
+  git cliff --version; cosign version 2>&1 | grep -E '^GitVersion'; crane version; gh --version | head -n 1; go version
 }
 
 # The stack files pin one exact runner version by default, the newest that CI tests (docs/releasing.md says how a release bumps it).
@@ -144,17 +145,16 @@ build() {
     git cliff --tag "${version}" > "${out}/CHANGELOG.md"
   fi
   printf '%s\n' "${version#v}" > "${out}/VERSION"
-  say "Token proxy ${version}: pinned in the stack files, built for ${#proxy_assets[@]} platforms"
-  local os pinned
+  say "Token proxy image ${image_repo}:${version#v}${proxy_digest:+@${proxy_digest}}: pinned in the stack files"
+  local os pinned pin="${image_repo}:${version#v}${proxy_digest:+@${proxy_digest}}"
   mkdir -p "${out}/pinned"
-  for os in linux windows; do   # the stack file of each OS that names the proxy: the default of its version is this release
-    grep -q 'MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}' "${os}/stack/runners.yaml" || continue
+  for os in linux windows; do   # the stack file of each OS that names the proxy: the default of its image is this release
+    grep -q "MACHINE_RUNNER_SWARM_PROXY_IMAGE:-${image_repo}:edge}" "${os}/stack/runners.yaml" || continue
     pinned="${out}/pinned/${os}/runners.yaml"
     mkdir -p "${out}/pinned/${os}"
-    sed "s/\(MACHINE_RUNNER_SWARM_PROXY_VERSION:-\)unreleased}/\1${version#v}}/" "${os}/stack/runners.yaml" > "${pinned}"
-    grep -q "MACHINE_RUNNER_SWARM_PROXY_VERSION:-${version#v}}" "${pinned}" || die "could not pin the token proxy version in ${os}/stack/runners.yaml"
+    sed "s|\(MACHINE_RUNNER_SWARM_PROXY_IMAGE:-\)${image_repo}:edge}|\1${pin}}|" "${os}/stack/runners.yaml" > "${pinned}"
+    grep -qF "MACHINE_RUNNER_SWARM_PROXY_IMAGE:-${pin}}" "${pinned}" || die "could not pin the token proxy image in ${os}/stack/runners.yaml"
   done
-  ci/build-proxy.sh "${out}" "${version#v}" > /dev/null
   say "Bundle ${name}"
   for fmt in tar.gz zip; do
     local -a add=() excl=()
@@ -169,7 +169,7 @@ build() {
       README.md LICENSE SECURITY.md docs examples linux windows \
       ':(exclude)linux/tests' ':(exclude)windows/tests' ':(exclude)docs/ci.md' ':(exclude)docs/releasing.md' "${excl[@]}"
   done
-  (cd "${out}" && sha256sum "${name}.tar.gz" "${name}.zip" "${proxy_assets[@]}" | tee SHA256SUMS)
+  (cd "${out}" && sha256sum "${name}.tar.gz" "${name}.zip" | tee SHA256SUMS)
 }
 
 sign_and_verify() {
@@ -182,24 +182,50 @@ sign_and_verify() {
     --certificate-identity "${id}" --certificate-oidc-issuer "${oidc_issuer}" "${out}/SHA256SUMS"
 }
 
+# proxy_image: the image of this commit is on Docker Hub (the job proxy-image-publish pushed it as sha-<12>): its digest goes in the bundle.
+# Reading it needs no credentials. A release that publishes checks the signature of the image and gives it the release tags first.
+resolve_proxy_image() {
+  proxy_digest="$("${ci_dir}/proxy-image.sh" digest 2> /dev/null || true)"
+  if [ -n "${proxy_digest}" ]; then
+    say "Token proxy image of this commit: ${image_repo}@${proxy_digest}"
+  else
+    say "No token proxy image of this commit (${image_repo}:sha-${sha:0:12}): the bundle names the tag only, and nothing is published"
+  fi
+}
+
+# will_publish: every condition of a release that publishes is met. A message says what is missing when it is not.
+will_publish() {
+  [ "${RELEASE_SKIP_SIGN:-}" != 1 ] || return 1
+  [ -n "${GITHUB_TOKEN:-}" ] || { say "publishing skipped: GITHUB_TOKEN is not set in context scalable-machine-runner-release"; return 1; }
+  if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+    say "publishing skipped: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set in context scalable-machine-runner-dockerhub (a release needs them to tag its token proxy image)"
+    return 1
+  fi
+  [ -n "${proxy_digest}" ] || die "the token proxy image of this commit is not on Docker Hub (${image_repo}:sha-${sha:0:12}): the job proxy-image-publish pushes it, and the release requires that job"
+  return 0
+}
+
 publish() {
-  [ -n "${GITHUB_TOKEN:-}" ] || {
-    say "publishing skipped: GITHUB_TOKEN is not set in context scalable-machine-runner-release"
-    say "${version} was prepared in ${out} and is stored as a job artifact"
-    return 0
-  }
   local repo="${CIRCLE_PROJECT_USERNAME:?}/${CIRCLE_PROJECT_REPONAME:?}" remote
-  local -a assets=("${out}/${name}.tar.gz" "${out}/${name}.zip" "${proxy_assets[@]/#/${out}/}" "${out}/SHA256SUMS" "${out}/SHA256SUMS.sigstore.json")
+  local -a assets=("${out}/${name}.tar.gz" "${out}/${name}.zip" "${out}/SHA256SUMS" "${out}/SHA256SUMS.sigstore.json")
   [ "${RELEASE_SKIP_SIGN:-}" != 1 ] || die "refusing to publish an unsigned release"
   remote="$(gh api "repos/${repo}/git/ref/tags/${version}" --jq .object.sha 2>/dev/null || true)"
   [ -z "${remote}" ] || [ "${remote}" = "${sha}" ] || die "tag ${version} exists at ${remote}, not at ${sha}"
+  # The image first: its signature is checked, and X.Y.Z (which never moves) and the floating tags are made. A release that fails after this
+  # one is finished by the next run, which tags the same digest again.
+  say "Tag ${image_repo}@${proxy_digest} (signature checked first)"
+  marker update proxy-image RUNNING
+  "${ci_dir}/proxy-image.sh" release-tags "${version}"
+  marker update proxy-image SUCCESS
   if gh release view "${version}" --repo "${repo}" > /dev/null 2>&1; then
     say "Release ${version} exists at this commit: uploading the assets again"
     gh release upload "${version}" "${assets[@]}" --clobber --repo "${repo}"
   else
     say "Create release ${version} at ${sha}"
-    printf '\nTo verify the download, see https://github.com/%s/blob/%s/docs/install-linux.md#verify-a-release\n' \
-      "${repo}" "${version}" >> "${out}/notes.md"
+    {
+      printf '\nToken proxy image: `%s:%s@%s`, signed like the bundle. To verify the download and the image, see https://github.com/%s/blob/%s/docs/install-linux.md#verify-a-release and https://github.com/%s/blob/%s/docs/security.md#verify-the-token-proxy-image\n' \
+        "${image_repo}" "${version#v}" "${proxy_digest}" "${repo}" "${version}" "${repo}" "${version}"
+    } >> "${out}/notes.md"
     gh release create "${version}" "${assets[@]}" --repo "${repo}" --target "${sha}" \
       --title "${version}" --notes-file "${out}/notes.md"
   fi
@@ -210,24 +236,32 @@ main() {
   sha="$(git rev-parse HEAD)"
   [ -z "${CIRCLE_SHA1:-}" ] || [ "${CIRCLE_SHA1}" = "${sha}" ] || die "checked out ${sha}, but the pipeline is for ${CIRCLE_SHA1}"
   rm -rf "${out}"; mkdir -p "${out}"
-  mapfile -t proxy_assets < <(ci/build-proxy.sh --assets)
   # Swarm configs are immutable: a release whose script changed under an old config name would not reach the services.
   ci/config-names.sh > /dev/null || die "a Swarm config of a stack file has a stale name: run ci/config-names.sh --write and commit it"
   check_runner_pin
   choose_version
   name="machine-runner-swarm-${version#v}"
+  resolve_proxy_image
   # A release that will publish is a deploy. Plan it before the first step that can fail, and give it the final status on
   # every way out of the script (a die, a failed command, a cancel): the job `release` is the one job of plan and updates.
-  if [ -n "${GITHUB_TOKEN:-}" ] && [ "${RELEASE_SKIP_SIGN:-}" != 1 ]; then
+  # The tags of the image are a deploy of their own, in the same job.
+  local publishing=false
+  if will_publish; then
+    publishing=true
     marker plan release machine-runner-swarm github-releases "${version}"
+    marker plan proxy-image token-proxy-image docker-hub "${version#v}"
     # shellcheck disable=SC2154  # rc is set by the trap itself
-    trap 'rc=$?; case ${rc} in 0) ;; 130 | 143) marker update release CANCELED ;; *) marker update release FAILED "ci/release.sh exited with status ${rc}" ;; esac' EXIT
+    trap 'rc=$?; case ${rc} in 0) ;; 130 | 143) marker update release CANCELED; marker update proxy-image CANCELED ;; *) marker update release FAILED "ci/release.sh exited with status ${rc}"; marker update proxy-image FAILED "ci/release.sh exited with status ${rc}" ;; esac' EXIT
   fi
   build
   if [ "${RELEASE_SKIP_SIGN:-}" = 1 ]; then say "Signing skipped (RELEASE_SKIP_SIGN=1)"; else sign_and_verify; fi
-  marker update release RUNNING
-  publish
-  marker update release SUCCESS
+  if [ "${publishing}" = true ]; then
+    marker update release RUNNING
+    publish
+    marker update release SUCCESS
+  else
+    say "${version} was prepared in ${out} and is stored as a job artifact"
+  fi
 }
 
 case "${1:-}" in

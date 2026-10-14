@@ -397,9 +397,7 @@ func main() {
 		log.Fatalf("state directory: %v", err) // fail closed: a proxy that cannot keep its state does not start
 	}
 	p := &proxy{upstream: u, classes: classes, store: st,
-		lookup: func(ctx context.Context, host string) ([]string, error) {
-			return net.DefaultResolver.LookupHost(ctx, host)
-		}}
+		lookup: lookupHost}
 	for _, c := range classes { // fail closed: no token, no proxy
 		if _, err := c.token(); err != nil {
 			log.Fatalf("token file of %s: %v", c.dns, err)

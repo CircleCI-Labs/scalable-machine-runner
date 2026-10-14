@@ -1,0 +1,260 @@
+# Optional classes: every job in its own Kata Containers microVM (its own guest kernel). Deploy with an extra -c flag:
+#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/microvm.yaml runners
+# Read docs/microvm.md first: the nodes need KVM, Kata, and a few one-time steps. Create the secrets and the config first:
+#   linux-microvm-token and linux-microvm-docker-token (same format as in runners.yaml, one resource class each)
+#   printf '.:53 {\n  errors\n  forward . 127.0.0.11\n  cache 30\n}\n' | docker config create microvm-corefile -
+# Like the classes of runners.yaml, these classes claim through the token-proxy of runners.yaml (the service below only adds the classes
+# to it), so deploy the two files together. The runners hold the placeholder: a job in the VM never sees a class token, also in
+# linux-microvm-docker, whose jobs have SYS_ADMIN.
+#
+# Swarm has no per-service runtime, so the NODE chooses: on a node labelled machine-runner-swarm.microvm=true the Docker
+# daemon's default-runtime is Kata and every container there is a microVM. These classes run only on such nodes, and every
+# other class (runners.yaml and the other add-on stack files) carries machine-runner-swarm.microvm != true, so it stays off them.
+#
+#   linux-microvm         like linux-default (jobs keep sudo), in a microVM
+#   linux-microvm-docker  jobs can run their OWN dockerd inside the VM (SYS_ADMIN, NET_ADMIN, a tmpfs data-root): image builds
+#                         without the host Docker socket. In a VM that is safe; on runc it would be a host escape, so
+#                         MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true makes the entrypoint exit 80 outside a Kata VM
+#
+# These make a microVM class work, and docs/microvm.md has the steps:
+# - DNS. Docker's embedded DNS (127.0.0.11) does not work inside a Kata VM, and the runner finds token-proxy by name. The microvm-dns
+#   service (CoreDNS, on a runc node) forwards to it from the class networks, where token-proxy is too, and is published on port 53 of
+#   every node. A VM's /etc/resolv.conf is a node file that names the gateway of docker_gwbridge, which is the node itself (the routing
+#   mesh sends port 53 on to a forwarder): /etc/machine-runner-swarm/microvm-resolv.conf. A missing file stops the task from starting,
+#   so a node without the setup never runs a class with broken DNS. runner-distributor needs the same file, so a microVM node runs
+#   its own copy of it (below), and runners.yaml keeps the original off these nodes.
+# - The runner volume. A microVM node has its own runner-bin volume, filled by microvm-runner-distributor, and every class mounts it
+#   read-only. Root with SYS_ADMIN in a VM can remount the share read-write and change the runner and its SHA-256 record: the node
+#   cannot make the volume read-only, because the distributor writes it. Give linux-microvm-docker nodes of its own (docs/microvm.md).
+# - At least one node without the label, for token-proxy and microvm-dns (a manager, for example).
+# - Rolling updates. microvm-netkeep keeps the class overlays up on each microVM node, because a Kata container that starts while its
+#   overlay is being removed hangs. Keep it.
+# Keep the common settings in sync with runners.yaml (docker-build.yaml and ssh-rerun.yaml repeat them in the same way).
+
+x-env: &env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"   # the container is discarded after the job, and the runner (uid 2000) cannot remove job-owned files
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy:8080   # through the token proxy of runners.yaml
+  MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
+  MACHINE_RUNNER_SWARM_REQUIRE_MICROVM: "true"   # the entrypoint exits 80 when this container is not in a Kata VM
+
+x-restart: &restart
+  condition: any
+  delay: 10s
+
+x-update: &update
+  order: stop-first
+  parallelism: 1
+
+x-placement: &placement
+  constraints:
+    - node.platform.os == linux
+    - node.labels.machine-runner-swarm.microvm == true
+    - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node (see runners.yaml)
+  preferences:
+    - spread: node.id
+
+x-resolv: &resolv
+  type: bind
+  source: /etc/machine-runner-swarm/microvm-resolv.conf   # nameserver <docker_gwbridge gateway>, written once on each microVM node
+  target: /etc/resolv.conf
+  read_only: true
+
+x-runner: &runner
+  user: "0"
+  entrypoint: ["/circleci-runner-entrypoint"]
+  configs:
+    - {source: entrypoint, target: /circleci-runner-entrypoint, mode: 0555}
+  secrets:
+    - source: runner-placeholder-token   # made up: the real token is in token-proxy only
+      target: circleci_runner_config.yaml
+      uid: "2000"
+      gid: "2000"
+      mode: 0400
+  init: true
+  stop_grace_period: 5h5m
+  ulimits:
+    nofile: {soft: 65536, hard: 65536}
+    core: 0
+  logging:
+    driver: local
+    options: {max-size: 20m, max-file: "3"}
+
+services:
+  # Adds the classes to the token proxy of runners.yaml (stack files merge networks, secrets and variables by name).
+  token-proxy:
+    environment:
+      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_MICROVM: linux-microvm=/run/secrets/linux-microvm-token
+      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_MICROVM_DOCKER: linux-microvm-docker=/run/secrets/linux-microvm-docker-token
+    secrets:
+      - {source: linux-microvm-token, target: linux-microvm-token, uid: "65534", gid: "65534", mode: 0400}
+      - {source: linux-microvm-docker-token, target: linux-microvm-docker-token, uid: "65534", gid: "65534", mode: 0400}
+    networks: [linux-microvm, linux-microvm-docker]
+
+  linux-microvm:
+    <<: *runner
+    image: cimg/base:2026.10
+    hostname: "{{.Node.Hostname}}-linux-microvm-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-microvm-{{.Task.Slot}}"
+    networks: [linux-microvm]
+    cap_drop: [NET_RAW, MKNOD]
+    volumes:
+      - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}   # the runner of this node (microvm-runner-distributor)
+      - *resolv
+    deploy:
+      replicas: 2
+      restart_policy: *restart
+      update_config: *update
+      resources:
+        # The VM gets the limit's CPUs plus one, and the limit's memory.
+        limits: {cpus: "2", memory: 4G, pids: 4096}
+        reservations: {cpus: "2", memory: 4G}
+      placement: *placement
+
+  # Jobs run dockerd inside their VM. The class needs sudo (the job remounts /sys, /sys/fs/cgroup and /proc/sys read-write and starts
+  # dockerd), so it is not hardened. Docker's default capabilities stay: containers inside the VM need them (MKNOD for device nodes).
+  # The data-root is a tmpfs (overlayfs cannot sit on the virtiofs root of the VM), so images and the build cache use guest memory
+  # and vanish with the job.
+  linux-microvm-docker:
+    <<: *runner
+    image: cimg/base:2026.10   # includes dockerd, containerd, runc and iptables
+    hostname: "{{.Node.Hostname}}-linux-microvm-docker-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-microvm-docker-{{.Task.Slot}}"
+    networks: [linux-microvm-docker]
+    # No cap_drop: the containers that dockerd starts get Docker's default capabilities, and runc fails with "unable to apply caps" when the VM
+    # container has dropped one of them (NET_RAW, MKNOD).
+    cap_add: [SYS_ADMIN, NET_ADMIN]   # only ever inside a VM: the entrypoint guard keeps this off runc
+    volumes:
+      - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}   # a guest with SYS_ADMIN can remount it read-write
+      - *resolv
+      - type: tmpfs
+        target: /var/lib/docker   # the default data-root of dockerd
+        tmpfs: {size: 6442450944}   # 6 GiB of the 8G memory limit; Swarm needs the size in bytes
+    deploy:
+      replicas: 1
+      restart_policy: *restart
+      update_config: *update
+      resources:
+        limits: {cpus: "4", memory: 8G, pids: 4096}
+        reservations: {cpus: "4", memory: 8G}
+      placement: *placement
+
+  # The copy of runner-distributor (runners.yaml) for the microVM nodes: the same script and settings, and the node file as its
+  # /etc/resolv.conf, because it downloads the runner and runs in a VM here. Keep the settings in step with runners.yaml.
+  microvm-runner-distributor:
+    image: alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+    command: ["sh", "/runner-distributor.sh"]
+    init: true
+    read_only: true
+    hostname: "{{.Node.Hostname}}-runner-distributor"
+    environment:
+      MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-current}
+      MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}
+      MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}
+      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: ${MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL:-https://circleci-binary-releases.s3.amazonaws.com/circleci-runner}
+      MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}
+      MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}
+      MACHINE_RUNNER_SWARM_PROXY_BASE_URL: ${MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download}
+      MACHINE_RUNNER_SWARM_PROXY_SHA256: ${MACHINE_RUNNER_SWARM_PROXY_SHA256:-}
+    configs:
+      - {source: distributor, target: /runner-distributor.sh, mode: 0444}
+    volumes:
+      - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm}
+      - *resolv
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: "2"}
+    deploy:
+      mode: global   # one per microVM node, also on nodes that join later
+      restart_policy: {condition: on-failure, delay: 30s}
+      update_config: {order: stop-first, parallelism: 0}
+      resources:
+        limits: {cpus: "0.5", memory: 256M, pids: 64}
+      placement:
+        constraints:
+          - node.platform.os == linux
+          - node.labels.machine-runner-swarm.microvm == true
+
+  # The DNS forwarder for the VMs. It runs under runc (any node without the microvm label), where 127.0.0.11 works, sits on
+  # the class networks so that service names (token-proxy, linux-microvm, tasks.linux-microvm) resolve too, and is published on every node.
+  # Port 53 is open on every interface of every node: keep it closed to the outside (docs/microvm.md).
+  # Change this service in your copy of this file, not from another -c file: Docker merges the ports of a service that two files define by
+  # published port, so 53/tcp replaces 53/udp and the VMs lose their DNS.
+  microvm-dns:
+    image: coredns/coredns:1.14.7
+    command: ["-conf", "/Corefile"]
+    networks: [linux-microvm, linux-microvm-docker]
+    ports:
+      - {target: 53, published: 53, protocol: udp, mode: ingress}
+      - {target: 53, published: 53, protocol: tcp, mode: ingress}
+    configs:
+      - {source: microvm-corefile, target: /Corefile}
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: "2"}
+    deploy:
+      replicas: 2
+      restart_policy: {condition: any, delay: 5s}
+      update_config: {order: start-first, parallelism: 1}
+      resources:
+        limits: {cpus: "0.5", memory: 128M, pids: 256}
+      placement:
+        constraints:
+          - node.platform.os == linux
+          - node.labels.machine-runner-swarm.microvm != true   # 127.0.0.11 does not work in a Kata VM
+          - node.labels.machine-runner-swarm.docker-build != true
+
+  # Keeps the class overlays up on every microVM node. Docker removes the overlay of a node when its last container leaves, and sets it up
+  # again for the next one. A Kata container that starts at that moment, as in a rolling update (stop-first, with no delay), hangs
+  # in "Created" for good. One sleeping container on both networks keeps them up, so a class container always joins an existing overlay.
+  # It costs one small VM on every microVM node.
+  microvm-netkeep:
+    image: cimg/base:2026.10   # already on the node for the classes
+    command: ["sleep", "infinity"]
+    init: true
+    user: "65534"
+    read_only: true
+    networks: [linux-microvm, linux-microvm-docker]
+    cap_drop: [ALL]
+    logging:
+      driver: local
+      options: {max-size: 1m, max-file: "2"}
+    deploy:
+      mode: global
+      restart_policy: {condition: any, delay: 5s}
+      resources:
+        limits: {cpus: "0.2", memory: 256M, pids: 64}
+      placement:
+        constraints:
+          - node.platform.os == linux
+          - node.labels.machine-runner-swarm.microvm == true
+          - node.labels.machine-runner-swarm.docker-build != true
+
+networks:
+  # One overlay per class, as in runners.yaml. The forwarder and the keeper are on both.
+  linux-microvm: {driver: overlay}
+  linux-microvm-docker: {driver: overlay}
+
+secrets:
+  runner-placeholder-token: {external: true}   # every runner: a made-up token (runners.yaml)
+  linux-microvm-token: {external: true}   # the class tokens: token-proxy only
+  linux-microvm-docker-token: {external: true}
+
+configs:
+  # As in runners.yaml (ci/config-names.sh keeps the names in step with the files), so that this file also loads alone.
+  entrypoint: {name: machine-runner-swarm-entrypoint-0770da4384e6, file: circleci-runner-entrypoint}
+  distributor: {name: machine-runner-swarm-distributor-4bfae6c3b3b4, file: runner-distributor.sh}
+  microvm-corefile: {external: true}
+
+volumes:
+  runner-bin: {}   # one per node: the runner of that node (runners.yaml, and microvm-runner-distributor on a microVM node)

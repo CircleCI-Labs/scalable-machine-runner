@@ -76,6 +76,7 @@ services:
           - node.platform.os == linux
           - node.role == worker
           - node.labels.machine-runner-swarm.docker-build == true
+          - node.labels.machine-runner-swarm.microvm != true   # the socket cannot cross into a Kata VM (microvm.yaml)
 
 networks:
   linux-docker-build: {driver: overlay}

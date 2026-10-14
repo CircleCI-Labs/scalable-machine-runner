@@ -30,7 +30,8 @@
 # Optional classes are separate files, deployed with an extra -c flag:
 #   docker-build.yaml  host Docker socket (root-equivalent)      persistent.yaml  long-lived runner + volume (keeps its token: no proxy)
 #   ssh-rerun.yaml     "Rerun job with SSH": publishes port 54782 on the node
-# docker-build.yaml and ssh-rerun.yaml add their class to the token-proxy of this file: deploy them together with it.
+#   microvm.yaml       every job in its own Kata microVM, on nodes labelled machine-runner-swarm.microvm=true
+# docker-build.yaml, ssh-rerun.yaml and microvm.yaml add their classes to the token-proxy of this file: deploy them together with it.
 #
 # Notes:
 # - Pin images by digest in production (image: cimg/base:2026.10@sha256:...). Tags such as 21.0 float.
@@ -62,6 +63,8 @@ x-placement: &placement
     # Never on a Docker-build node (docker-build.yaml): a job there reaches the engine and can read what other tasks on the node hold.
     # A node without the label matches: Swarm reads a missing label as not equal.
     - node.labels.machine-runner-swarm.docker-build != true
+    # Never on a microVM node (microvm.yaml): Docker's DNS does not work in a Kata VM, so a job would have none.
+    - node.labels.machine-runner-swarm.microvm != true
     # - node.platform.arch == x86_64                # or aarch64
     # - node.labels.machine-runner-swarm.zone == <network zone>      # docker node update --label-add machine-runner-swarm.zone=<zone> <node>
   preferences:
@@ -202,6 +205,7 @@ services:
       placement:
         constraints:
           - node.platform.os == linux
+          - node.labels.machine-runner-swarm.microvm != true   # a microVM node has its own copy in microvm.yaml, with working DNS
 
   # The token proxy: the ONLY holder of the class tokens, one replica for every class of the stack. A claim is accepted from a
   # runner that is in the DNS set tasks.<service> of its class, once per container, and gets that class's token. All other
@@ -258,6 +262,7 @@ services:
         constraints:
           - node.platform.os == linux
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: the tokens must not sit next to the Docker socket
+          - node.labels.machine-runner-swarm.microvm != true   # Docker's DNS, which finds tasks.<service>, does not work in a Kata VM
           - node.labels.machine-runner-swarm.proxy == true   # the node that keeps proxy-state; choose one that runs no jobs when you can
 
 networks:

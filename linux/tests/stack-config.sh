@@ -17,14 +17,14 @@ check() { # service description regex
 service_block() { awk -v s="$1" '$0 == "  " s ":" { f = 1; next } f && (/^  [^ ]/ || /^[^ ]/) { f = 0 } f' <<< "$cfg"; }
 
 # every file combination must load (an add-on stack file also alone); the last one holds all six runner services and the proxy
-for files in "runners.yaml" "ssh-rerun.yaml" "runners.yaml docker-build.yaml" "runners.yaml persistent.yaml" "runners.yaml ssh-rerun.yaml" \
-  "runners.yaml docker-build.yaml persistent.yaml ssh-rerun.yaml"; do
+for files in "runners.yaml" "ssh-rerun.yaml" "microvm.yaml" "runners.yaml docker-build.yaml" "runners.yaml persistent.yaml" "runners.yaml ssh-rerun.yaml" \
+  "runners.yaml microvm.yaml" "runners.yaml docker-build.yaml persistent.yaml ssh-rerun.yaml microvm.yaml"; do
   args=()
   for f in $files; do args+=(-c "$dir/$f"); done
   cfg=$(docker stack config "${args[@]}") || { echo "FAIL: docker stack config rejected: $files"; exit 1; }
 done
 
-services=(linux-default linux-java linux-hardened linux-docker-build linux-persistent linux-default-ssh)
+services=(linux-default linux-java linux-hardened linux-docker-build linux-persistent linux-default-ssh linux-microvm linux-microvm-docker)
 for s in "${services[@]}"; do
   block=$(service_block "$s")
   if [[ -z $block ]]; then
@@ -54,8 +54,23 @@ for s in "${services[@]}"; do
     # Swarm reads a missing label as "not equal", so unlabelled nodes still match.
     check "$s" 'the Docker-build isolation constraint (docker-build != true)' '^          - node.labels.machine-runner-swarm.docker-build != true$'
   fi
+  if [[ $s == linux-microvm* ]]; then
+    # the microVM classes run ON microVM nodes (label true), and only there
+    if grep -q 'machine-runner-swarm.microvm !=' <<< "$block"; then
+      echo "  $s: must run ON a microVM node, not stay off it"
+      problems=$((problems + 1))
+    fi
+    check "$s" 'the microVM node constraint (microvm == true)' '^          - node.labels.machine-runner-swarm.microvm == true$'
+    check "$s" 'the entrypoint guard MACHINE_RUNNER_SWARM_REQUIRE_MICROVM "true"' '^      MACHINE_RUNNER_SWARM_REQUIRE_MICROVM: "true"$'
+    check "$s" 'the read-only /etc/resolv.conf bind of the node file (DNS in a Kata VM)' '^        source: /etc/machine-runner-swarm/microvm-resolv.conf$'
+    check "$s" 'the /etc/resolv.conf target' '^        target: /etc/resolv.conf$'
+  else
+    # Swarm reads a missing label as "not equal", so unlabelled nodes still match.
+    check "$s" 'the microVM isolation constraint (microvm != true)' '^          - node.labels.machine-runner-swarm.microvm != true$'
+  fi
   check "$s" 'a logging block with rotation' '^        max-size: 20m$'
-  check "$s" 'cap_drop' '^    cap_drop:$'
+  # linux-microvm-docker has none by design: runc inside its VM needs Docker's default set (checked below)
+  [[ $s == linux-microvm-docker ]] || check "$s" 'cap_drop' '^    cap_drop:$'
   check "$s" 'CIRCLECI_RUNNER_NAME with the node and slot' "^      CIRCLECI_RUNNER_NAME: '\\{\\{\\.Node\\.Hostname\\}\\}-$s-\\{\\{\\.Task\\.Slot\\}\\}'$"
   if [[ $s == linux-persistent ]]; then
     # a continuous runner claims after every job, so it keeps its own token and does not use the proxy
@@ -99,7 +114,7 @@ for s in "${services[@]}"; do
 done
 
 # The token proxy: the only service that mounts the class tokens, on every proxied class network, one claim at a time per container.
-proxied=(linux-default linux-java linux-hardened linux-docker-build linux-default-ssh)
+proxied=(linux-default linux-java linux-hardened linux-docker-build linux-default-ssh linux-microvm linux-microvm-docker)
 block=$(service_block token-proxy)
 if [[ -z $block ]]; then
   echo "  token-proxy: service not found"
@@ -116,6 +131,7 @@ else
   check token-proxy 'update_config order stop-first' '^        order: stop-first$'
   check token-proxy 'placement constraint node.platform.os == linux' '^          - node.platform.os == linux$'
   check token-proxy 'the Docker-build isolation constraint (docker-build != true)' '^          - node.labels.machine-runner-swarm.docker-build != true$'
+  check token-proxy 'the microVM isolation constraint (Docker DNS, which finds tasks.<service>, does not work in a Kata VM)' '^          - node.labels.machine-runner-swarm.microvm != true$'
   check token-proxy 'the node label that keeps proxy-state and the proxy together' '^          - node.labels.machine-runner-swarm.proxy == true$'
   check token-proxy 'a healthcheck' '^    healthcheck:$'
   check token-proxy 'the per-node volume runner-bin, read-only' '^        source: runner-bin$'
@@ -188,6 +204,7 @@ check runner-distributor 'the script as a config' '^        target: /runner-dist
 check runner-distributor 'a read-only root file system' '^    read_only: true$'
 check runner-distributor 'a writable runner-bin volume' '^        source: runner-bin$'
 check runner-distributor 'every Linux node' '^          - node.platform.os == linux$'
+check runner-distributor 'to stay off microVM nodes (microvm-runner-distributor serves them, with working DNS)' '^          - node.labels.machine-runner-swarm.microvm != true$'
 check runner-distributor 'the version policy, current by default' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: current$'
 check runner-distributor 'the major version it follows' '^      MACHINE_RUNNER_SWARM_RUNNER_MAJOR: "3"$'
 check runner-distributor 'the check interval' '^      MACHINE_RUNNER_SWARM_CHECK_INTERVAL: 24h$'
@@ -216,13 +233,81 @@ for svc in linux-default linux-java linux-hardened; do
   if grep -q 'mirror.example.com\|RUNNER_SHA256\|PROXY_VERSION\|PROXY_SHA256' <<< "$(service_block "$svc")"; then echo "  $svc: the distributor's settings reached a runner service"; problems=$((problems + 1)); fi
 done
 
+cfg=$(docker stack config -c "$dir/runners.yaml" -c "$dir/microvm.yaml")
+# microvm.yaml: a service that adds SYS_ADMIN is safe only inside a VM, so it must demand one (on runc it would be a host escape)
+for s in $(awk '/^services:/ { f = 1; next } /^[^ ]/ { f = 0 } f && /^  [^ ]+:$/ { sub(/^  /, ""); sub(/:$/, ""); print }' <<< "$cfg"); do
+  block=$(service_block "$s")
+  if grep -q '^      - SYS_ADMIN$' <<< "$block"; then
+    check "$s" 'MACHINE_RUNNER_SWARM_REQUIRE_MICROVM "true" (it adds SYS_ADMIN)' '^      MACHINE_RUNNER_SWARM_REQUIRE_MICROVM: "true"$'
+  fi
+done
+block=$(service_block linux-microvm)
+if grep -q 'cap_add' <<< "$block"; then
+  echo "  linux-microvm: adds capabilities (only linux-microvm-docker may)"
+  problems=$((problems + 1))
+fi
+check linux-microvm 'MKNOD dropped like linux-default' '^      - MKNOD$'
+block=$(service_block linux-microvm-docker)
+check linux-microvm-docker 'SYS_ADMIN (dockerd inside the VM)' '^      - SYS_ADMIN$'
+check linux-microvm-docker 'NET_ADMIN' '^      - NET_ADMIN$'
+check linux-microvm-docker 'a tmpfs data-root at /var/lib/docker' '^        target: /var/lib/docker$'
+check linux-microvm-docker 'the tmpfs mount type' '^      - type: tmpfs$'
+check linux-microvm-docker 'sudo for the job (the remounts and dockerd need root)' '^      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"$'
+if grep -q 'cap_drop' <<< "$block"; then
+  echo "  linux-microvm-docker: drops a capability (runc inside the VM fails with 'unable to apply caps' for the default set)"
+  problems=$((problems + 1))
+fi
+# The DNS forwarder: Docker's embedded DNS does not work in a Kata VM, so a runc node answers for the VMs.
+block=$(service_block microvm-dns)
+check microvm-dns 'to exist' '^    image: '
+check microvm-dns 'port 53 udp, published' '^        protocol: udp$'
+check microvm-dns 'port 53 tcp, published' '^        protocol: tcp$'
+check microvm-dns 'the published port 53' '^        published: 53$'
+check microvm-dns 'the class network linux-microvm' '^      linux-microvm: null$'
+check microvm-dns 'the class network linux-microvm-docker' '^      linux-microvm-docker: null$'
+check microvm-dns 'to stay off microVM nodes (127.0.0.11 does not work in a Kata VM)' '^          - node.labels.machine-runner-swarm.microvm != true$'
+check microvm-dns 'to stay off Docker-build nodes' '^          - node.labels.machine-runner-swarm.docker-build != true$'
+check microvm-dns 'the corefile config' '^      - source: microvm-corefile$'
+if grep -q 'MACHINE_RUNNER_SWARM\|secrets:\|circleci-runner' <<< "$block"; then
+  echo "  microvm-dns: is not a runner and holds no token"
+  problems=$((problems + 1))
+fi
+grep -qE '^  microvm-corefile:$' <<< "$(awk '/^configs:/ { f = 1; next } /^[^ ]/ { f = 0 } f' <<< "$cfg")" || { echo "  microvm-dns: top-level config microvm-corefile is not declared"; problems=$((problems + 1)); }
+# The network keeper: a Kata container that joins an overlay at the moment its last container leaves hangs, so one container per node holds both.
+block=$(service_block microvm-netkeep)
+check microvm-netkeep 'global mode (one on every microVM node)' '^      mode: global$'
+check microvm-netkeep 'the class network linux-microvm' '^      linux-microvm: null$'
+check microvm-netkeep 'the class network linux-microvm-docker' '^      linux-microvm-docker: null$'
+check microvm-netkeep 'the microVM node constraint (microvm == true)' '^          - node.labels.machine-runner-swarm.microvm == true$'
+check microvm-netkeep 'to stay off Docker-build nodes' '^          - node.labels.machine-runner-swarm.docker-build != true$'
+check microvm-netkeep 'cap_drop ALL' '^      - ALL$'
+# The distributor of the microVM nodes: the distributor of runners.yaml with the node file, on microVM nodes only. Same script, same settings.
+block=$(service_block microvm-runner-distributor)
+check microvm-runner-distributor 'a global service' '^      mode: global$'
+check microvm-runner-distributor 'the microVM node constraint (microvm == true)' '^          - node.labels.machine-runner-swarm.microvm == true$'
+check microvm-runner-distributor 'the read-only /etc/resolv.conf bind of the node file' '^        source: /etc/machine-runner-swarm/microvm-resolv.conf$'
+check microvm-runner-distributor 'a writable runner-bin volume' '^        source: runner-bin$'
+env_of() { service_block "$1" | awk '/^    environment:$/ { f = 1; next } /^    [a-z]/ { f = 0 } f'; }
+same_settings() { # the settings of both distributors must be equal (the defaults, then with the deploy-time variables set)
+  if ! diff_out=$(diff <(env_of runner-distributor) <(env_of microvm-runner-distributor)); then
+    echo "  microvm-runner-distributor has other settings than runner-distributor ($1; keep them in step):"
+    printf '%s\n' "$diff_out" | sed 's/^/    /'
+    problems=$((problems + 1))
+  fi
+}
+same_settings defaults
+cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_CHECK_INTERVAL=1h \
+  MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc \
+  MACHINE_RUNNER_SWARM_PROXY_VERSION=0.3.0 MACHINE_RUNNER_SWARM_PROXY_SHA256=def docker stack config -c "$dir/runners.yaml" -c "$dir/microvm.yaml")
+same_settings "the deploy-time variables"
+
 # every Swarm config is named after its content (ci/config-names.sh)
 if ! out=$("$dir/../../ci/config-names.sh" 2>&1); then
   echo "  $out" | sed 's/^/  /'
   problems=$((problems + 1))
 fi
 
-echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml services=${#services[@]} proxied_classes=${#proxied[@]} problems=$problems"
+echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml,microvm.yaml services=${#services[@]} proxied_classes=${#proxied[@]} problems=$problems"
 if [[ $problems -eq 0 ]]; then
   echo "PASS (docker stack config accepts every file combination; every service meets the contract)"
 else

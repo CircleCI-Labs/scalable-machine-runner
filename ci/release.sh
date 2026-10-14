@@ -5,6 +5,7 @@
 #   ci/release.sh                 version, notes, bundle, SHA256SUMS, signature, then publish
 #
 # From the Conventional Commits since the last tag it computes the next version (cliff.toml),
+# checks that every Swarm config of the stack files is named after its content (ci/config-names.sh),
 # builds the bundle from the tracked files, signs SHA256SUMS with cosign (keyless: the CircleCI
 # OIDC token) and checks the signature, then creates the GitHub release, which also creates the
 # tag. It never pushes a commit or a tag with git.
@@ -138,6 +139,8 @@ main() {
   sha="$(git rev-parse HEAD)"
   [ -z "${CIRCLE_SHA1:-}" ] || [ "${CIRCLE_SHA1}" = "${sha}" ] || die "checked out ${sha}, but the pipeline is for ${CIRCLE_SHA1}"
   rm -rf "${out}"; mkdir -p "${out}"
+  # Swarm configs are immutable: a release whose script changed under an old config name would not reach the services.
+  ci/config-names.sh > /dev/null || die "a Swarm config of a stack file has a stale name: run ci/config-names.sh --write and commit it"
   choose_version
   name="machine-runner-swarm-${version#v}"
   build

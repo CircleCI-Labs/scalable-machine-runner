@@ -71,7 +71,7 @@ commands:
         description: The image that << parameters.image >> is built on.
       report:
         type: string
-        description: Report file name stem, e.g. example-baked.
+        description: Report file name stem, e.g. example.
     steps:
       - run:
           name: Trivy reports and gate for << parameters.image >> against << parameters.base >>
@@ -197,8 +197,8 @@ jobs:
 
   lint-stack:
     description: >
-      docker stack config on both stack files (they must parse and interpolate), and the
-      Swarm placement and hardening fields the design relies on must be present.
+      docker stack config on every stack file (alone and merged: they must parse and interpolate), and every
+      Swarm config of the stack files must be named after the content of its file (ci/config-names.sh).
     docker:
       - image: docker:29.9.0-cli@sha256:1a4c7cb63513f349bdad01fcc6e0f3f2f67d37b9da86f14dc0d4a0942eecda00
     resource_class: small
@@ -224,6 +224,8 @@ jobs:
             done
             echo "--- docker stack config -c windows/tests/stack.e2e.yaml"
             E2E_IMAGE=x docker stack config -c windows/tests/stack.e2e.yaml > /dev/null || rc=1
+            echo "--- ci/config-names.sh (Swarm configs are immutable: a changed file needs a new name)"
+            ci/config-names.sh || rc=1
             exit $rc
 
   lint-powershell:
@@ -292,10 +294,12 @@ jobs:
     description: >
       The Linux test suite on the latest Ubuntu machine image (linux/tests/run-all.sh): a single-node
       and a two-node Swarm inside privileged docker:dind containers, with the real stack file,
-      the real entrypoint and the real runner binary, but no token. Covers stack validation,
-      the installer, ephemerality (with a negative control), exit 80, token readability, placement,
-      runner upgrades (a flip of current under load and a global-job install), persistent mode,
-      draining, network isolation and the entrypoint unit tests.
+      the real entrypoint, the real runner-distributor and the real runner binary, but no token. The
+      distributor downloads from a small HTTP mirror of the harness. Covers stack validation, the helper,
+      ephemerality (with a negative control), exit 80, token readability, placement, the distributor (a
+      node with no install, a joining node, an upgrade under load, a rollback, current following the
+      manifest, the major-version guard, pruning, a tampered binary, a wrong SHA-256, CircleCI's real
+      manifest), persistent mode, draining, network isolation and the entrypoint unit tests.
     # The stack reserves 2 to 4 CPUs and 4 to 8 GB per replica, and the test Swarm has two nodes on this one VM:
     # on medium and large VMs the placement and network tests find no room for their replicas.
     executor: linux-vm-xlarge
@@ -316,33 +320,19 @@ jobs:
 
   linux-image-example:
     description: >
-      The bring-your-own-image example (linux/images/example): the default target (host mount) and
-      the baked target (runner and entrypoint inside), each smoke-tested and scanned with Trivy.
+      The bring-your-own-image example (linux/images/example): built, smoke-tested and scanned with Trivy.
     executor: linux-vm
     steps:
       - checkout
       - run:
-          name: docker build linux/images/example (default target, then baked)
+          name: docker build linux/images/example
           command: |
             docker version --format 'docker {{.Server.Version}}'
             docker build --pull -f linux/images/example/Dockerfile -t swarm-ci/example:ci linux/images/example
-            docker build -f linux/images/example/Dockerfile --target baked -t swarm-ci/example:baked .
             docker image ls 'swarm-ci/example'
       - run:
-          name: Smoke - the baked image runs the runner, the default image runs it through the host mount
-          command: |
-            docker run --rm --entrypoint /opt/machine-runner-swarm/bin/circleci-runner swarm-ci/example:baked --version
-            docker run --rm --entrypoint psql swarm-ci/example:ci --version
-            # A config file with a made-up token and no runner name: the runner rejects it with 80.
-            printf 'api:\n  auth_token: not-a-real-token\n' > /tmp/config.yaml
-            rc=0; docker run --rm --user 0 -v /tmp/config.yaml:/run/secrets/circleci_runner_config.yaml:ro \
-              --entrypoint /opt/machine-runner-swarm/bin/circleci-runner-entrypoint swarm-ci/example:baked || rc=$?
-            echo "baked entrypoint without a runner name exited ${rc}"
-            [ "${rc}" -eq 80 ] || exit 1
-      - trivy:
-          image: swarm-ci/example:baked
-          base: cimg/base:2026.10
-          report: example-baked
+          name: Smoke - the image has the tools it adds
+          command: docker run --rm --entrypoint psql swarm-ci/example:ci --version
       - trivy:
           image: swarm-ci/example:ci
           base: cimg/base:2026.10
@@ -353,14 +343,15 @@ jobs:
 
   linux-setup:
     description: >
-      linux/setup.sh end to end on a fresh VM with no real token: check, swarm init, install
-      (twice), the shipped stack deployed with a made-up token, and the user, sudo and token
-      checks inside the running containers (ci/linux-smoke.sh).
+      linux/setup.sh end to end on a fresh VM with no real token: check, swarm init (twice), the
+      shipped stack deployed with a made-up token (the runner-distributor installs CircleCI's current
+      release from CircleCI's real manifest), and the user, sudo and token checks inside the running
+      containers (ci/linux-smoke.sh).
     executor: linux-vm
     steps:
       - checkout
       - run:
-          name: setup.sh, the stock-image mount and the shipped stack (ci/linux-smoke.sh)
+          name: setup.sh, the distributor, the stock-image mount and the shipped stack (ci/linux-smoke.sh)
           no_output_timeout: 15m
           command: |
             mkdir -p /tmp/reports
@@ -371,8 +362,8 @@ jobs:
 
   linux-arm64:
     description: >
-      The same on an Arm VM: the arm64 runner is installed by setup.sh, runs unmodified inside a
-      stock cimg image through the mount, and the shipped stack starts its services.
+      The same on an Arm VM: the arm64 runner is installed by the runner-distributor, runs unmodified inside a
+      stock cimg image through the volume, and the shipped stack starts its services.
     executor: linux-arm
     steps:
       - checkout
@@ -382,7 +373,7 @@ jobs:
             uname -a
             docker version --format 'docker client {{.Client.Version}} ({{.Client.Arch}}), server {{.Server.Version}} ({{.Server.Arch}})'
       - run:
-          name: setup.sh, runner --version in a stock image, the shipped stack (ci/linux-smoke.sh)
+          name: setup.sh, the distributor, runner --version in a stock image, the shipped stack (ci/linux-smoke.sh)
           no_output_timeout: 15m
           command: |
             mkdir -p /tmp/reports
@@ -539,7 +530,7 @@ jobs:
     steps:
       - checkout
       - run:
-          name: docker swarm init and the host layout under /opt/machine-runner-swarm
+          name: docker swarm init (the runner-distributor of the stack installs the runner)
           command: ci/e2e-host.sh prepare
       - run:
           name: Host the stack - probes b1, b2 (default service) then b3 (hardened service)

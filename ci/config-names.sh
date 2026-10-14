@@ -14,7 +14,7 @@
 # Docker CLI image of the lint-stack job and on a developer's machine.
 set -eu
 mode=check
-case ${1:-} in "") ;; --write) mode=write ;; *) echo "usage: ci/config-names.sh [--write]" >&2; exit 2 ;; esac
+case ${1:-} in "") ;; --write) mode='write' ;; *) echo "usage: ci/config-names.sh [--write]" >&2; exit 2 ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
 list=$(mktemp)
 trap 'rm -f "$list"' EXIT

@@ -156,6 +156,7 @@ api_ip=$(docker exec "$MGR" hostname -i | awk '{ print $1 }')
 MICROVM_SERVICES=(linux-microvm linux-microvm-docker)
 TOKEN_CLASS=CLASS-TOKEN-MICROVM-5e9c1d7a3b2f4086   # made up; only the proxy's secret holds it
 PLACEHOLDER=machine-runner-swarm-placeholder
+BUILD_BASE=busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e   # the base image of the build in the docker class
 vol_dir=/var/lib/docker/volumes/${STACK}_runner-bin/_data   # the runner volume on a node
 
 # ---------------------------------------------------------------------------------------------
@@ -334,7 +335,10 @@ caps=$(job "$KN" "$dc" 'grep CapBnd /proc/self/status | cut -f2')
 echo "RESULT test=microvm step=docker_class_caps bounding_set=$caps"
 
 # dockerd in the VM: the job's steps (docs/microvm.md)
-docker save busybox:latest | docker exec -i "$KN" docker exec -i "$dc" sh -c 'cat > /tmp/busybox.tar'   # the base image for the build
+# the base image of the build: pinned by digest, pulled on this host when it is missing (the CI machine has none), and loaded into the VM under a local tag
+docker image inspect "$BUILD_BASE" > /dev/null 2>&1 || docker pull -q "$BUILD_BASE" > /dev/null
+docker tag "$BUILD_BASE" smr-test/build-base:1
+docker save smr-test/build-base:1 | docker exec -i "$KN" docker exec -i "$dc" sh -c 'cat > /tmp/build-base.tar'
 cat > "$work/build.sh" <<'SH'
 set -eu
 sudo mount -o remount,rw /sys
@@ -348,9 +352,9 @@ until sudo docker info > /dev/null 2>&1; do
   sleep 1
 done
 echo "driver=$(sudo docker info --format '{{.Driver}}') data_root_fs=$(stat -f -c %T /var/lib/docker)"
-sudo docker load -q -i /tmp/busybox.tar > /dev/null
+sudo docker load -q -i /tmp/build-base.tar > /dev/null
 mkdir -p /tmp/b && cd /tmp/b
-printf 'FROM busybox\nRUN echo "built in $(uname -r)" > /built\nCMD ["cat", "/built"]\n' > Dockerfile
+printf 'FROM smr-test/build-base:1\nRUN echo "built in $(uname -r)" > /built\nCMD ["cat", "/built"]\n' > Dockerfile
 sudo docker build -q -t built . > /dev/null
 echo "build=ok run=$(sudo docker run --rm built)"
 SH

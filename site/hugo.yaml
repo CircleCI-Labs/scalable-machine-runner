@@ -26,35 +26,77 @@ menu:
       name: Documentation
       pageRef: /docs
       weight: 1
-    - name: Search
+    - identifier: security
+      name: Security
+      pageRef: /docs/security
       weight: 2
+    - identifier: faq
+      name: FAQ
+      pageRef: /docs/faq
+      weight: 3
+    - name: Search
+      weight: 4
       params:
         type: search
+    - name: Theme
+      weight: 5
+      params:
+        type: theme-toggle
     - name: GitHub
-      weight: 3
+      weight: 6
       url: https://github.com/CircleCI-Labs/scalable-machine-runner
       params:
         icon: github
+    # Styled as the call to action of the header (assets/css/custom.css).
+    - identifier: get-started
+      name: Get started
+      pageRef: /docs/get-started
+      weight: 7
 
 params:
   description: Run CircleCI machine runner 3 as Docker Swarm services, one service for each resource class.
   externalLinkDecoration: false
 
+  # The landing page (layouts/home.html). The sections below the cards are the Markdown of README.md.
+  home:
+    eyebrow: CircleCI Labs
+    title: Machine runner swarm
+    tagline: CircleCI machine runners on Docker Swarm, in containers or microVMs
+    notice: Created by engineers at CircleCI. Used by real CircleCI customers. Not officially supported by CircleCI support.
+    lead: One Swarm service for each resource class, a clean environment for every job, on Linux and on Windows Server.
+    features:
+      - icon: layers
+        title: One service for each resource class
+        text: A Swarm service is a resource class, and deploy.replicas sets how many runners it has. Labels and constraints decide which nodes run it.
+        link: docs/get-started/concepts/
+      - icon: refresh-cw
+        title: A clean environment for every job
+        text: By default a runner claims one job and exits, and Swarm starts a new one, so no job inherits files from an earlier job.
+        link: docs/get-started/concepts/
+      - icon: server
+        title: Linux and Windows Server
+        text: Ubuntu LTS and RHEL 8 or later on amd64 and arm64, and Windows Server 2022 and 2025, in one cluster with stock images.
+        link: docs/install/multi-node/
+      - icon: shield-check
+        title: Hardening and a threat model
+        text: A documented threat model and token model, a hardened class without sudo, and guidance on egress.
+        link: docs/security/security/
+
   banner:
     # A new key shows the banner again to visitors who closed the old one.
     key: labs-not-supported
     message: >-
-      **CircleCI Labs project, not officially supported.** Field engineers maintain it on a best-effort basis,
-      and CircleCI support does not cover it.
+      **CircleCI Labs project, not officially supported.**
 
   navbar:
     displayTitle: true
     displayLogo: false
-    width: wide
+    width: normal
 
   theme:
     default: system
-    displayToggle: true
+    # The toggle is in the header (menu item of type theme-toggle), not in the sidebar.
+    displayToggle: false
 
   footer:
     enable: true
@@ -77,7 +119,7 @@ params:
   highlight:
     copy:
       enable: true
-      display: hover
+      display: always
 
   page:
     width: normal

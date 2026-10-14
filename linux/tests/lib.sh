@@ -264,6 +264,28 @@ publish_runner() {
   mirror_manifest "${cur:-$v}"
   PUBLISHED_SHA[$v]=$(sha256sum "$dir/circleci-runner_linux_$ARCH.tar.gz" | cut -d' ' -f1)
 }
+# publish_proxy [VERSION]: build the token proxy from proxy/ (ci/build-proxy.sh, reporting VERSION, default 0.0.1-test) and put it on the mirror
+# as a GitHub release would have it: proxy/v<VERSION>/machine-runner-swarm-proxy_linux_<arch> and proxy/v<VERSION>/SHA256SUMS. The distributor of
+# the stack installs it from there (make_override sets PROXY_VERSION). Sets PROXY_VERSION and PROXY_SHA.
+publish_proxy() {
+  local v=${1:-0.0.1-test} dir
+  [[ $ARCH != unsupported ]] || fail "unsupported host architecture $(uname -m)"
+  mkdir -p "$work/mirror"
+  mirror_start
+  dir=$work/mirror/proxy/v$v
+  mkdir -p "$dir"
+  "$repo_dir/ci/build-proxy.sh" "$dir" "$v" "linux/$ARCH" >&2
+  PROXY_SHA=$(sha256sum "$dir/machine-runner-swarm-proxy_linux_$ARCH" | cut -d' ' -f1)
+  {
+    echo "0000000000000000000000000000000000000000000000000000000000000000  machine-runner-swarm-proxy_windows_amd64"
+    echo "$PROXY_SHA  machine-runner-swarm-proxy_linux_$ARCH"
+    echo "1111111111111111111111111111111111111111111111111111111111111111  machine-runner-swarm-proxy_linux_other"
+  } > "$dir/SHA256SUMS"
+  PROXY_VERSION=$v
+  docker cp "$work/mirror/." "${SWARM_TEST_MGR}:/mirror/" >/dev/null
+}
+PROXY_VERSION=
+PROXY_SHA=
 declare -gA PUBLISHED_SHA=()   # version -> SHA-256 of the tarball that the mirror serves
 
 # ---------------------------------------------------------------------------------------------
@@ -272,23 +294,25 @@ declare -gA PUBLISHED_SHA=()   # version -> SHA-256 of the tarball that the mirr
 # The secret a service gets: a runner config holding only the token (the real format).
 config_yaml() { printf 'api:\n  auth_token: %s\n' "$1"; }
 
-# create_secrets NODE TOKEN SERVICE...: one <service>-token secret per service. TOKEN is a fake token
-# (an empty one makes the runner exit 80).
+# create_secrets NODE TOKEN SERVICE...: one <service>-token secret per service (the class tokens, which the token proxy mounts) and
+# runner-placeholder-token (the config of every proxied runner). TOKEN is a fake token for all of them (an empty one makes the runner
+# exit 80). A test that runs runners without the proxy reads the runner's config file, so the placeholder holds TOKEN.
 create_secrets() {
   local node=$1 token=$2 s
   shift 2
   for s in "$@"; do
     config_yaml "$token" | idocker "$node" secret create "$s-token" - >/dev/null
   done
+  config_yaml "$token" | idocker "$node" secret create runner-placeholder-token - >/dev/null
 }
 
 # make_override FILE SPEC...: write a compose override. SPEC = "service replicas [ENV=value ...]".
-# Services of runners.yaml without a SPEC are scaled to 0; others (add-on stack files) only appear when given. The
+# Services of runners.yaml without a SPEC are scaled to 0, token-proxy among them; others (add-on stack files) only appear when given. The
 # runner-distributor service always gets the settings of the last publish_runner (the mirror and the version to install), and
 # the variables of the array DIST_ENV (KEY=value) on top, e.g. MACHINE_RUNNER_SWARM_CHECK_INTERVAL.
 make_override() {
   local file=$1 spec s name replicas rest found kv
-  local -a svcs=("${BASE_SERVICES[@]}")
+  local -a svcs=("${BASE_SERVICES[@]}" token-proxy)
   shift
   for spec in "$@"; do
     read -r name _ <<< "$spec"
@@ -317,6 +341,10 @@ make_override() {
       echo "    environment:"
       echo "      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: \"$MIRROR_URL\""
       echo "      MACHINE_RUNNER_SWARM_RUNNER_VERSION: \"$DIST_VERSION\""
+      if [[ -n ${PROXY_VERSION:-} ]]; then   # publish_proxy: the proxy the distributor installs, from the mirror
+        echo "      MACHINE_RUNNER_SWARM_PROXY_VERSION: \"$PROXY_VERSION\""
+        echo "      MACHINE_RUNNER_SWARM_PROXY_BASE_URL: \"$MIRROR_URL/proxy\""
+      fi
       for kv in "${DIST_ENV[@]:-}"; do [[ -z $kv ]] || echo "      ${kv%%=*}: \"${kv#*=}\""; done
       # DIST_HOLD=1: no node matches, so the distributor does not run (a first deployment before the runner is there)
       [[ -z ${DIST_HOLD:-} ]] || printf '    deploy:\n      placement:\n        constraints: ["node.labels.hold == yes"]\n'
@@ -326,11 +354,11 @@ make_override() {
 DIST_ENV=()
 
 # deploy_stack NODE OVERRIDE_FILE [STACK_FILE...]: copy the real stack file(s) (default runners.yaml) and
-# OVERRIDE_FILE into NODE and deploy them. $SWARM_TEST_HOST replaces CHANGE-ME in persistent.yaml, the way
+# OVERRIDE_FILE into NODE and deploy them, then the files of EXTRA_OVERRIDES (absolute paths) after the override. $SWARM_TEST_HOST replaces CHANGE-ME in persistent.yaml, the way
 # its comment tells a user to edit it.
 deploy_stack() {
   local node=$1 override=$2 f tmp
-  local -a args=()
+  local -a args=() extra=()
   shift 2
   [[ $# -gt 0 ]] || set -- runners.yaml
   tmp=$(mktemp -d)
@@ -339,6 +367,7 @@ deploy_stack() {
   # the stack files name the entrypoint and the distributor script relative to themselves: they sit next to the stack files
   docker cp "$stack_dir/circleci-runner-entrypoint" "$node:/stack/circleci-runner-entrypoint"
   docker cp "$stack_dir/runner-distributor.sh" "$node:/stack/runner-distributor.sh"
+  docker cp "$stack_dir/proxy-entrypoint.sh" "$node:/stack/proxy-entrypoint.sh"
   for f in "$@"; do
     sed "s/CHANGE-ME/${SWARM_TEST_HOST:-CHANGE-ME}/" "$stack_dir/$f" > "$tmp/$f"
     docker cp "$tmp/$f" "$node:/stack/$f"
@@ -347,8 +376,12 @@ deploy_stack() {
   cp "$override" "$tmp/override.yaml"
   docker cp "$tmp/override.yaml" "$node:/stack/override.yaml"
   rm -rf "$tmp"
-  idocker "$node" stack deploy --resolve-image never "${args[@]}" -c /stack/override.yaml "$STACK" >/dev/null 2>&1 ||
-    idocker "$node" stack deploy --resolve-image never "${args[@]}" -c /stack/override.yaml "$STACK" >&2
+  for f in ${EXTRA_OVERRIDES:-}; do
+    docker cp "$f" "$node:/stack/${f##*/}"
+    extra+=(-c "/stack/${f##*/}")
+  done
+  idocker "$node" stack deploy --resolve-image never "${args[@]}" -c /stack/override.yaml "${extra[@]}" "$STACK" >/dev/null 2>&1 ||
+    idocker "$node" stack deploy --resolve-image never "${args[@]}" -c /stack/override.yaml "${extra[@]}" "$STACK" >&2
 }
 
 # service_logs NODE SERVICE

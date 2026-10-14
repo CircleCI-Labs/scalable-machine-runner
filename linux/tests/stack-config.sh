@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # stack-config.sh: validate the stack files the way `docker stack deploy` reads them (alone and merged
-# with each add-on stack file) and check the contract of the design on every service. Needs only the Docker CLI
-# (no daemon, no Swarm).
+# with each add-on stack file) and check the contract of the design on every service, the token proxy among them. Needs only the
+# Docker CLI (no daemon, no Swarm).
 #
 # Usage: stack-config.sh
 set -euo pipefail
@@ -16,7 +16,7 @@ check() { # service description regex
 }
 service_block() { awk -v s="$1" '$0 == "  " s ":" { f = 1; next } f && (/^  [^ ]/ || /^[^ ]/) { f = 0 } f' <<< "$cfg"; }
 
-# every file combination must load (an add-on stack file also alone); the last one holds all six services
+# every file combination must load (an add-on stack file also alone); the last one holds all six runner services and the proxy
 for files in "runners.yaml" "ssh-rerun.yaml" "runners.yaml docker-build.yaml" "runners.yaml persistent.yaml" "runners.yaml ssh-rerun.yaml" \
   "runners.yaml docker-build.yaml persistent.yaml ssh-rerun.yaml"; do
   args=()
@@ -57,7 +57,21 @@ for s in "${services[@]}"; do
   check "$s" 'a logging block with rotation' '^        max-size: 20m$'
   check "$s" 'cap_drop' '^    cap_drop:$'
   check "$s" 'CIRCLECI_RUNNER_NAME with the node and slot' "^      CIRCLECI_RUNNER_NAME: '\\{\\{\\.Node\\.Hostname\\}\\}-$s-\\{\\{\\.Task\\.Slot\\}\\}'$"
-  check "$s" "secret $s-token" "^      - source: $s-token$"
+  if [[ $s == linux-persistent ]]; then
+    # a continuous runner claims after every job, so it keeps its own token and does not use the proxy
+    check "$s" "secret $s-token (a direct token)" "^      - source: $s-token$"
+    if grep -q 'token-proxy' <<< "$block"; then
+      echo "  $s: uses the token proxy (one claim per container: a continuous runner claims many times)"
+      problems=$((problems + 1))
+    fi
+  else
+    check "$s" 'the placeholder secret runner-placeholder-token' '^      - source: runner-placeholder-token$'
+    check "$s" 'CIRCLECI_RUNNER_API_URL at the token proxy' '^      CIRCLECI_RUNNER_API_URL: http://token-proxy:8080$'
+    if grep -q "source: $s-token" <<< "$block"; then
+      echo "  $s: mounts the class token (only token-proxy may)"
+      problems=$((problems + 1))
+    fi
+  fi
   check "$s" 'the runner config as the secret target' '^        target: circleci_runner_config.yaml$'
   check "$s" 'secret uid 2000 (the runner)' '^        uid: "2000"$'
   check "$s" 'secret gid 2000' '^        gid: "2000"$'
@@ -83,6 +97,47 @@ for s in "${services[@]}"; do
   fi
   grep -qE "^  $s-token:$" <<< "$(awk '/^secrets:/ { f = 1; next } /^[^ ]/ { f = 0 } f' <<< "$cfg")" || { echo "  $s: top-level secret $s-token is not declared"; problems=$((problems + 1)); }
 done
+
+# The token proxy: the only service that mounts the class tokens, on every proxied class network, one claim at a time per container.
+proxied=(linux-default linux-java linux-hardened linux-docker-build linux-default-ssh)
+block=$(service_block token-proxy)
+if [[ -z $block ]]; then
+  echo "  token-proxy: service not found"
+  problems=$((problems + 1))
+else
+  check token-proxy 'a stock alpine image' '^    image: alpine:3\.[0-9]+(@sha256:[0-9a-f]+)?$'
+  check token-proxy 'user 65534' '^    user: "65534"$'
+  check token-proxy 'the entrypoint script as a config' '^      - /proxy-entrypoint.sh$'
+  check token-proxy 'the entrypoint config at /proxy-entrypoint.sh' '^        target: /proxy-entrypoint.sh$'
+  check token-proxy 'a read-only root filesystem' '^    read_only: true$'
+  check token-proxy 'cap_drop ALL' '^      - ALL$'
+  check token-proxy 'endpoint_mode dnsrr (a virtual IP hides the runner addresses)' '^      endpoint_mode: dnsrr$'
+  check token-proxy 'one replica (the claim latch lives in the proxy)' '^      replicas: 1$'
+  check token-proxy 'update_config order stop-first' '^        order: stop-first$'
+  check token-proxy 'placement constraint node.platform.os == linux' '^          - node.platform.os == linux$'
+  check token-proxy 'the Docker-build isolation constraint (docker-build != true)' '^          - node.labels.machine-runner-swarm.docker-build != true$'
+  check token-proxy 'the node label that keeps proxy-state and the proxy together' '^          - node.labels.machine-runner-swarm.proxy == true$'
+  check token-proxy 'a healthcheck' '^    healthcheck:$'
+  check token-proxy 'the per-node volume runner-bin, read-only' '^        source: runner-bin$'
+  check token-proxy 'the state volume proxy-state' '^        source: proxy-state$'
+  check token-proxy 'the state directory in the arguments' '^      - /var/tmp$'
+  for c in "${proxied[@]}"; do
+    check token-proxy "the network of $c" "^      $c: null$"
+    check token-proxy "the class token $c-token" "^      - source: $c-token$"
+    check token-proxy "the class $c, with its token file" "^      MACHINE_RUNNER_SWARM_PROXY_CLASS_[A-Z_]+: $c=/run/secrets/$c-token$"
+  done
+  n=$(grep -c 'MACHINE_RUNNER_SWARM_PROXY_CLASS_' <<< "$block" || true)
+  m=$(awk '/^    secrets:$/ { f = 1; next } /^    [a-z]/ { f = 0 } f && /^      - source: /' <<< "$block" | wc -l)
+  if [[ $n -ne ${#proxied[@]} || $m -ne ${#proxied[@]} ]]; then
+    echo "  token-proxy: $n class(es) and $m secret(s), expected ${#proxied[@]} of each (every proxied class, and no other secret)"
+    problems=$((problems + 1))
+  fi
+  if grep -qE '^    ports:$|privileged|security_opt|source: /opt|docker.sock' <<< "$block"; then
+    echo "  token-proxy: publishes a port, mounts a host path, or uses a key Swarm ignores"
+    problems=$((problems + 1))
+  fi
+fi
+grep -qE '^  runner-placeholder-token:$' <<< "$(awk '/^secrets:/ { f = 1; next } /^[^ ]/ { f = 0 } f' <<< "$cfg")" || { echo "  top-level secret runner-placeholder-token is not declared"; problems=$((problems + 1)); }
 
 block=$(service_block linux-default)
 check linux-default 'MACHINE_RUNNER_SWARM_JOB_SUDO "true"' '^      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"$'
@@ -136,6 +191,8 @@ check runner-distributor 'every Linux node' '^          - node.platform.os == li
 check runner-distributor 'the version policy, current by default' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: current$'
 check runner-distributor 'the major version it follows' '^      MACHINE_RUNNER_SWARM_RUNNER_MAJOR: "3"$'
 check runner-distributor 'the check interval' '^      MACHINE_RUNNER_SWARM_CHECK_INTERVAL: 24h$'
+check runner-distributor 'the proxy version: unreleased in a checkout, which ci/release.sh pins' '^      MACHINE_RUNNER_SWARM_PROXY_VERSION: unreleased$'
+check runner-distributor 'the proxy download URL (GitHub releases)' '^      MACHINE_RUNNER_SWARM_PROXY_BASE_URL: https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download$'
 check runner-distributor 'the CircleCI download URL' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://circleci-binary-releases.s3.amazonaws.com/circleci-runner$'
 check runner-distributor 'cap_drop ALL' '^      - ALL$'
 if grep -q '^        read_only: true$' <<< "$block"; then
@@ -148,13 +205,15 @@ if grep -q 'docker-build != true' <<< "$block"; then
 fi
 # the version policy can be set at deploy time, and the variables reach the distributor only
 cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_CHECK_INTERVAL=1h \
-  MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc docker stack config -c "$dir/runners.yaml")
+  MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc \
+  MACHINE_RUNNER_SWARM_PROXY_VERSION=0.3.0 MACHINE_RUNNER_SWARM_PROXY_SHA256=def docker stack config -c "$dir/runners.yaml")
 block=$(service_block runner-distributor)
 check runner-distributor 'a pinned version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: 3.1.12$'
 check runner-distributor 'the mirror from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://mirror.example.com/circleci-runner$'
 check runner-distributor 'the explicit SHA-256 from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_SHA256: abc$'
+check runner-distributor 'the proxy version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_PROXY_VERSION: 0.3.0$'
 for svc in linux-default linux-java linux-hardened; do
-  if grep -q 'mirror.example.com\|RUNNER_SHA256' <<< "$(service_block "$svc")"; then echo "  $svc: the distributor's settings reached a runner service"; problems=$((problems + 1)); fi
+  if grep -q 'mirror.example.com\|RUNNER_SHA256\|PROXY_VERSION\|PROXY_SHA256' <<< "$(service_block "$svc")"; then echo "  $svc: the distributor's settings reached a runner service"; problems=$((problems + 1)); fi
 done
 
 # every Swarm config is named after its content (ci/config-names.sh)
@@ -163,7 +222,7 @@ if ! out=$("$dir/../../ci/config-names.sh" 2>&1); then
   problems=$((problems + 1))
 fi
 
-echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml services=${#services[@]} problems=$problems"
+echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml services=${#services[@]} proxied_classes=${#proxied[@]} problems=$problems"
 if [[ $problems -eq 0 ]]; then
   echo "PASS (docker stack config accepts every file combination; every service meets the contract)"
 else

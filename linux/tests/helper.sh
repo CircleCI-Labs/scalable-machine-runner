@@ -14,7 +14,7 @@ work=$(mktemp -d)
 trap 'docker rm -f -v "$node" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 # a copy of the stack with no replicas (also for the global distributor): only the helper's steps are under test, not the tasks
 sed -E 's/^( +replicas: )[0-9]+/\10/; s/^( +)mode: global.*/\1mode: replicated\n\1replicas: 0/' "$stack_dir/runners.yaml" > "$work/runners.yaml"
-cp "$stack_dir/circleci-runner-entrypoint" "$stack_dir/runner-distributor.sh" "$work/"   # the stack file names them next to itself
+cp "$stack_dir/circleci-runner-entrypoint" "$stack_dir/runner-distributor.sh" "$stack_dir/proxy-entrypoint.sh" "$work/"   # the stack file names them next to itself
 dind_load "$node" "$CIMG_IMAGE"
 dind_load "$node" alpine:3
 
@@ -32,8 +32,10 @@ grep -q 'Swarm initialised' <<< "$out" || fail "--swarm-init: $out"
 out=$(setup --swarm-init </dev/null)
 grep -q 'already active' <<< "$out" || fail "--swarm-init is not idempotent: $out"
 addr=$(idocker "$node" info --format '{{.Swarm.NodeAddr}}')
-echo "RESULT test=helper step=swarm-init state=active idempotent=yes node_addr=$addr"
+label=$(idocker "$node" node inspect self --format '{{index .Spec.Labels "machine-runner-swarm.proxy"}}')
+echo "RESULT test=helper step=swarm-init state=active idempotent=yes node_addr=$addr proxy_label=$label"
 [[ $addr == 127.0.0.1 ]] || fail "the single node should advertise 127.0.0.1, got $addr"
+[[ $label == true ]] || fail "--swarm-init did not label the node of the token proxy"
 
 out=$(printf '%s\n' "$SENTINEL_TOKEN" | setup --secret linux-default)
 grep -q 'created secret linux-default-token' <<< "$out" || fail "--secret: $out"
@@ -55,9 +57,12 @@ grep -q 'secret not found' <<< "$out" || fail "--deploy without the other secret
 echo "RESULT test=helper step=deploy_without_secrets refused=yes"
 
 for s in linux-java linux-hardened; do printf '%s' "$SENTINEL_TOKEN" | setup --secret "$s" >/dev/null; done
+# the runners' placeholder config, as runners.yaml tells you to create it
+printf '%s' machine-runner-swarm-placeholder | setup --secret runner-placeholder >/dev/null
+idocker "$node" secret inspect runner-placeholder-token >/dev/null || fail "--secret runner-placeholder did not create runner-placeholder-token"
 setup --deploy --stack-file /work/runners.yaml </dev/null >/dev/null
 services=$(idocker "$node" stack services runners --format '{{.Name}}' | sort | paste -sd, -)
 echo "RESULT test=helper step=deploy services=$services"
-[[ $services == runners_linux-default,runners_linux-hardened,runners_linux-java,runners_runner-distributor ]] || fail "unexpected services: $services"
+[[ $services == runners_linux-default,runners_linux-hardened,runners_linux-java,runners_runner-distributor,runners_token-proxy ]] || fail "unexpected services: $services"
 
 pass "setup.sh: preflight, single-node swarm init, secrets from stdin (a runner config, never echoed), deploy; all idempotent"

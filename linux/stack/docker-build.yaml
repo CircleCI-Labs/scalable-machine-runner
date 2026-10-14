@@ -1,11 +1,13 @@
 # Optional class: image builds with the HOST Docker engine ("pattern A"). Deploy with an extra -c flag:
 #   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml runners
-# Create the secret first (same format as in runners.yaml): linux-docker-build-token.
+# Create the secret first (same format as in runners.yaml): linux-docker-build-token. Like the classes of runners.yaml, this
+# class claims through the token-proxy of runners.yaml (the service below only adds this class to it), so deploy the two files
+# together. The runner here holds the placeholder, so the class token is never on the Docker-build node.
 #
 #   !!! The Docker socket is ROOT-EQUIVALENT on its node. A job that can use it can start a privileged
 #   !!! container, mount the host's filesystem and read other jobs' data. Keep this class on a dedicated,
 #   !!! expendable node, and never on a Swarm MANAGER: on a manager the socket also controls the Swarm,
-#   !!! so a job could read the tokens of every class.
+#   !!! so a job could read the secrets of every class, among them the tokens in token-proxy.
 #
 # It only schedules where BOTH constraints hold, so label a worker node first:
 #   docker node update --label-add machine-runner-swarm.docker-build=true <worker-node>
@@ -19,8 +21,17 @@ x-env: &env
   CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h
   CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"   # the container is discarded after the job, and the runner (uid 2000) cannot remove job-owned files
   CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy:8080   # through the token proxy of runners.yaml
 
 services:
+  # Adds this class to the token proxy of runners.yaml (stack files merge networks, secrets and variables by name).
+  token-proxy:
+    environment:
+      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_DOCKER_BUILD: linux-docker-build=/run/secrets/linux-docker-build-token
+    secrets:
+      - {source: linux-docker-build-token, target: linux-docker-build-token, uid: "65534", gid: "65534", mode: 0400}
+    networks: [linux-docker-build]
+
   linux-docker-build:
     image: cimg/base:2026.10   # includes the Docker CLI
     user: "0"
@@ -35,7 +46,7 @@ services:
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-docker-build-{{.Task.Slot}}"
       MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
     secrets:
-      - source: linux-docker-build-token
+      - source: runner-placeholder-token   # made up: the real token is in token-proxy only
         target: circleci_runner_config.yaml
         uid: "2000"
         gid: "2000"
@@ -70,6 +81,7 @@ networks:
   linux-docker-build: {driver: overlay}
 
 secrets:
+  runner-placeholder-token: {external: true}
   linux-docker-build-token: {external: true}
 
 configs:   # as in runners.yaml (ci/config-names.sh keeps the name in step with the file), so that this file also loads alone

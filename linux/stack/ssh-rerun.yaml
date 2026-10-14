@@ -1,7 +1,9 @@
 # Optional class: runners that support "Rerun job with SSH". Deploy with an extra -c flag:
 #   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/ssh-rerun.yaml runners
 # Create the secret first (same format as in runners.yaml): linux-default-ssh-token, and a resource class
-# <namespace>/linux-default-ssh. A rerun with SSH runs on the resource class of the original job, so the job
+# <namespace>/linux-default-ssh. Like the classes of runners.yaml, this class claims through the token-proxy of
+# runners.yaml (the service below only adds this class to it), so deploy the two files together.
+# A rerun with SSH runs on the resource class of the original job, so the job
 # you want to debug must run on this class: point its resource_class at linux-default-ssh, or add the three
 # SSH settings below to an existing service (docs/resource-classes.md, "Rerun job with SSH").
 #
@@ -24,8 +26,17 @@ x-env: &env
   CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h
   CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"   # the container is discarded after the job, and the runner (uid 2000) cannot remove job-owned files
   CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy:8080   # through the token proxy of runners.yaml
 
 services:
+  # Adds this class to the token proxy of runners.yaml (stack files merge networks, secrets and variables by name).
+  token-proxy:
+    environment:
+      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_DEFAULT_SSH: linux-default-ssh=/run/secrets/linux-default-ssh-token
+    secrets:
+      - {source: linux-default-ssh-token, target: linux-default-ssh-token, uid: "65534", gid: "65534", mode: 0400}
+    networks: [linux-default-ssh]
+
   linux-default-ssh:
     image: cimg/base:2026.10
     user: "0"
@@ -46,7 +57,7 @@ services:
         protocol: tcp
         mode: host   # opens on the node itself, not through the ingress routing mesh
     secrets:
-      - source: linux-default-ssh-token
+      - source: runner-placeholder-token   # made up: the real token is in token-proxy only
         target: circleci_runner_config.yaml
         uid: "2000"
         gid: "2000"
@@ -80,6 +91,7 @@ networks:
   linux-default-ssh: {driver: overlay}
 
 secrets:
+  runner-placeholder-token: {external: true}
   linux-default-ssh-token: {external: true}
 
 configs:   # as in runners.yaml (ci/config-names.sh keeps the name in step with the file), so that this file also loads alone

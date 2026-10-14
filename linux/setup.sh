@@ -21,8 +21,9 @@ Steps, run in this order:
 Options:
   --stack-file FILE  stack file for --deploy, repeatable (default: stack/runners.yaml)
   --stack-name NAME  default: runners
-The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION, _RUNNER_MAJOR, _CHECK_INTERVAL, _DOWNLOAD_BASE_URL and _RUNNER_SHA256
-from the environment of --deploy (docs/operations.md).
+The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION, _RUNNER_MAJOR, _CHECK_INTERVAL, _DOWNLOAD_BASE_URL and _RUNNER_SHA256,
+and for the token proxy _PROXY_VERSION, _PROXY_BASE_URL and _PROXY_SHA256, from the environment of --deploy (docs/operations.md).
+Every runner reads the placeholder secret: printf %s machine-runner-swarm-placeholder | setup.sh --secret runner-placeholder
 EOF
 }
 
@@ -54,7 +55,8 @@ swarm_init() {
   if [[ $(docker info --format '{{.Swarm.LocalNodeState}}') == active ]]; then info "[ ok ] Swarm is already active"; return; fi
   docker swarm init --advertise-addr 127.0.0.1 --listen-addr 127.0.0.1:2377 >/dev/null
   docker swarm update --task-history-limit 2 >/dev/null   # keep few stopped containers around
-  info "[ ok ] Swarm initialised (single node, 127.0.0.1)"
+  docker node update --label-add machine-runner-swarm.proxy=true "$(docker info --format '{{.Swarm.NodeID}}')" >/dev/null   # the node of the token proxy (runners.yaml)
+  info "[ ok ] Swarm initialised (single node, 127.0.0.1), and this node is the node of the token proxy"
 }
 
 # swarm_create_secret SERVICE: the secret is the runner config the runner reads with --config.

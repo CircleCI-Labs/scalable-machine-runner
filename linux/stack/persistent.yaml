@@ -2,6 +2,11 @@
 #   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml runners
 # Create the secret first (same format as in runners.yaml): linux-persistent-token.
 #
+# Unlike the other classes this one does NOT claim through the token proxy: a continuous runner claims a task after
+# every job, and the proxy allows one claim per container. The runner keeps the real class token in its secret file,
+# so a job that becomes root in the container (sudo) can read it. That is why this class is weaker: give it a class of
+# its own and keep it for trusted projects (docs/security.md, "The persistent class").
+#
 # Continuous mode runs many jobs in ONE long-lived container, so state from one job (files, installed
 # tools, processes) is visible to the next, and a job can change what later jobs see. Use it only for
 # trusted projects that need warm caches: give it its own resource class restricted to those projects

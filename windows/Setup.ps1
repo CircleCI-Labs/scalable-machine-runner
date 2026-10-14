@@ -1,20 +1,15 @@
 <#
 .SYNOPSIS
-    OPTIONAL helper for the Windows runner stack: checks the host, stages C:\machine-runner-swarm\<version>, labels the node
-    and creates the token secrets. The Windows docs list the same steps as plain commands.
+    OPTIONAL helper for the Windows runner stack: checks the host, creates the swarm, labels the node and creates the token
+    secrets. The runner is not installed here: the runner-distributor-windows service of the stack does that on every node. The
+    Windows docs list the same steps as plain commands.
     Windows PowerShell 5.1, in an elevated prompt on the container host. Safe to run again.
 
 .DESCRIPTION
     1. Preflight, printed as "CHECK <name> PASS|FAIL": administrator, Windows Server build, Docker in
        Windows-container mode, Swarm manager (-InitSwarm -AdvertiseAddr <ip> creates one; the address is required, a plain "docker swarm init" fails on some hosts).
-    2. Stages <InstallDir>\<RunnerVersion> (InstallDir defaults to C:\machine-runner-swarm): bin\circleci-runner.exe
-       (SHA-256 from CircleCI's release manifest) and git\ (portable Git for Windows, pinned SHA-256, bash/tar/gzip
-       included). Containers read it as themselves, so SYSTEM and Administrators get full control and Authenticated
-       Users read and execute; a job cannot modify it. Skipped when the same versions are already there. Then it points
-       the junction <InstallDir>\current at that version: the stack mounts the junction, so the next container (the
-       next job) gets the new version and running jobs keep the old one. Run it again with another -RunnerVersion
-       to install side by side and flip, or with an installed one to roll back. Done BEFORE any swarm init, because
-       the network drops for a few seconds after it.
+       Pull the stock image BEFORE -InitSwarm: the network drops for a few seconds after it.
+    2. -InitSwarm -AdvertiseAddr <ip>: docker swarm init.
     3. Labels the node with the image tags it can run (the stack files' placement uses them): Server 2022
        gets machine-runner-swarm.windows-ltsc2022=true, Server 2025 gets machine-runner-swarm.windows-ltsc2022=true
        AND machine-runner-swarm.windows-ltsc2025=true, because a 2025 host also runs ltsc2022 images. Server 2019
@@ -26,40 +21,27 @@
        (a first run: it needs just windows-default-token). Once you keep your own copy of the stack files, pass them:
        -StackFile takes one or more files and replaces the default; list runners.yaml first, then each add-on file
        such as custom-image.yaml. The files that are deployed are printed.
-    -StageOnly stops after step 2 and needs no Docker.
+    The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION, _RUNNER_MAJOR, _CHECK_INTERVAL, _DOWNLOAD_BASE_URL,
+    _RUNNER_SHA256 and _TOOLS_BASE_URL from the environment of -Deploy (docs\operations.md).
 
 .EXAMPLE
     # A first run: the shipped runners.yaml, unchanged.
     .\windows\Setup.ps1 -InitSwarm -AdvertiseAddr 10.0.0.5 -Class windows-default -Deploy
 
 .EXAMPLE
-    # Your copies of the stack files (docs\install-windows.md, step 6).
+    # Your copies of the stack files (docs\install-windows.md).
     .\windows\Setup.ps1 -Class windows-default,windows-custom -Deploy `
         -StackFile .\deploy\runners.yaml,.\deploy\custom-image.yaml
 #>
 [CmdletBinding()]
 param(
-    [string] $InstallDir = 'C:\machine-runner-swarm',
-    [string] $RunnerVersion = '3.1.12',
-    [switch] $StageOnly,
     [switch] $InitSwarm,
     [string] $AdvertiseAddr,
     [string[]] $Class = @(),
     [switch] $Deploy,
     [string[]] $StackFile = @((Join-Path $PSScriptRoot 'stack\runners.yaml')),
-    [string] $StackName = 'runners',
-    [switch] $Force
+    [string] $StackName = 'runners'
 )
-
-# Pinned: the runner comes with its SHA-256 from CircleCI's release manifest, Git and 7-Zip from here.
-$script:Pins = @{
-    GitVersion      = '2.56.0.2'
-    GitReleaseTag   = 'v2.56.0.windows.2'
-    GitSha256       = '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b'
-    SevenZipVersion = '26.04'
-    SevenZipSha256  = '256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282'
-}
-$script:ManifestUrl = 'https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json'
 
 function Write-Check {
     param([string] $Name, [bool] $Ok, [string] $Detail = '')
@@ -119,67 +101,15 @@ function Get-DockerInfo {
 
 function Test-Preflight {
     # Returns $true when nothing failed.
-    param([switch] $SkipDocker, [switch] $WillInitSwarm)
+    param([switch] $WillInitSwarm)
     $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
+    $d = Get-DockerInfo
     $ok = @((Write-Check 'administrator' $admin 'run this in an elevated PowerShell'),
-        (Write-Check 'windows-server' ($os.ProductType -eq 3 -and [bool](Get-BuildLabel -Build ([int]$os.BuildNumber))) "$($os.Caption) build $($os.BuildNumber); Server 2022 and 2025 are targeted"))
-    if (-not $SkipDocker) {
-        $d = Get-DockerInfo
-        $ok += Write-Check 'windows-containers' ($d -and $d.OSType -eq 'windows') 'docker must run in Windows-container mode'
-        $ok += Write-Check 'swarm-manager' ($d -and (($d.Swarm -eq 'active' -and $d.Manager) -or ($WillInitSwarm -and $d.Swarm -eq 'inactive'))) 'use -InitSwarm -AdvertiseAddr <ip> to create a swarm'
-    }
+        (Write-Check 'windows-server' ($os.ProductType -eq 3 -and [bool](Get-BuildLabel -Build ([int]$os.BuildNumber))) "$($os.Caption) build $($os.BuildNumber); Server 2022 and 2025 are targeted"),
+        (Write-Check 'windows-containers' ($d -and $d.OSType -eq 'windows') 'docker must run in Windows-container mode'),
+        (Write-Check 'swarm-manager' ($d -and (($d.Swarm -eq 'active' -and $d.Manager) -or ($WillInitSwarm -and $d.Swarm -eq 'inactive'))) 'use -InitSwarm -AdvertiseAddr <ip> to create a swarm'))
     return (@($ok | Where-Object { -not $_ }).Count -eq 0)
-}
-
-function Invoke-Acl {
-    & icacls.exe @args | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "icacls $args failed" }
-}
-
-function Protect-Directory {
-    # ACL on the directory only (inheritance cut), then reset every child to inherit it: "/inheritance:r /T" in one
-    # call leaves the children with an empty ACL.
-    param([string] $Dir)
-    Invoke-Acl $Dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX'
-    Invoke-Acl ($Dir.TrimEnd('\') + '\*') /reset /T /C /Q
-}
-
-function Install-Stage {
-    param([string] $Dir, [string] $Version, [switch] $Force)
-    $versionFile = Join-Path $Dir 'VERSION'
-    $want = @("runner=$Version", "git=$($script:Pins.GitVersion)")
-    $have = @()
-    if (Test-Path -LiteralPath $versionFile) { $have = @(Get-Content -LiteralPath $versionFile) }
-    if (-not $Force -and ($have -join ',') -eq ($want -join ',') -and (Test-Path -LiteralPath (Join-Path $Dir 'git\usr\bin\tar.exe'))) {
-        [Console]::Out.WriteLine("$Dir already has runner $Version and Git $($script:Pins.GitVersion)")
-        return
-    }
-    $manifest = (Invoke-WebRequest -Uri $script:ManifestUrl -UseBasicParsing).Content | ConvertFrom-Json
-    $entry = $manifest.releases.$Version.windows.amd64
-    if (-not $entry) { throw "runner version '$Version' has no windows/amd64 build in the release manifest" }
-    $installer = Join-Path $PSScriptRoot 'install-runner.ps1'
-    & $installer -RunnerVersion $Version -RunnerSha256 $entry.sha256 -GitVersion $script:Pins.GitVersion -GitReleaseTag $script:Pins.GitReleaseTag `
-        -GitSha256 $script:Pins.GitSha256 -SevenZipVersion $script:Pins.SevenZipVersion -SevenZipSha256 $script:Pins.SevenZipSha256 `
-        -RunnerDir (Join-Path $Dir 'bin') -GitDir (Join-Path $Dir 'git')
-    Set-Content -LiteralPath $versionFile -Value $want -Encoding ASCII
-    Protect-Directory -Dir $Dir
-}
-
-function Switch-CurrentLink {
-    # <Root>\current is a junction to the version directory. Docker resolves it when it creates a container, so the next
-    # container gets the new version. The root grants write to nobody else: whoever can change the link chooses what runs.
-    # A junction cannot be replaced in one step: for a moment there is no link, and a container created in that moment
-    # does not start (Swarm starts the next one after the restart delay).
-    param([string] $Root, [string] $Version)
-    $link = Join-Path $Root 'current'
-    Invoke-Acl $Root /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-11:(OI)(CI)RX'
-    if (Test-Path -LiteralPath $link) {
-        & cmd.exe /c rmdir "`"$link`""   # removes the junction only, never the directory behind it
-        if ($LASTEXITCODE -ne 0) { throw "cannot remove the junction $link" }
-    }
-    $null = New-Item -ItemType Junction -Path $link -Target (Join-Path $Root $Version)
-    [Console]::Out.WriteLine("$link -> $(Join-Path $Root $Version)")
 }
 
 function Install-ClassSecret {
@@ -196,12 +126,8 @@ function Install-ClassSecret {
 
 if ($MyInvocation.InvocationName -ne '.') {
     $ErrorActionPreference = 'Stop'
-    if (-not (Test-Preflight -SkipDocker:$StageOnly -WillInitSwarm:$InitSwarm)) { throw 'preflight failed, see the CHECK lines' }
-    if ($InitSwarm -and -not $AdvertiseAddr -and -not $StageOnly) { throw '-InitSwarm needs -AdvertiseAddr <the IPv4 address of this host>' }
-    # Stage first: the network drops for a few seconds after "docker swarm init", and the downloads need it.
-    Install-Stage -Dir (Join-Path $InstallDir $RunnerVersion) -Version $RunnerVersion -Force:$Force
-    Switch-CurrentLink -Root $InstallDir -Version $RunnerVersion
-    if ($StageOnly) { return }
+    if (-not (Test-Preflight -WillInitSwarm:$InitSwarm)) { throw 'preflight failed, see the CHECK lines' }
+    if ($InitSwarm -and -not $AdvertiseAddr) { throw '-InitSwarm needs -AdvertiseAddr <the IPv4 address of this host>' }
     if ($InitSwarm -and (Get-DockerInfo).Swarm -eq 'inactive') {
         $r = Invoke-Docker @('swarm', 'init', '--advertise-addr', $AdvertiseAddr)
         if ($r.ExitCode -ne 0) { throw "docker swarm init failed: $($r.Output -join ' ')" }
@@ -215,5 +141,5 @@ if ($MyInvocation.InvocationName -ne '.') {
         $r.Output | ForEach-Object { [Console]::Out.WriteLine($_) }
         if ($r.ExitCode -ne 0) { throw 'docker stack deploy failed' }
     }
-    [Console]::Out.WriteLine("Next: docker stack deploy -c $($StackFile -join ' -c ') $StackName ; docker stack ps $StackName --no-trunc. Keep the host clock synchronised, and enable BitLocker on the Docker root volume (Windows keeps secrets in clear text on the container disk).")
+    [Console]::Out.WriteLine("Next: docker stack deploy -c $($StackFile -join ' -c ') $StackName ; docker service logs ${StackName}_runner-distributor-windows ; docker stack ps $StackName --no-trunc. Keep the host clock synchronised, and enable BitLocker on the Docker root volume (Windows keeps secrets in clear text on the container disk).")
 }

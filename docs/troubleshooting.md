@@ -276,6 +276,20 @@ Every task fails. The runner log shows `failed to remove working directory befor
 
 **Fix.** Set `CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"`, or remove the variable so that the entrypoint default applies, and deploy again. A single-task container is discarded after the job, so nothing is lost. In a persistent class, start every job with a step that removes what an earlier job left. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
 
+### Permission denied on /opt/machine-runner-swarm with SELinux
+
+On RHEL, a replica reports `Permission denied` for files under `/opt/machine-runner-swarm` while SELinux is enforcing.
+
+**Cause.** Untested: this repository's CI does not run on RHEL. The runner is in a named volume, and Docker labels the files of a volume for containers in the usual case. A setup where it does not leaves the files with a type that containers may not read. A Swarm service mount has no `:z` option to relabel them.
+
+**Fix.** Confirm the denial with `sudo ausearch -m avc -ts recent`, then label the volume on the node. The files that the distributor writes later inherit the label.
+
+```console
+$ sudo chcon -R -t container_file_t /var/lib/docker/volumes/runners_runner-bin/_data
+```
+
+Keep SELinux enforcing. Do not disable it to work around the error, and open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) with the `avc` line if you needed this.
+
 ### Warning: sudo unable to send audit message
 
 Every `sudo` call in a job prints `unable to send audit message`.

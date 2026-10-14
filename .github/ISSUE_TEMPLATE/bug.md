@@ -20,7 +20,7 @@ Describe the problem and what you expected instead.
 ## Environment
 
 - Release or commit of this repository:
-- Runner version (`circleci-runner --version` on the node, or `/opt/machine-runner-swarm/current/VERSION`, `C:\machine-runner-swarm\current\VERSION`):
+- Runner version (the log of `runner-distributor`: `docker service logs runners_runner-distributor`):
 - Node operating system and architecture:
 - Docker Engine version (`docker version`):
 - Swarm layout (single node, or number of managers and workers):

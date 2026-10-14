@@ -131,7 +131,7 @@ The labels are required, because the image build must be the host build or an ol
 
 Deploy the Linux and Windows files into the same stack name. The service names differ, so they do not collide. Do not use `docker stack deploy --prune` there, because it removes the services of the other file.
 
-**Mixed Linux and Windows clusters are designed for, but not tested end to end.** The Linux and the Windows stack files are made to be deployed into one Swarm: the constraints on `node.platform.os` keep each service on its own operating system, and the service names differ. The CI tests each operating system on its own Swarm, because the Linux and the Windows VMs of CI cannot reach each other. A test of the mixed cluster needs a Linux VM and a Windows Server VM on one network, with the ports 2377, 7946 and 4789 open between them (refer to [Inter-node ports](#inter-node-ports)), and a Linux manager that both stack files are deployed from.
+**Mixed Linux and Windows clusters are tested by hand, not in CI.** The Linux and the Windows stack files are made to be deployed into one Swarm: the constraints on `node.platform.os` keep each service on its own operating system, and the service names differ. A mixed cluster of a Linux manager and a Windows Server 2022 worker ran real CircleCI jobs on both operating systems, with both runner distributors and an overlay network between Linux and Windows containers. CI tests each operating system on its own Swarm, because the Linux and the Windows VMs of CI cannot reach each other. A mixed cluster needs the ports 2377, 7946 and 4789 open between its nodes (refer to [Inter-node ports](#inter-node-ports)), and a Linux manager that both stack files are deployed from.
 
 ## Labels and constraints
 

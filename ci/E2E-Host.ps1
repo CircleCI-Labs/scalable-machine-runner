@@ -3,10 +3,12 @@
     Job A of the Windows e2e (see docs/ci.md): hosts the runner as a Docker Swarm service.
 
 .DESCRIPTION
-    -Mode Prepare  Stage C:\machine-runner-swarm with windows\Setup.ps1 -StageOnly, pull the stock image, then
-                   `Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the machine-runner-swarm.windows-ltsc*
-                   node labels). The order matters: the network is down for a few seconds after
-                   the swarm is created.
+    -Mode Prepare  Pull the stock image, then `Setup.ps1 -InitSwarm -AdvertiseAddr` (docker swarm init and the
+                   machine-runner-swarm.windows-ltsc* node labels). The order matters: the network is down for a few
+                   seconds after the swarm is created. Then deploy the shipped stack with no runner replicas and wait until its
+                   service runner-distributor-windows has installed CircleCI's current runner and portable Git into the
+                   volume (the first download takes minutes, which must not count against the probes' deadline), and remove
+                   the stack again: the volume stays.
     -Mode Run      Deploy the stack on the stock Server Core image and host three single-task jobs:
                    the first container must claim probe b1, the second (Swarm replaces a
                    finished task with a new container) probe b2, the third probe b3. Every probe
@@ -22,7 +24,8 @@
     The stack is the shipped one (-StackFile) with the image tag of the host's Windows build
     (-WindowsTag, default ltsc2022; the shipped stack names ltsc2022) and an override layered on
     top: the e2e service runs one replica, every other service none. The runner and Git come
-    from the host through the read-only C:\machine-runner-swarm mount the shipped stack already declares.
+    from the volume runner-bin through the read-only mounts the shipped stack already declares (the distributor
+    service of the stack stays as shipped and is left out of the override).
 
     The token comes from E2E_RUNNER_TOKEN_WINDOWS (scalable-machine-runner-e2e context). The
     Swarm secret windows-default-token holds the runner config (api.auth_token). It is written to
@@ -135,6 +138,7 @@ function Get-ContainerEvent {
         if ($e.Actor.Attributes.PSObject.Properties.Name -contains 'exitCode') { $code = [string] $e.Actor.Attributes.exitCode }
         $task = ''
         if ($e.Actor.Attributes.PSObject.Properties.Name -contains 'com.docker.swarm.task.id') { $task = [string] $e.Actor.Attributes.'com.docker.swarm.task.id' }
+        if ($e.Actor.Attributes.PSObject.Properties.Name -contains 'com.docker.swarm.service.name' -and [string] $e.Actor.Attributes.'com.docker.swarm.service.name' -like '*_runner-distributor-windows') { continue }   # not a runner's container
         $events += [pscustomobject]@{ Action = [string] $e.Action; Id = [string] $e.Actor.ID; ExitCode = $code; TaskId = $task; Time = ([double] $e.timeNano) / 1e9 }
     }
     return $events
@@ -176,7 +180,6 @@ function Exit-WithFailure([string] $Message) {
 
 function Invoke-Prepare {
     Invoke-Docker version | ForEach-Object { Write-Host $_ }
-    Install-Layout
     # Pull before the swarm exists: on a fresh VM the base layer takes about 10 minutes,
     # which must not count against the probes' deadline, and for a few seconds after
     # `docker swarm init` DNS lookups fail ("lookup mcr.microsoft.com: no such host").
@@ -184,25 +187,22 @@ function Invoke-Prepare {
     Write-E2ELog "docker pull $base"
     Invoke-Docker pull $base | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure "docker pull $base failed" }
-    # The shipped helper: docker swarm init and the machine-runner-swarm.windows-ltsc* node labels (it stages first and
-    # finds C:\machine-runner-swarm staged).
+    # The shipped helper: docker swarm init and the machine-runner-swarm.windows-ltsc* node labels.
     $ip = Get-AdvertiseAddress
     Write-E2ELog "windows\Setup.ps1 -InitSwarm -AdvertiseAddr $ip"
     & (Join-Path $repo 'windows\Setup.ps1') -InitSwarm -AdvertiseAddr $ip
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure "windows\Setup.ps1 -InitSwarm exited $LASTEXITCODE" }
     Invoke-Docker node ls | ForEach-Object { Write-Host $_ }
     Invoke-Docker node inspect self --format '{{json .Spec.Labels}}' | ForEach-Object { Write-Host "node labels: $_" }
-    Get-ChildItem C:\machine-runner-swarm -Recurse -Depth 2 | Select-Object -First 40 | ForEach-Object { Write-Host $_.FullName }
-    & C:\machine-runner-swarm\current\bin\circleci-runner.exe --version
-}
-function Install-Layout {
-    # Stage C:\machine-runner-swarm with the shipped helper (runner, portable Git, ACLs). Stage first: the downloads
-    # must not run right after `docker swarm init`, which rebuilds the host's virtual network.
-    $setup = Join-Path $repo 'windows\Setup.ps1'
-    if (-not (Test-Path $setup)) { throw "$setup is missing" }
-    Write-E2ELog 'windows\Setup.ps1 -StageOnly'
-    & $setup -StageOnly
-    if ($LASTEXITCODE -ne 0) { Exit-WithFailure "windows\Setup.ps1 -StageOnly exited $LASTEXITCODE" }
+    # The distributor installs the runner and Git from CircleCI's real manifest (docs/install-windows.md), with a made-up token in
+    # a made-up secret that the run replaces.
+    Import-Module (Join-Path $repo 'windows\tests\SwarmTestHelpers.psm1') -Force
+    Write-E2ELog 'deploying the stack with no runner replicas: the distributor installs the runner and Git'
+    $d = Install-SwarmDistributor -Stack $Stack -StackFile $StackFile -TimeoutSeconds 1500
+    Write-Host $d.Log
+    if (-not $d.Ok) { Exit-WithFailure $d.Detail }
+    Invoke-StackRemoval
+    $null = Invoke-Docker secret rm "$Service-token"
 }
 
 function Write-Override {
@@ -212,6 +212,7 @@ function Write-Override {
         'services:'
     )
     foreach ($s in (Get-RenderedSection $text 'services' '^  ([^ ][^:]*):$' 2)) {
+        if ($s -eq 'runner-distributor-windows') { continue }   # global: as shipped
         if ($s -eq $Service) {
             $lines += "  ${s}:"
             if ($stockImage) { $lines += "    image: '$stockImage'" }

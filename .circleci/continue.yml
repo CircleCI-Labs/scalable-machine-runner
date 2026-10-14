@@ -387,8 +387,9 @@ jobs:
   # ---------------------------------------------------------------------------
   windows-swarm:
     description: >
-      docker swarm init, then the stock-image path (C:\\machine-runner-swarm mounted into the unmodified Server
-      Core image, runner as the main process): the mounts, ephemerality, exit 80, placement, stop handling and persistent mode.
+      docker swarm init, the runner and portable Git installed by the stack's distributor from CircleCI's real manifest, then the
+      stock-image path (the volume runner-bin mounted read-only into the unmodified Server Core image, runner as the main process):
+      the mounts, ephemerality, exit 80, placement, stop handling, persistent mode, and the distributor against a local mirror.
     parameters:
       os:
         type: executor
@@ -423,13 +424,6 @@ jobs:
             & .\windows\tests\Invoke-UnitTests.ps1 -ResultsDirectory C:\test-results\pester
             exit $LASTEXITCODE
       - run:
-          name: Stage C:\machine-runner-swarm\<version> and the current junction (windows\Setup.ps1 -StageOnly - runner, portable Git, ACLs)
-          command: |
-            # Stage first: the downloads must not run right after `docker swarm init`.
-            $global:LASTEXITCODE = 1
-            & .\windows\Setup.ps1 -StageOnly
-            exit $LASTEXITCODE
-      - run:
           name: Pull the stock image before the swarm exists (DNS fails for seconds after swarm init)
           no_output_timeout: 30m
           command: |
@@ -448,8 +442,15 @@ jobs:
             $rc = $LASTEXITCODE
             docker node ls
             docker node inspect self --format '{{json .Spec.Labels}}'
-            Get-ChildItem C:\machine-runner-swarm -Recurse -Depth 1 | Select-Object -First 30 | ForEach-Object { Write-Host $_.FullName }
             exit $rc
+      - run:
+          name: The distributor installs the runner and portable Git from CircleCI's real manifest (windows/tests/Test-Install.ps1)
+          when: always
+          no_output_timeout: 40m
+          command: |
+            New-Item -ItemType Directory -Force -Path reports | Out-Null
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Install.ps1 -Report "reports\install-$env:WINDOWS_TAG.txt"
+            exit $LASTEXITCODE
       - run:
           name: Stock image plus the read-only mounts (windows/tests/Test-Injection.ps1 -Online)
           when: always
@@ -508,11 +509,11 @@ jobs:
             .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Persistent.ps1 -Report "reports\persistent-$env:WINDOWS_TAG.txt"
             exit $LASTEXITCODE
       - run:
-          name: A runner upgrade through the junction as the bind source (windows/tests/Test-Upgrade.ps1)
+          name: The distributor against a local mirror - pin, auto, major guard, rollback, pruning, tamper, a running job (windows/tests/Test-Distributor.ps1)
           when: always
           no_output_timeout: 25m
           command: |
-            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Upgrade.ps1 -Report "reports\upgrade-$env:WINDOWS_TAG.txt"
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Distributor.ps1 -Report "reports\distributor-$env:WINDOWS_TAG.txt"
             exit $LASTEXITCODE
       - store_artifacts:
           path: C:\test-results
@@ -628,7 +629,7 @@ jobs:
     steps:
       - checkout
       - run:
-          name: docker swarm init (with an advertise address) and the host layout under C:\machine-runner-swarm
+          name: docker swarm init (with an advertise address), then the distributor installs the runner and Git
           no_output_timeout: 30m
           command: |
             $global:LASTEXITCODE = 1

@@ -98,11 +98,12 @@ commands:
             for which in image base; do
               trivy image --input "/trivy/${which}.tar" --scanners vuln --severity CRITICAL --ignore-unfixed \
                 --ignorefile /work/.trivyignore --format json --output "/reports/critical-<< parameters.report >>-${which}.json"
-              jq -r '[.Results[]? | .Target as $t | .Vulnerabilities[]? | "\(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) in \($t)"] | unique[]' \
+              jq -r '[.Results[]? | .Vulnerabilities[]? | "\(.VulnerabilityID) \(.PkgName) \(.InstalledVersion)"] | unique[]' \
                 "/tmp/reports/critical-<< parameters.report >>-${which}.json" > "/tmp/${which}.critical"
               echo "fixable CRITICAL findings in ${which}: $(wc -l < "/tmp/${which}.critical")"
             done
-            # A finding the base also has is not ours, even when it sits in the same file.
+            # A finding the base also has is not ours. The lines name the CVE, the package and its version, not the scanned tar file:
+            # the two inputs are different files, so a line with the file name would never match.
             comm -13 /tmp/base.critical /tmp/image.critical > /tmp/added.critical
             if [ -s /tmp/added.critical ]; then
               echo "fixable CRITICAL findings added on top of << parameters.base >>:"; cat /tmp/added.critical

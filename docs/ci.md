@@ -95,12 +95,13 @@ flowchart TD
 | every pipeline | `linux-setup` | `ubuntu-2604:current` | `ci/linux-smoke.sh`: `linux/setup.sh` and the shipped stack end to end on a fresh VM with no real token, with the distributor installing the runner (below) |
 | `full-suite` | `linux-microvm` | `android:current`, `large.gen2` (the only CircleCI image with `/dev/kvm`) | `linux/tests/microvm.sh` with `SWARM_TEST_REQUIRE_KVM=1`: the microVM add-on on two Docker-in-Docker nodes with Kata. It downloads Kata 4.2.0 (about 1 GB, SHA-256 verified). [Details](#linux-microvm) |
 | every pipeline | `linux-arm64` | `ubuntu-2604:current`, `arm.medium` | The same script on an Arm VM: the arm64 runner installed by the distributor runs unmodified in a stock `cimg/base` through the volume, and the shipped stack starts |
+| every pipeline, optional | `linux-mixed-arch` | `ubuntu-2604:current`, xlarge | `linux/tests/mixed-arch.sh`: the shipped stack on an amd64 manager and an arm64 worker emulated by QEMU (the script registers the `qemu-aarch64` binfmt handler in the VM). Each node installs the runner of its own architecture and verifies that architecture's tarball SHA-256, and classes constrained by `node.platform.arch` stay on their architecture. About 2 minutes on an 8-core machine. It is not in the `requires` of the release (the release check of `lint-circleci` names it as optional): make it a requirement once it has been green for a while. A skip counts as a failure in this job |
 | every pipeline | `windows-swarm-ltsc2022` | `windows-server-2022-gui:current`, windows.medium | The stock-image path on Windows (below) |
 | `full-suite` | `windows-swarm-ltsc2025` | `windows-server-2025-gui:current` | The same on Server 2025 |
 | `e2e-linux` | `e2e-linux-host`, `e2e-linux-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`; probes: `cci-labs/scalable-machine-runner-e2e-linux` | Real runner e2e (below) |
 | `e2e-linux-arm64` | `e2e-linux-arm64-host`, `e2e-linux-arm64-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`, `arm.medium`; probes: the same class | The same e2e with the arm64 runner. It uses the class and the token of `e2e-linux` and runs after it in the same serial group. Every probe records `uname -m`, and the host requires it to equal its own `aarch64` |
 | `e2e-windows` | `e2e-windows-2022-host` and `-b1`, `-b2`, `-b3`; then the same for 2025 | host: `windows-server-2022-gui:current` / `windows-server-2025-gui:current`; probes: `cci-labs/scalable-machine-runner-e2e-windows` | Real runner e2e (below) |
-| `release` | `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release` | The release (below). It requires every job above |
+| `release` | `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release` | The release (below). It requires every job above except the optional `linux-mixed-arch` |
 
 **Executor images.** These were checked against the CircleCI docs on 2026-10-12:
 

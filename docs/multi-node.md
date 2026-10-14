@@ -108,6 +108,15 @@ The `runner-distributor` service reads the architecture of the node and installs
 - Give each architecture its own resource class, for example `linux-arm64`, and constrain it with `node.platform.arch == aarch64`. A class that spans both architectures places replicas unpredictably, and a job cannot pick one.
 - Use an image that publishes an `arm64` variant. For example, check with `docker buildx imagetools inspect <image>`.
 
+### Mixed architectures
+
+One cluster can have `x86_64` and `aarch64` nodes. Nothing else is needed on the nodes.
+
+- **Which build a node gets.** Each `runner-distributor` task reads the architecture of its own node (`x86_64` is `amd64`, `aarch64` is `arm64`), downloads `circleci-runner_linux_<arch>.tar.gz` of that architecture, and checks its SHA-256 against the entry of that architecture in the manifest. If you set `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, list the hash of every architecture in the cluster. One pinned version, or `current`, gives each node the build for its own architecture. A tarball that does not match its entry installs nothing on that node, and the other nodes still install.
+- **Placement.** A class without an architecture constraint can run on both kinds of node. Add `node.platform.arch == aarch64` or `node.platform.arch == x86_64` to the `deploy.placement.constraints` of the classes that need one. The constraint is added to the shared ones of `runners.yaml`. When the nodes of that architecture are drained or gone, the class stays `Pending` with `no suitable node`. It never moves to the other architecture.
+- **What is tested.** [`linux/tests/mixed-arch.sh`](../linux/tests/mixed-arch.sh) (the optional CI job `linux-mixed-arch`, see [CI](ci.md)) runs the shipped stack file on a Swarm of an amd64 manager and an arm64 worker. It checks that each node installs the runner of its own architecture (the ELF header of the binary, and the tarball SHA-256 of that architecture), that a release whose arm64 tarball does not match its manifest entry installs on the amd64 node and not on the arm64 node, that the real arm64 runner prints its version in a stock `cimg/base`, and that classes constrained by `node.platform.arch` run only on their architecture, also when the other node is drained.
+- **What is emulated, and what is real.** The arm64 worker of that test is a `docker:dind` container under QEMU user-mode emulation on an x86_64 host, not Arm hardware. QEMU cannot run `runc` or program `iptables` itself, so the emulated engine uses native copies of those helpers, and IPVS (the virtual IP of a service) and IPsec on overlays do not work there. The test therefore proves the install, the verification and the placement logic, and not the speed or the system call behavior of an Arm node. A real arm64 node is tested by the single-node jobs `linux-arm64` (the distributor and the shipped stack) and `e2e-linux-arm64` (a real runner on an Arm VM).
+
 ### Windows nodes
 
 On each node:
@@ -121,6 +130,8 @@ On each node:
 The labels are required, because the image build must be the host build or an older one. Refer to [Image tags and host builds](install-windows.md#image-tags-and-host-builds).
 
 Deploy the Linux and Windows files into the same stack name. The service names differ, so they do not collide. Do not use `docker stack deploy --prune` there, because it removes the services of the other file.
+
+**Mixed Linux and Windows clusters are designed for, but not tested end to end.** The Linux and the Windows stack files are made to be deployed into one Swarm: the constraints on `node.platform.os` keep each service on its own operating system, and the service names differ. The CI tests each operating system on its own Swarm, because the Linux and the Windows VMs of CI cannot reach each other. A test of the mixed cluster needs a Linux VM and a Windows Server VM on one network, with the ports 2377, 7946 and 4789 open between them (refer to [Inter-node ports](#inter-node-ports)), and a Linux manager that both stack files are deployed from.
 
 ## Labels and constraints
 

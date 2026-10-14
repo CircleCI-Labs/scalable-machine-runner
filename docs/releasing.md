@@ -24,7 +24,7 @@ Pipelines of other branches never release, and neither do tag pipelines.
 
 If an e2e token is missing on `main`, the setup phase passes `release: false` and says so in its log. The pipeline then runs the `ci` workflow without the release job (and without the e2e group whose token is missing), because a release must wait for every test.
 
-**Add a new job to `requires` of the release job.** The release job lists every other job of the workflow in `requires` (in `.circleci/continue.yml`), and a comment at the job says so. The job `lint-circleci` compiles the workflow and fails when a job is missing from the list, so a pull request cannot add a test that the release does not wait for.
+**Add a new job to `requires` of the release job.** The release job lists every other job of the workflow in `requires` (in `.circleci/continue.yml`), and a comment at the job says so. The job `lint-circleci` compiles the workflow and fails when a job is missing from the list, so a pull request cannot add a test that the release does not wait for. The only exceptions are the optional jobs that `lint-circleci` names in its `$optional` list (today `linux-mixed-arch`, the emulated mixed-architecture cluster test).
 
 ## Versions
 

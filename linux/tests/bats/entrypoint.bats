@@ -161,72 +161,94 @@ mkuser() { # name [uid]
 # ---------------------------------------------------------------------------------------------
 # Exit 80: a prerequisite is missing
 # ---------------------------------------------------------------------------------------------
-@test "exit 80: runner binary missing" {
+@test "exit 80: no runner in the image and none from the distributor yet" {
   rm -f "$STUB"
-  run ep
+  MACHINE_RUNNER_SWARM_RUNNER_WAIT=1 run ep
   [ "$status" -eq 80 ]
-  [[ $output == *"is missing"* ]]
+  [[ $output == *"current is 'missing'"* ]]
 }
 
-# Distributed mode: the runner comes from versions/<version> of the volume that the runner-distributor fills, behind the link current.
-dist_pin() { # VERSION: the volume layout, and the pins of the stack for the stub
-  local d=/opt/machine-runner-swarm/versions/$1 sha
-  install -d -m 0755 -o 0 -g 0 /opt/machine-runner-swarm/versions "$d" "$d/bin"
-  install -m 0755 -o 0 -g 0 "$STUB" "$d/bin/circleci-runner"
-  rm -f "$STUB"
-  sha=$(sha256sum "$d/bin/circleci-runner" | cut -d' ' -f1)
-  export MACHINE_RUNNER_SWARM_RUNNER_VERSION=$1 MACHINE_RUNNER_SWARM_RUNNER_SHA256_AMD64=$sha MACHINE_RUNNER_SWARM_RUNNER_SHA256_ARM64=$sha
+# Distributed mode: the runner comes from versions/<version> of the volume that the runner-distributor fills, behind the link current,
+# and versions/<version>/SHA256 records the SHA-256 of its binary.
+dist_install() { # VERSION: the volume layout the distributor writes, from the stub
+  local d=/opt/machine-runner-swarm/versions/$1
+  install -d -m 0755 -o 0 -g 0 /tmp/swarm-test /opt/machine-runner-swarm/versions "$d" "$d/bin"
+  [ -e /tmp/swarm-test/stub ] || cp "$STUB" /tmp/swarm-test/stub
+  install -m 0755 -o 0 -g 0 /tmp/swarm-test/stub "$d/bin/circleci-runner"
+  (cd "$d" && sha256sum bin/circleci-runner > SHA256 && echo "$1" > VERSION)
+  rm -f "$STUB"   # without bin/circleci-runner the entrypoint resolves the link current
 }
+dist_flip() { ln -s "versions/$1" /opt/machine-runner-swarm/.current.new && mv -T /opt/machine-runner-swarm/.current.new /opt/machine-runner-swarm/current; }
 
-@test "distributed: the pinned runner starts through the link current" {
-  dist_pin 1.2.3
-  ln -s versions/1.2.3 /opt/machine-runner-swarm/current
+@test "distributed: the runner starts through the link current, from the version directory" {
+  dist_install 1.2.3
+  dist_flip 1.2.3
   run ep
   [ "$status" -eq 0 ]
   [[ $output == *"ARGS=machine --config /run/secrets/circleci_runner_config.yaml"* ]]
   [[ $output == *"RUNNER uid=2000"* ]]
 }
 
-@test "distributed: a runner binary that differs from the pin exits 80" {
-  dist_pin 1.2.3
-  ln -s versions/1.2.3 /opt/machine-runner-swarm/current
+@test "distributed: a runner binary that differs from its record exits 80" {
+  dist_install 1.2.3
+  dist_flip 1.2.3
   printf '#!/bin/sh\necho tampered\n' > /opt/machine-runner-swarm/versions/1.2.3/bin/circleci-runner.new
   chmod 0755 /opt/machine-runner-swarm/versions/1.2.3/bin/circleci-runner.new
   mv /opt/machine-runner-swarm/versions/1.2.3/bin/circleci-runner.new /opt/machine-runner-swarm/versions/1.2.3/bin/circleci-runner
   run ep
   [ "$status" -eq 80 ]
-  [[ $output == *"does not match the pinned SHA-256"* ]]
+  [[ $output == *"does not match its SHA-256 record"* ]]
   [[ $output != *"tampered"* ]]
 }
 
-@test "distributed: no pin for this architecture exits 80" {
-  dist_pin 1.2.3
-  ln -s versions/1.2.3 /opt/machine-runner-swarm/current
-  unset MACHINE_RUNNER_SWARM_RUNNER_SHA256_AMD64 MACHINE_RUNNER_SWARM_RUNNER_SHA256_ARM64
+@test "distributed: a missing record, or a record of another file, exits 80" {
+  dist_install 1.2.3
+  dist_flip 1.2.3
+  mv /opt/machine-runner-swarm/versions/1.2.3/SHA256 /opt/machine-runner-swarm/SHA256.moved
   run ep
   [ "$status" -eq 80 ]
-  [[ $output == *"must hold the SHA-256"* ]]
+  [[ $output == *"does not match its SHA-256 record"* ]]
+  printf '%s  bin/elsewhere\n' "$(sha256sum /opt/machine-runner-swarm/versions/1.2.3/bin/circleci-runner | cut -d' ' -f1)" > /opt/machine-runner-swarm/versions/1.2.3/SHA256
+  run ep
+  [ "$status" -eq 80 ]
+  [[ $output == *"does not match its SHA-256 record"* ]]
+}
+
+@test "distributed: a link that does not name a version directory exits 80" {
+  dist_install 1.2.3
+  ln -s /etc /opt/machine-runner-swarm/current
+  run ep
+  [ "$status" -eq 80 ]
+  [[ $output == *"current is '/etc'"* ]]
+  rm /opt/machine-runner-swarm/current
+  ln -s versions/../bin /opt/machine-runner-swarm/current
+  run ep
+  [ "$status" -eq 80 ]
 }
 
 @test "distributed: an empty volume makes the entrypoint wait, then exit 80" {
-  dist_pin 1.2.3   # the version exists, the link does not (the distributor has not flipped yet)
+  dist_install 1.2.3   # the version exists, the link does not (the distributor has not flipped yet)
   MACHINE_RUNNER_SWARM_RUNNER_WAIT=2 run ep
   [ "$status" -eq 80 ]
   [[ $output == *"waiting for the runner-distributor"* ]]
   [[ $output == *"current is 'missing'"* ]]
-  ln -s versions/0.0.1 /opt/machine-runner-swarm/current   # a link to another version is not the pinned one either
-  MACHINE_RUNNER_SWARM_RUNNER_WAIT=2 run ep
-  [ "$status" -eq 80 ]
-  [[ $output == *"current is 'versions/0.0.1', not versions/1.2.3"* ]]
 }
 
-@test "distributed: the runner starts as soon as the distributor flips current" {
-  dist_pin 1.2.3
-  (sleep 2 && ln -s versions/1.2.3 /opt/machine-runner-swarm/.current.new && mv -T /opt/machine-runner-swarm/.current.new /opt/machine-runner-swarm/current) &
+@test "distributed: the runner starts as soon as the distributor flips current, and runs the version of that moment" {
+  dist_install 1.2.3
+  dist_install 1.2.4
+  (sleep 2 && dist_flip 1.2.3) &
   MACHINE_RUNNER_SWARM_RUNNER_WAIT=30 run ep
   [ "$status" -eq 0 ]
   [[ $output == *"waiting for the runner-distributor"* ]]
   [[ $output == *"ARGS=machine --config"* ]]
+}
+
+@test "distributed: MACHINE_RUNNER_SWARM_RUNNER_WAIT must be a number" {
+  dist_install 1.2.3
+  MACHINE_RUNNER_SWARM_RUNNER_WAIT=soon run ep
+  [ "$status" -eq 80 ]
+  [[ $output == *"must be a number of seconds"* ]]
 }
 
 @test "exit 80: /opt/machine-runner-swarm or the runner writable by others, or not owned by root" {

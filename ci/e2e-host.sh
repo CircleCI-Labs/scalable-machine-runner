@@ -296,6 +296,8 @@ verify() {
     [ "$(field "${ev}" result)" = pass ] || { log "${p}: result is not pass"; ok=0; }
     [ "$(field "${ev}" residue)" = "[]" ] || { log "${p}: found residue"; ok=0; }
     [ "$(field "${ev}" token_nosudo)" = denied ] || { log "${p}: the job user could read the token without sudo"; ok=0; }
+    # The runner of this host claimed the probe: the container of the job has the architecture of the host (an arm64 host proves the arm64 runner).
+    [ "$(field "${ev}" arch)" = "$(uname -m)" ] || { log "${p}: the job ran on $(field "${ev}" arch), the host is $(uname -m)"; ok=0; }
   done
 
   # Each probe ran in the container that Swarm started for it, and no two share anything.
@@ -330,7 +332,7 @@ verify() {
 
   local verdict=PASS
   [ "${ok}" -eq 1 ] || verdict=FAIL
-  echo "RESULT e2e=linux probes=3 distinct_containers=${ids} b2_residue=$(field "$(evidence b2)" residue)" \
+  echo "RESULT e2e=linux arch=$(uname -m) probes=3 distinct_containers=${ids} b2_residue=$(field "$(evidence b2)" residue)" \
     "job_user=$(field "$(evidence b1)" user) runner_user=$(field "$(evidence b1)" runner_user) stepdown=${stepdown} token_in_job_env=$(field "$(evidence b1)" token_env) token_on_command_line=$(field "$(evidence b1)" token_ps)" \
     "token_default_nosudo=$(field "$(evidence b1)" token_nosudo) token_default_sudo=$(field "$(evidence b1)" token_sudo) runner_env_via_sudo_default=$(field "$(evidence b1)" runner_environ_via_sudo)" \
     "token_hardened_nosudo=$(field "$(evidence b3)" token_nosudo) token_hardened_sudo=$(field "$(evidence b3)" token_sudo) hardened_sudo_works=$(field "$(evidence b3)" sudo_works) verdict=${verdict}" \

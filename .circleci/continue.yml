@@ -527,7 +527,12 @@ jobs:
   # The context is attached to the host only; the probes inherit nothing.
   # ---------------------------------------------------------------------------
   e2e-linux-host:
-    executor: linux-vm
+    parameters:
+      os:
+        type: executor
+        default: linux-vm
+        description: linux-vm (amd64) or linux-arm (arm64). The probes record their architecture, and the host requires its own.
+    executor: << parameters.os >>
     steps:
       - checkout
       - run:
@@ -871,6 +876,29 @@ job-groups:
           previous: b2
           expect-sudo: "false"
           requires: [e2e-linux-b2]
+  # The same on an Arm VM: the arm64 runner from the distributor, the same class and token. The probes must report aarch64.
+  e2e-linux-arm64:
+    jobs:
+      - e2e-linux-host:
+          name: e2e-linux-arm64-host
+          context: [scalable-machine-runner-e2e]
+          os: linux-arm
+      - e2e-linux-probe:
+          name: e2e-linux-arm64-b1
+          probe: b1
+          workspace: persist
+      - e2e-linux-probe:
+          name: e2e-linux-arm64-b2
+          probe: b2
+          previous: b1
+          workspace: attach
+          requires: [e2e-linux-arm64-b1]
+      - e2e-linux-probe:
+          name: e2e-linux-arm64-b3
+          probe: b3
+          previous: b2
+          expect-sudo: "false"
+          requires: [e2e-linux-arm64-b2]
   e2e-windows-2022:
     jobs:
       - e2e-windows-host:
@@ -951,6 +979,10 @@ workflows:
       - e2e-linux:
           serial-group: << pipeline.project.slug >>/e2e-linux
           filters: pipeline.parameters.e2e-linux
+      - e2e-linux-arm64:
+          serial-group: << pipeline.project.slug >>/e2e-linux
+          requires: [e2e-linux]
+          filters: pipeline.parameters.e2e-linux
       - e2e-windows-2022:
           serial-group: << pipeline.project.slug >>/e2e-windows
           filters: pipeline.parameters.e2e-windows
@@ -984,5 +1016,6 @@ workflows:
             - windows-swarm-ltsc2022
             - windows-swarm-ltsc2025
             - e2e-linux
+            - e2e-linux-arm64
             - e2e-windows-2022
             - e2e-windows-2025

@@ -169,6 +169,11 @@ function Invoke-StackRemoval {
 function Invoke-Cleanup {
     Invoke-TreeKill $script:logsProc
     Invoke-TreeKill $script:eventsProc
+    # What a failed run needs to be read: where the services ran, and what the token proxy and the distributor said (the stack goes next).
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    (Invoke-Docker service ps --no-trunc "${Stack}_token-proxy-windows" "${Stack}_runner-distributor-windows") | Set-Content -LiteralPath (Join-Path $logDir 'services.ps.txt') -Encoding ASCII
+    (Invoke-Docker service logs --timestamps "${Stack}_token-proxy-windows") | Set-Content -LiteralPath (Join-Path $logDir 'proxy.cleanup.log') -Encoding ASCII
+    (Invoke-Docker service logs --timestamps "${Stack}_runner-distributor-windows") | Set-Content -LiteralPath (Join-Path $logDir 'distributor.log') -Encoding ASCII
     Write-E2ELog "cleanup: removing stack $Stack, its secrets, and leaving the swarm"
     Invoke-StackRemoval
     foreach ($s in @(Invoke-Docker secret ls -q) | Where-Object { $_ -match '^[0-9a-z]+$' }) { $null = Invoke-Docker secret rm $s }

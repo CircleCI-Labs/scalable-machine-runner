@@ -404,6 +404,11 @@ verify() {
 
 # ---------------------------------------------------------------------------
 cleanup() {
+  # What a failed run needs to be read: where the services ran, and what the token proxy and the distributor said (the stack goes next).
+  mkdir -p "${log_dir}"
+  docker service ps --no-trunc "${stack}_token-proxy" "${stack}_runner-distributor" > "${log_dir}/services.ps.txt" 2>&1 || true
+  docker service logs "${stack}_token-proxy" > "${log_dir}/proxy.cleanup.log" 2>&1 || true
+  docker service logs "${stack}_runner-distributor" > "${log_dir}/distributor.log" 2>&1 || true
   log "cleanup: removing stack ${stack}, its secrets, and leaving the swarm"
   remove_stack
   docker rm -f e2e-proxy-mirror > /dev/null 2>&1 || true

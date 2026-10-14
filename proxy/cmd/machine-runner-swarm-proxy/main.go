@@ -1,0 +1,322 @@
+// machine-runner-swarm-proxy keeps the CircleCI resource class tokens off machine runner containers on Docker Swarm.
+//
+// Runners point CIRCLECI_RUNNER_API_URL at this proxy and hold only a placeholder token. The proxy adds the
+// class token to the task-claim call and to nothing else; every other call passes through untouched, because
+// the runner and its task agent send the task-scoped token from the claim response themselves.
+//
+// One proxy serves every class of a stack. Each -class SERVICE=TOKEN-FILE pair names the DNS name of the runner
+// containers of one class (tasks.<service>, on the class overlay network) and the file with that class's token.
+// A claim is allowed only from an IP that is currently in the DNS answer of a class, and it gets that class's token.
+//
+// One claim per runner container: after a claim that returns a task, that IP is latched and further claims from it
+// get 403 until the IP leaves the DNS answer (the container is gone). A restarted proxy does not know who has
+// claimed, so it latches every IP present at start. Single-task mode only: a continuous runner claims many times.
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/netip"
+	"net/url"
+	"os"
+	"os/signal"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+const (
+	claimPath  = "/api/v3/runner/claim"
+	healthPath = "/healthz"
+	// classEnvPrefix: every environment variable with this prefix holds one -class value. Stack files merge
+	// environment variables by name but replace a command, so an add-on stack file adds its class this way.
+	classEnvPrefix = "MACHINE_RUNNER_SWARM_PROXY_CLASS_"
+)
+
+var version = "dev" // -ldflags "-X main.version=..."
+
+// A token file is either the bare token or a runner config with an auth_token line (the Swarm secret format).
+var tokenLine = regexp.MustCompile(`(?m)^\s*auth_token:\s*["']?([^"'\s]+)`)
+
+// class is one resource class: the runner containers of a Swarm service and the file with the token they claim with.
+type class struct {
+	dns       string // tasks.<service>: the IPs of the runner containers
+	tokenFile string
+
+	latched map[string]bool // runner IPs that have claimed a task
+	busy    map[string]bool // runner IPs with a claim in flight
+}
+
+func newClass(service, tokenFile string) *class {
+	if !strings.HasPrefix(service, "tasks.") {
+		service = "tasks." + service
+	}
+	return &class{dns: service, tokenFile: tokenFile, latched: map[string]bool{}, busy: map[string]bool{}}
+}
+
+type proxy struct {
+	upstream *url.URL
+	classes  []*class
+	lookup   func(ctx context.Context, host string) ([]string, error)
+
+	mu sync.Mutex // guards the latched and busy maps of every class
+}
+
+func norm(s string) string {
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a.Unmap().String()
+	}
+	return s
+}
+
+// token reads the class token on every claim, so a replaced file takes effect without a restart.
+func (c *class) token() (string, error) {
+	b, err := os.ReadFile(c.tokenFile)
+	if err != nil {
+		return "", err
+	}
+	s := strings.TrimSpace(string(b))
+	if m := tokenLine.FindStringSubmatch(s); m != nil {
+		s = m[1]
+	}
+	if s == "" || strings.ContainsAny(s, "\r\n") {
+		return "", errors.New("token file holds no usable token")
+	}
+	return s, nil
+}
+
+// members resolves the runner IPs of every class. When latch is set it latches them all; otherwise it releases the
+// latch of every IP that has left. An unknown name (no running task) is an empty set; any other DNS failure changes
+// nothing.
+func (p *proxy) members(ctx context.Context, latch bool) (map[*class]map[string]bool, error) {
+	sets := map[*class]map[string]bool{}
+	for _, c := range p.classes {
+		addrs, err := p.lookup(ctx, c.dns)
+		var dnsErr *net.DNSError
+		if err != nil && !(errors.As(err, &dnsErr) && dnsErr.IsNotFound) {
+			return nil, fmt.Errorf("%s: %w", c.dns, err)
+		}
+		set := map[string]bool{}
+		for _, a := range addrs {
+			set[norm(a)] = true
+		}
+		sets[c] = set
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for c, set := range sets {
+		for ip := range c.latched {
+			if !set[ip] {
+				delete(c.latched, ip)
+				log.Printf("released %s (%s)", ip, c.dns)
+			}
+		}
+		if latch {
+			for ip := range set {
+				c.latched[ip] = true
+			}
+		}
+	}
+	return sets, nil
+}
+
+func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == healthPath {
+		p.health(w)
+		return
+	}
+	if r.Method != http.MethodPost || r.URL.Path != claimPath {
+		p.forward(w, r, "", nil, "")
+		return
+	}
+	ap, _ := netip.ParseAddrPort(r.RemoteAddr)
+	ip := ap.Addr().Unmap().String()
+	sets, err := p.members(r.Context(), false)
+	if err != nil {
+		log.Printf("claim from %s refused: cannot resolve the runners: %v", ip, err)
+		http.Error(w, "cannot resolve the runners", http.StatusServiceUnavailable)
+		return
+	}
+	var c *class
+	p.mu.Lock()
+	why := ""
+	owners := 0
+	for _, k := range p.classes {
+		if sets[k][ip] {
+			owners++
+			c = k
+		}
+	}
+	switch {
+	case owners == 0:
+		why = "not a runner of any class"
+	case owners > 1: // overlapping networks: do not guess whose token this is
+		why = "the address belongs to several classes"
+	case c.latched[ip]:
+		why = "this runner has already claimed a task"
+	case c.busy[ip]:
+		why = "a claim from this runner is in flight"
+	default:
+		c.busy[ip] = true
+	}
+	p.mu.Unlock()
+	if why != "" {
+		log.Printf("claim from %s refused: %s", ip, why)
+		http.Error(w, "claim refused: "+why, http.StatusForbidden)
+		return
+	}
+	defer func() { p.mu.Lock(); delete(c.busy, ip); p.mu.Unlock() }()
+	if tok, err := c.token(); err != nil {
+		log.Printf("claim from %s (%s) failed: %v", ip, c.dns, err)
+		http.Error(w, "no token", http.StatusServiceUnavailable)
+	} else {
+		p.forward(w, r, tok, c, ip)
+	}
+}
+
+// health answers 200 when every class has a usable token file. It never says which class or why.
+func (p *proxy) health(w http.ResponseWriter) {
+	for _, c := range p.classes {
+		if _, err := c.token(); err != nil {
+			log.Printf("health: %s: %v", c.dns, err)
+			http.Error(w, "unhealthy", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	fmt.Fprintln(w, "ok")
+}
+
+// forward proxies r upstream. With tok set it adds the bearer token; with c and ip set a task in the response latches ip.
+func (p *proxy) forward(w http.ResponseWriter, r *http.Request, tok string, c *class, ip string) {
+	(&httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(p.upstream)
+			if tok != "" {
+				pr.Out.Header.Set("Authorization", "Bearer "+tok)
+			}
+			if ua := pr.Out.UserAgent(); ua != "" { // tell CircleCI which requests came through this proxy
+				pr.Out.Header.Set("User-Agent", ua+" machine-runner-swarm-proxy/"+version)
+			}
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			if c != nil {
+				log.Printf("claim from %s (%s): upstream status %d", ip, c.dns, resp.StatusCode)
+				if resp.StatusCode/100 == 2 && resp.StatusCode != http.StatusNoContent { // 204: no task yet
+					p.mu.Lock()
+					c.latched[ip] = true
+					p.mu.Unlock()
+				}
+			}
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			log.Printf("upstream error: %v", err)
+			w.WriteHeader(http.StatusBadGateway)
+		},
+	}).ServeHTTP(w, r)
+}
+
+// classFlags collects -class SERVICE=TOKEN-FILE (repeatable).
+type classFlags []string
+
+func (f *classFlags) String() string     { return strings.Join(*f, ",") }
+func (f *classFlags) Set(v string) error { *f = append(*f, v); return nil }
+
+// parseClasses builds the classes from the -class values and from the MACHINE_RUNNER_SWARM_PROXY_CLASS_* variables of env.
+func parseClasses(flagValues, env []string) ([]*class, error) {
+	specs := append([]string{}, flagValues...)
+	var fromEnv []string
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, classEnvPrefix) && v != "" {
+			fromEnv = append(fromEnv, v)
+		}
+	}
+	sort.Strings(fromEnv)
+	specs = append(specs, fromEnv...)
+	var classes []*class
+	seen := map[string]bool{}
+	for _, s := range specs {
+		service, file, ok := strings.Cut(s, "=")
+		if !ok || strings.TrimSpace(service) == "" || strings.TrimSpace(file) == "" {
+			return nil, fmt.Errorf("class %q: want SERVICE=TOKEN-FILE", s)
+		}
+		c := newClass(strings.TrimSpace(service), strings.TrimSpace(file))
+		if seen[c.dns] {
+			return nil, fmt.Errorf("class %s is given twice", c.dns)
+		}
+		seen[c.dns] = true
+		classes = append(classes, c)
+	}
+	if len(classes) == 0 {
+		return nil, errors.New("no class")
+	}
+	return classes, nil
+}
+
+func main() {
+	var cf classFlags
+	flag.Var(&cf, "class", "SERVICE=TOKEN-FILE: the runner service of one resource class (tasks.<service> is resolved) and the file with its token, bare or a runner config with auth_token (repeatable; also "+classEnvPrefix+"* variables)")
+	listen, upstream := flag.String("listen", ":8080", "address to listen on"), flag.String("upstream", "https://runner.circleci.com", "the runner API")
+	poll := flag.Duration("poll", time.Second, "how often to look for runners that have left")
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println("machine-runner-swarm-proxy", version)
+		return
+	}
+	u, err := url.Parse(*upstream)
+	classes, cerr := parseClasses(cf, os.Environ())
+	if err != nil || u.Host == "" || cerr != nil { // usage
+		if cerr != nil {
+			log.Print(cerr)
+		}
+		log.Fatal("usage: machine-runner-swarm-proxy -class <service>=<token-file> [-class ...] [-upstream URL] [-listen ADDR]")
+	}
+	p := &proxy{upstream: u, classes: classes,
+		lookup: func(ctx context.Context, host string) ([]string, error) {
+			return net.DefaultResolver.LookupHost(ctx, host)
+		}}
+	for _, c := range classes { // fail closed: no token, no proxy
+		if _, err := c.token(); err != nil {
+			log.Fatalf("token file of %s: %v", c.dns, err)
+		}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer stop()
+	// fail closed: a restarted proxy has forgotten who claimed, so every runner present now counts as having claimed
+	for _, err := p.members(ctx, true); err != nil && ctx.Err() == nil; _, err = p.members(ctx, true) {
+		log.Printf("waiting for DNS: %v", err)
+		time.Sleep(time.Second)
+	}
+	go func() {
+		for range time.Tick(*poll) {
+			p.members(ctx, false)
+		}
+	}()
+	srv := &http.Server{Addr: *listen, Handler: p, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if srv.Shutdown(sctx) != nil {
+			srv.Close()
+		}
+	}()
+	var names []string
+	for _, c := range classes {
+		names = append(names, c.dns)
+	}
+	log.Printf("machine-runner-swarm-proxy %s listening on %s, upstream %s, classes %s", version, *listen, u.Host, strings.Join(names, ","))
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
+}

@@ -102,6 +102,7 @@ Describe 'Get-SwarmStackEnvironment and the stock mounts' {
         $e['PATH'] | Should -BeLike '*;C:\Program Files\Git\usr\bin'
         $e.ContainsKey('MACHINE_RUNNER_SWARM_INSTANCE_ID') | Should -BeFalse
         $e.ContainsKey('CIRCLECI_RUNNER_NAME') | Should -BeFalse
+        $e.ContainsKey('CIRCLECI_RUNNER_API_URL') | Should -BeFalse -Because 'the token proxy service exists only inside the stack, and the tests run a standalone runner'
     }
 
     It 'turns it into docker run arguments' {

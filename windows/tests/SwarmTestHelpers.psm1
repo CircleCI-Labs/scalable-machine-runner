@@ -197,8 +197,10 @@ function Get-SwarmStackEnvironment {
     <#
     .SYNOPSIS
         The environment the stack file gives every stock service: the x-runner-env and x-stock-env anchors of
-        runners.yaml as a hashtable, without the entries that need Swarm to render a template. The tests run
-        containers with exactly this, so a change to the stack file is what gets tested.
+        runners.yaml as a hashtable, without the entries that need Swarm to render a template, and without
+        CIRCLECI_RUNNER_API_URL: that points at the service token-proxy-windows, which exists only inside the stack,
+        and the tests run a standalone runner that talks to CircleCI itself. The tests run containers with exactly
+        this, so a change to the stack file is what gets tested.
     #>
     param([string] $StackFile = (Join-Path $PSScriptRoot '..\stack\runners.yaml'))
     $result = @{}
@@ -210,7 +212,7 @@ function Get-SwarmStackEnvironment {
         $name = $Matches[1]
         $value = ($Matches[2] -replace '\s+#.*$', '').Trim()
         if ($value -match "^'(.*)'$" -or $value -match '^"(.*)"$') { $value = $Matches[1] }
-        if ($value -notmatch '\{\{') { $result[$name] = $value }
+        if ($value -notmatch '\{\{' -and $name -ne 'CIRCLECI_RUNNER_API_URL') { $result[$name] = $value }
     }
     return $result
 }

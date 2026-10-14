@@ -44,7 +44,7 @@ A dotted line means that the node satisfies every constraint of the service, so 
 |---|---|---|
 | Manager | Holds the cluster state and every secret. Schedules tasks | Docker Engine. Linux managers can manage Windows workers |
 | Linux worker | Runs Linux services | Docker Engine. The `runner-distributor` service installs the runner for the architecture of the node |
-| Windows worker | Runs Windows services | Docker Engine in Windows-container mode, `C:\machine-runner-swarm`, the `machine-runner-swarm.windows-ltsc*` labels |
+| Windows worker | Runs Windows services | Docker Engine in Windows-container mode, the `ltsc2022` base image, the `machine-runner-swarm.windows-ltsc*` labels. Nothing else: the distributor installs the runner and Git |
 
 ### Managers and quorum
 
@@ -113,7 +113,7 @@ The `runner-distributor` service reads the architecture of the node and installs
 On each node:
 
 1. Install Docker Engine in Windows-container mode and the Windows Containers feature.
-2. Stage `C:\machine-runner-swarm` and pull the images. Refer to [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git). Do this before the join.
+2. Pull the images. Refer to [Prepare each host](install-windows.md#2-prepare-each-host). Do this before the join. The runner and Git are not staged: the service `runner-distributor-windows` installs them on the node after the join.
 3. Open the ports in [Inter-node ports](#inter-node-ports).
 4. Run the join command.
 5. Label the node from a manager with the image tags it can run: `docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <node name>`. On Server 2025, add `machine-runner-swarm.windows-ltsc2025=true` as well, because a 2025 node runs `ltsc2022` images too.

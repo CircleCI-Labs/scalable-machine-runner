@@ -6,7 +6,7 @@ page-description: Run a first job on a Windows Server Docker Swarm node with Cir
 
 # Quickstart on Windows Server
 
-This page takes you from nothing to a first job on one Windows Server node with the shipped stack file and the setup helper. It explains little. [Install on Windows Server with Docker Swarm](install-windows.md) has every step by hand with the reasons, and [Concepts](concepts.md) explains the model. Nothing is built: the service uses the stock Server Core image, and the helper stages the runner and Git on the host.
+This page takes you from nothing to a first job on one Windows Server node with the shipped stack file and the setup helper. It explains little. [Install on Windows Server with Docker Swarm](install-windows.md) has every step by hand with the reasons, and [Concepts](concepts.md) explains the model. Nothing is built and nothing is installed on the host: the service uses the stock Server Core image, and the distributor service of the stack installs the runner and Git.
 
 ## Before you start
 
@@ -38,20 +38,19 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
    docker pull mcr.microsoft.com/windows/servercore:ltsc2022
    ```
 
-4. Copy the stack file. For a first run, change nothing in it. You review it later, and from here on you deploy your copy and never the shipped file.
+4. Copy the stack directory. For a first run, change nothing in it. You review it later, and from here on you deploy your copy and never the shipped files. The directory holds the stack files and the script that `runners.yaml` ships as a Swarm config, which the file names next to itself.
 
    ```powershell
-   New-Item -ItemType Directory -Force deploy | Out-Null
-   Copy-Item windows\stack\runners.yaml deploy\runners.yaml
+   Copy-Item -Recurse windows\stack deploy
    ```
 
-5. Run the helper. It stages `C:\machine-runner-swarm` with the runner and Git, creates the Swarm, labels the node with the image tags it can run, asks for the token with hidden input, creates the secret `windows-default-token`, and deploys your copy. Use the IPv4 address of the host.
+5. Run the helper. It creates the Swarm, labels the node with the image tags it can run, asks for the token with hidden input, creates the secret `windows-default-token`, and deploys your copy. Use the IPv4 address of the host. This is the whole install: the service `runner-distributor-windows` downloads and verifies CircleCI's current runner and the pinned portable Git on its own.
 
    ```powershell
    .\windows\Setup.ps1 -InitSwarm -AdvertiseAddr <host IPv4 address> -Class windows-default -StackFile .\deploy\runners.yaml -Deploy
    ```
 
-6. Check that the runners are up and connected, and then run a job. `docker stack deploy` does not wait, so the replicas need a minute to start, and the first task also pulls the image if you skipped step 3.
+6. Check that the runners are up and connected, and then run a job. `docker stack deploy` does not wait, so the replicas need a few minutes to start: the first download of the distributor takes a while, the first runner tasks fail until it is done and are started again every 10 seconds, and the first task also pulls the image if you skipped step 3. `docker service logs runners_runner-distributor-windows` shows the install.
 
    ```powershell
    docker stack services runners
@@ -91,11 +90,11 @@ A replica that does not fit, or that no node is allowed to run, stays `Pending`.
 
 ## What you did not do
 
-The helper stages files and starts Swarm. It does not install Docker, create classes or tokens, edit the stack file, label nodes for the optional classes, or build images. [Optional: use the setup helper](install-windows.md#optional-use-the-setup-helper) lists each option.
+The helper starts Swarm. It does not install Docker or the runner, create classes or tokens, edit the stack file, label nodes for the optional classes, or build images. [Optional: use the setup helper](install-windows.md#optional-use-the-setup-helper) lists each option.
 
 ## Next
 
-- [Install on Windows Server with Docker Swarm](install-windows.md): the same steps by hand, with the access rights and the release verification.
+- [Install on Windows Server with Docker Swarm](install-windows.md): the same steps by hand, with the release verification.
 - [Images](images.md): add your own tools on top of Server Core.
 - [Security](security.md): the token model and BitLocker.
 - [Operations](operations.md): upgrade, rotate tokens, and run the cluster.

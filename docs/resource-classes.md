@@ -97,7 +97,7 @@ volumes:
 
 The name of the config carries the first 12 hex digits of the SHA-256 of the file, because a Swarm config cannot change. Refer to [Upgrade to a new release of this repository](operations.md#upgrade-to-a-new-release-of-this-repository). The shipped add-on files repeat the top-level `configs:` and `volumes:`, so each of them also loads alone.
 
-On Windows, copy a service such as `windows-default`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks.
+On Windows, copy a service such as `windows-default`, with its two mounts of the volume `runner-bin` (`subpath: current` and `subpath: 'git\current'`) and the top-level `volumes: runner-bin`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks.
 
 ## Size the limits
 
@@ -268,7 +268,7 @@ Not every key of a stack file reaches a Windows container. `docker stack deploy`
 
 | Effect | Keys |
 |---|---|
-| Used | `isolation`, bind mounts of directories, `npipe` mounts, named volumes, secrets without `uid`, `gid`, and `mode`, `stop_grace_period`, `logging`, `entrypoint`, `environment` with Swarm placeholders, `labels`, `deploy.placement`, `deploy.restart_policy`, `deploy.update_config`, `deploy.endpoint_mode`, and `deploy.resources.limits` for `cpus` and `memory` |
+| Used | `isolation`, bind mounts of directories, `npipe` mounts, named volumes (with `volume.subpath`: Docker resolves a relative directory symbolic link in it when it creates the container, and refuses a junction or an absolute link), Swarm configs with an absolute target (a link to the config is created there; a relative target does not land there), secrets without `uid`, `gid`, and `mode`, `stop_grace_period`, `logging`, `entrypoint`, `environment` with Swarm placeholders, `labels`, `deploy.mode: global`, `deploy.placement`, `deploy.restart_policy`, `deploy.update_config`, `deploy.endpoint_mode`, and `deploy.resources.limits` for `cpus` and `memory` |
 | Scheduler only | `deploy.resources.reservations`. The engine rejects a memory reservation, so Swarm never sends it |
 | Rejected by the Windows engine | `deploy.resources.limits.pids` and `ulimits`, so the files do not set them. A `limits.cpus` above the CPU count of the host is rejected too |
 | No effect | `init`, `cap_drop`, `cap_add`, `read_only`, `tmpfs`, and `sysctls` |

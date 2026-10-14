@@ -79,14 +79,14 @@ The Dockerfile has one target. It adds tools to a stock image and nothing of the
 
 ## Windows: stock Server Core with mounts
 
-The default Windows service runs the unmodified Microsoft Server Core image, for example `mcr.microsoft.com/windows/servercore:ltsc2022`. Two read-only mounts from the host add what the runner needs:
+The default Windows service runs the unmodified Microsoft Server Core image, for example `mcr.microsoft.com/windows/servercore:ltsc2022`. Two read-only mounts of the per-node volume `runner-bin`, which the service `runner-distributor-windows` fills, add what the runner needs:
 
-| Host path | Container path | Content |
+| Volume path (`volume.subpath`) | Container path | Content |
 |---|---|---|
-| `C:\machine-runner-swarm\current` | `C:\machine-runner-swarm` | `bin\circleci-runner.exe` and `VERSION` |
-| `C:\machine-runner-swarm\current\git` | `C:\Program Files\Git` | Portable Git for Windows: `git`, `bash`, `sh`, `tar`, `gzip`, `ssh` |
+| `current` | `C:\machine-runner-swarm` | `bin\circleci-runner.exe`, the record `SHA256`, and `VERSION` |
+| `git\current` | `C:\Program Files\Git` | Portable Git for Windows: `git`, `bash`, `sh`, `tar`, `gzip`, `ssh` |
 
-`current` is a junction to `C:\machine-runner-swarm\<version>`, which `Setup.ps1` creates.
+`current` and `git\current` are relative directory symbolic links, to `versions\<version>` and to the pinned Git, which the distributor moves. Docker resolves a link when it creates a container, so a new runner version reaches the next container only, and a running job keeps its version. Docker refuses a junction or an absolute link in a subpath. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 
 The runner is the main process of the container. The service sets `entrypoint` to `C:\machine-runner-swarm\bin\circleci-runner.exe machine --config C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`. The service also sets the full `PATH`, because a `PATH` in the service environment replaces the one of the image. Git for Windows appears after the Windows directories, so the Windows `find`, `sort`, and `tar` stay first. The runner passes its environment to the task agent, and the task agent passes it to every step, so jobs see this `PATH`.
 

@@ -11,7 +11,7 @@ This page describes how to deploy CircleCI machine runner 3 as a Docker Swarm st
 > [!NOTE]
 > If you can run Kubernetes, CircleCI recommends [container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/) for containerized jobs. This page is for teams that run Docker Swarm and need a clean Windows container for every job.
 
-The manual steps come first. The optional [setup helper](#optional-use-the-setup-helper) runs most of the same steps. For a first run, [Quickstart on Windows Server](quickstart-windows.md) is shorter.
+The manual steps are short: start or join a swarm, label the node, create the secrets, deploy. The optional [setup helper](#optional-use-the-setup-helper) runs most of them. For a first run, [Quickstart on Windows Server](quickstart-windows.md) is shorter.
 
 > [!IMPORTANT]
 > The services run the stock Server Core image, and no image is built. Stopping a busy container from outside kills its job after about 5 seconds, so change a Windows class while it is idle. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
@@ -34,7 +34,7 @@ The manual steps come first. The optional [setup helper](#optional-use-the-setup
 - Docker Engine in Windows-container mode, with the Windows Containers feature. The `Install-DockerCE` script in the `helpful_tools` directory of the [Microsoft Windows Containers repository](https://github.com/microsoft/Windows-Containers) installs both.
 - An elevated Windows PowerShell 5.1 session.
 - A host clock that is synchronized with NTP. TLS to CircleCI fails silently when the clock drifts.
-- Outbound HTTPS access from each host to the hosts in [Egress hosts](security.md#egress-hosts). During setup, the host also needs `github.com` and `release-assets.githubusercontent.com` for Git and 7-Zip, and `mcr.microsoft.com` for the base image.
+- Outbound HTTPS access from each host to the hosts in [Egress hosts](security.md#egress-hosts). The distributor needs `circleci-binary-releases.s3.amazonaws.com` for the runner and its manifest, and `github.com` and `release-assets.githubusercontent.com` for Git and 7-Zip. The host needs `mcr.microsoft.com` for the base image. For hosts without internet access, refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 - Disk space for the base image. The `servercore` image is about 2.2 GB compressed. Each container shows 20 GB free on `C:` by default. Add `"storage-opts": ["size=60GB"]` to `C:\ProgramData\docker\config\daemon.json` to raise the limit.
 
 ### Image tags and host builds
@@ -112,7 +112,7 @@ The command prints the token once. Store it in your secret manager.
 
 ## 2. Prepare each host
 
-Run these steps in an elevated PowerShell on every host. Do them before you start Swarm. The network of the host drops for a few seconds after `docker swarm init`, and the downloads and pulls need it.
+Run these steps in an elevated PowerShell on every host. Do them before you start Swarm. The network of the host drops for a few seconds after `docker swarm init`, and the pull needs it.
 
 1. Confirm that Docker runs Windows containers. The command prints `windows`.
 
@@ -126,99 +126,7 @@ Run these steps in an elevated PowerShell on every host. Do them before you star
    docker pull mcr.microsoft.com/windows/servercore:ltsc2022
    ```
 
-## 3. Stage the runner and Git
-
-The stack mounts the host directory `C:\machine-runner-swarm` read-only into every container, and mounts `C:\machine-runner-swarm\git` at `C:\Program Files\Git`. The stock Server Core image therefore needs no changes. No entrypoint script exists on Windows, because `circleci-runner.exe` is the main process of the container.
-
-| Path | Content |
-|---|---|
-| `C:\machine-runner-swarm\bin\circleci-runner.exe` | Machine runner 3 binary |
-| `C:\machine-runner-swarm\git\` | Portable Git for Windows, with `git`, `bash`, `sh`, `tar`, `gzip`, and `ssh` |
-| `C:\machine-runner-swarm\VERSION` | The runner and Git versions |
-
-The task agent runs `C:\Program Files\Git\usr\bin\tar.exe` for workspaces, and it runs steps with `bash`. MinGit has no `tar`, `gzip`, or `bash`, so the stack uses PortableGit. The download is about 60 MB, and the unpacked tree is about 406 MB in 9,600 files.
-
-The task agent starts `tar.exe` with `--force-local`, from the root of the drive, and with forward-slash operands that are relative to that root. For example, it passes `foo/bar` for `C:\foo\bar`. A backslash operand makes the tar of Git fail with `Cannot stat`, so use the forward-slash form when you test `tar` by hand.
-
-Run the following in an elevated PowerShell. It downloads each file, verifies its SHA-256 checksum, and fills `C:\machine-runner-swarm\<runner version>`, and then points the junction `C:\machine-runner-swarm\current` at that directory. The stack mounts the junction, so a new version later goes next to this one, and the junction moves. The Git and 7-Zip checksums are the values pinned in `windows\Setup.ps1`, and the runner checksum comes from the CircleCI release manifest.
-
-```powershell
-$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$swarm = 'C:\machine-runner-swarm'
-$runnerVersion = '3.1.12'
-$dir = "$swarm\$runnerVersion"
-$gitVersion = '2.56.0.2'
-$gitTag = 'v2.56.0.windows.2'
-$gitSha = '075e158ef8e1f0ab80b347e245405d3eca735c2dc88fd8e032e137d0ca61f61b'
-$sevenZipVersion = '26.04'
-$sevenZipSha = '256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282'
-$work = Join-Path $env:TEMP 'swarm-stage'
-New-Item -ItemType Directory -Force "$dir\bin", "$dir\git", $work | Out-Null
-
-function Get-Verified($uri, $file, $sha) {
-  Invoke-WebRequest -Uri $uri -OutFile $file -UseBasicParsing
-  if ((Get-FileHash $file -Algorithm SHA256).Hash -ne $sha) { throw "SHA-256 mismatch for $uri" }
-}
-
-# Runner: the checksum comes from the CircleCI release manifest
-$manifestUrl = 'https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json'
-$manifest = (Invoke-WebRequest -Uri $manifestUrl -UseBasicParsing).Content | ConvertFrom-Json
-$entry = $manifest.releases.$runnerVersion.windows.amd64
-$runnerUrl = "https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/$runnerVersion/circleci-runner_windows_amd64.tar.gz"
-Get-Verified $runnerUrl "$work\runner.tar.gz" $entry.sha256
-& "$env:SystemRoot\System32\tar.exe" -xzf "$work\runner.tar.gz" -C "$dir\bin"
-
-# Portable Git, unpacked with the standalone 7-Zip extractor
-Get-Verified "https://github.com/ip7z/7zip/releases/download/$sevenZipVersion/7zr.exe" "$work\7zr.exe" $sevenZipSha
-Get-Verified "https://github.com/git-for-windows/git/releases/download/$gitTag/PortableGit-$gitVersion-64-bit.7z.exe" "$work\pgit.exe" $gitSha
-& "$work\7zr.exe" x -y "-o$dir\git" "$work\pgit.exe"
-
-# Git's post-install scripts, once, so the tree is ready to mount read-only
-& "$dir\git\usr\bin\bash.exe" --norc -c 'export PATH=/usr/bin:/ucrt64/bin:/mingw64/bin:/cmd:$PATH; export SYSCONFDIR=/etc; for p in $(export LC_COLLATE=C; echo /etc/post-install/*.post); do test -e "$p" && . "$p"; done'
-Remove-Item "$dir\git\post-install.bat" -ErrorAction SilentlyContinue
-Set-Content "$dir\VERSION" "runner=$runnerVersion", "git=$gitVersion" -Encoding ASCII
-Remove-Item $work -Recurse -Force
-```
-
-The script uses the `tar.exe` in `System32` on purpose. A GNU `tar` from another Git on the `PATH` of the host reads `C:\machine-runner-swarm\3.1.12\bin` as a remote host name.
-
-A `PsExec64.exe` on the `PATH` of the host does not matter. The stack sets the `PATH` of the containers in full, so the host `PATH` never reaches them.
-
-### Set the access rights and the junction
-
-Containers with process isolation open the bind mounts as an identity that does not exist on the host. Microsoft says to grant access to Authenticated Users. `Setup.ps1` sets these rights, and you set them by hand as follows.
-
-| Account | Right |
-|---|---|
-| `SYSTEM` | Full control |
-| `Administrators` | Full control |
-| `Authenticated Users` | Read and execute |
-
-```powershell
-$rights = '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-11:(OI)(CI)RX'
-icacls $swarm /inheritance:r /grant:r $rights
-icacls $dir /inheritance:r /grant:r $rights
-icacls "$dir\*" /reset /T /C /Q
-if (Test-Path "$swarm\current") { cmd /c rmdir "$swarm\current" }
-New-Item -ItemType Junction -Path "$swarm\current" -Target $dir | Out-Null
-```
-
-The first two `icacls` commands set the rights on a directory only, and cut the inheritance from `C:\`. The first one protects `C:\machine-runner-swarm`, so nobody else can replace the junction. The third command resets every file below the version directory to inherit them. Do not combine the second and the third with `/T` in one call, because that leaves the files with an empty access list, and the container then fails with `Access is denied`. `cmd /c rmdir` removes the junction and never the directory behind it.
-
-A job cannot change the files. Authenticated Users can read and run them but not write, and the mounts are read-only. Hyper-V isolation opens bind mounts as `LocalSystem` instead, and this repository does not test it. Windows can bind-mount only directories, which is why the junction and `git` are directories and the runner config is a Swarm secret and not a mounted file.
-
-Check the result. The first command prints the runner version, and the second prints the Git version.
-
-```powershell
-C:\machine-runner-swarm\current\bin\circleci-runner.exe --version
-C:\machine-runner-swarm\current\git\cmd\git.exe --version
-```
-
-Repeat this step on every Windows host. The directory must exist on each host that can run a service.
-
-## 4. Start Swarm and label the node
+## 3. Start Swarm and label the node
 
 On the first host, start Swarm. Always pass `--advertise-addr` with the IPv4 address of the host. A plain `docker swarm init` fails on some hosts with `could not find the system's IP address`, and a host with several network adapters needs the address to pick the right one.
 
@@ -226,7 +134,7 @@ On the first host, start Swarm. Always pass `--advertise-addr` with the IPv4 add
 docker swarm init --advertise-addr <host IPv4 address>
 ```
 
-The network of the host drops for a few seconds after this command, so run it after steps 2 to 4. For more than one node, refer to [Multi-Node Clusters](multi-node.md).
+The network of the host drops for a few seconds after this command, so pull the images first (step 2). For more than one node, refer to [Multi-Node Clusters](multi-node.md): a node that joins needs nothing else on the host, because the stack installs the runner on it.
 
 Label the node with the image tags it can run. A Server 2022 node gets one label, and a Server 2025 node gets both.
 
@@ -242,7 +150,7 @@ The optional classes need one more label each. Add it to the nodes that run them
 | `windows-docker-build` | `machine-runner-swarm.docker-build=true` |
 | `windows-persistent` | `machine-runner-swarm.class.windows-persistent=true` |
 
-## 5. Create the secrets
+## 4. Create the secrets
 
 Create one secret for each service you deploy, including each optional class. The secret is the config file of the runner and holds only the token:
 
@@ -268,19 +176,19 @@ Remove-Item -LiteralPath $file -Force
 
 Windows does not support the `uid`, `gid`, and `mode` options of secrets. Only administrators and `SYSTEM` can read the file inside the container, and jobs run as an administrator. Swarm also writes the secret in clear text to the disk of the container until the container stops, which is a Swarm limitation on Windows. Linux keeps the secret in memory. Enable BitLocker on the Docker volume. Refer to [Token model on each OS](security.md#token-model-on-each-os).
 
-## 6. Review the stack file
+## 5. Review the stack files
 
-Copy the stack files that you deploy into a directory of your own, `deploy\`, and keep it under version control. From here on, you check and deploy your copies and never the files under `windows\stack`, so an edit never touches the shipped files. For a first run, change nothing: the copy of `runners.yaml` works as it is, and you review it later.
+Copy the directory `windows\stack` into a directory of your own, `deploy\`, and keep it under version control. From here on, you check and deploy your copies and never the files under `windows\stack`, so an edit never touches the shipped files. For a first run, change nothing: the copy of `runners.yaml` works as it is, and you review it later.
 
 ```powershell
-New-Item -ItemType Directory -Force deploy | Out-Null
-Copy-Item windows\stack\runners.yaml deploy\runners.yaml
+Copy-Item -Recurse windows\stack deploy
 ```
 
-The stack files use absolute host paths, so they work from any directory. Copy each optional file that you use the same way, for example `Copy-Item windows\stack\custom-image.yaml deploy\`. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
+The directory holds the stack files and `runner-distributor.ps1`, the script that `runners.yaml` ships as a Swarm config (`file: runner-distributor.ps1`). The stack files name it relative to themselves, so keep the script next to `runners.yaml`. Review these settings first. Refer to [Resource Classes](resource-classes.md) for the details.
 
 | Service | File | Purpose |
 |---|---|---|
+| `runner-distributor-windows` | `runners.yaml` | Installs and upgrades the runner and Git on every Windows node. Keep it in your copy |
 | `windows-default` | `runners.yaml` | Stock Server Core image, two replicas |
 | `windows-custom` | `custom-image.yaml` | Your own image on top of stock Server Core. Refer to [Images](images.md#windows-bring-your-own-image) |
 | `windows-persistent` | `persistent.yaml` | A long-lived runner with a named volume. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
@@ -288,9 +196,10 @@ The stack files use absolute host paths, so they work from any directory. Copy e
 | `windows-default-ssh` | `ssh-rerun.yaml` | Supports Rerun job with SSH and publishes port 54782. Untested on Windows. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh) |
 
 - `runners.yaml` needs only the secret `windows-default-token`. Each add-on stack file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
+- The distributor settings are variables of `docker stack deploy` and need no edit: the runner version `current` (CircleCI's current release of major version 3, checked every 24 hours), a pin, a mirror and an explicit SHA-256. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 - A Server 2025 node runs the shipped `ltsc2022` services. For a class on the `ltsc2025` image, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-ltsc2025 == true`.
 
-The optional classes are add-on stack files. Add each with another `-c` flag, and pass the same list of files on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each add-on stack file repeats the anchors of `runners.yaml`, because an anchor does not reach into another file. When you change a common setting, change it in every file that you use.
+The optional classes are add-on stack files. Add each with another `-c` flag, and pass the same list of files on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each add-on stack file repeats the anchors of `runners.yaml`, because an anchor does not reach into another file, and declares the volume `runner-bin` too, so that it also loads alone. When you change a common setting, change it in every file that you use.
 
 Check that your copies parse. This needs no running Swarm.
 
@@ -306,9 +215,9 @@ docker stack config -c deploy\runners.yaml -c deploy\custom-image.yaml -c deploy
 
 For the keys that Windows honours and the keys that it ignores, refer to [Stack keys on Windows](resource-classes.md#stack-keys-on-windows).
 
-## 7. Deploy the stack
+## 6. Deploy the stack
 
-Deploy your copy of the file from step 6:
+Deploy your copy of the file from step 5:
 
 ```powershell
 docker stack deploy -c deploy\runners.yaml runners
@@ -320,7 +229,13 @@ To add the optional classes, pass your copies of their files after `runners.yaml
 docker stack deploy -c deploy\runners.yaml -c deploy\custom-image.yaml runners
 ```
 
-The bind source of the runner mount is the junction `C:\machine-runner-swarm\current`. A new runner version needs no deploy: refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
+This is the whole install: nothing is staged on the host. The service `runner-distributor-windows` starts on every Windows node, downloads CircleCI's current runner release and the pinned portable Git (about 60 MB, 406 MB unpacked), verifies their SHA-256 checksums, installs them into the per-node volume `runner-bin`, and flips two links. The runner services mount the volume read-only, twice: the link `current` at `C:\machine-runner-swarm`, and the link `git\current` at `C:\Program Files\Git`, the path where the task agent expects `tar.exe`. The stock Server Core image therefore needs no changes, and no entrypoint script exists on Windows, because `circleci-runner.exe` is the main process of the container.
+
+On a new node the first runner tasks fail with `cannot access path ... \current` until the distributor has flipped the link, which takes a few minutes for the first download. Swarm starts the next task after the restart delay of 10 seconds, so nothing needs to be done. Watch the distributor:
+
+```powershell
+docker service logs runners_runner-distributor-windows
+```
 
 ## Verify the deployment
 
@@ -330,6 +245,8 @@ The bind source of the runner mount is the junction `C:\machine-runner-swarm\cur
    docker stack services runners
    docker stack ps runners --no-trunc
    ```
+
+   The service `runners_runner-distributor-windows` shows one replica for each Windows node.
 
 2. Check that the runners connected. `circleci runner instance list --org <org> --resource-class <namespace>/windows-default` lists each replica with the status `online`, and the web app shows the same under **Runners**. A replica has a name of the form `<node hostname>-<service>-<slot>`.
 
@@ -349,23 +266,19 @@ The bind source of the runner mount is the junction `C:\machine-runner-swarm\cur
 
 ## Optional: use the setup helper
 
-`windows\Setup.ps1` stages `C:\machine-runner-swarm\<version>` and the `current` junction, starts Swarm on request, labels the node, creates the secrets, and deploys, with checks. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <name> PASS` or `FAIL` for each preflight check: administrator, Windows Server build, Windows-container mode, and Swarm manager.
+`windows\Setup.ps1` checks the host, starts Swarm on request, labels the node, creates the secrets, and deploys, with checks. It does not install the runner: the distributor service of the stack does that on every node. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <name> PASS` or `FAIL` for each preflight check: administrator, Windows Server build, Windows-container mode, and Swarm manager.
 
-The helper always stages before it starts Swarm. It does not add the labels of the optional classes.
+The helper does not add the labels of the optional classes.
 
 | Parameter | Effect |
 |---|---|
-| `-InstallDir` | The directory of the versions and of the `current` junction. The default is `C:\machine-runner-swarm`. The helper stages `<InstallDir>\<RunnerVersion>` |
-| `-RunnerVersion` | Runner version. The default is `3.1.12`. The checksum comes from the CircleCI release manifest. A run with another version stages it next to the others and moves `current` to it, and a run with an installed version only moves `current` back |
-| `-StageOnly` | Stops after staging. Needs no Docker |
 | `-InitSwarm -AdvertiseAddr <ip>` | Creates a Swarm when none exists. The address is required, and the helper waits until the node is a manager |
 | `-Class <name>,<name>` | Asks for each token with hidden input and creates the secret `<name>-token`. An existing secret stays unchanged |
-| `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, `runners.yaml` first) and `-StackName` (default `runners`). Without `-StackFile` it deploys the shipped `windows\stack\runners.yaml` as it is, which suits a first run. Once you keep copies as in step 6, pass them. The helper prints the files that it deploys |
-| `-Force` | Stages again even when the same versions are present |
+| `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, `runners.yaml` first) and `-StackName` (default `runners`). Without `-StackFile` it deploys the shipped `windows\stack\runners.yaml` as it is, which suits a first run. Once you keep copies as in step 5, pass them. The helper prints the files that it deploys |
 
-The helper labels the node from the host build: `machine-runner-swarm.windows-ltsc2022=true` on Server 2022, and both `windows-ltsc2022=true` and `windows-ltsc2025=true` on Server 2025. It supports Server 2022 and 2025 only. Server 2019 is untested and gets no label.
+The helper labels the node from the host build: `machine-runner-swarm.windows-ltsc2022=true` on Server 2022, and both `windows-ltsc2022=true` and `windows-ltsc2025=true` on Server 2025. It supports Server 2022 and 2025 only. Server 2019 is untested and gets no label. The distributor reads its settings from the environment of `-Deploy`.
 
-The first example is a first run: it deploys the shipped `runners.yaml` unchanged. The second deploys your copy from step 6, with its optional file.
+The first example is a first run: it deploys the shipped `runners.yaml` unchanged. The second deploys your copy from step 5, with its optional file.
 
 ```powershell
 .\windows\Setup.ps1 -InitSwarm -AdvertiseAddr 10.0.0.5 -Class windows-default -Deploy
@@ -374,7 +287,7 @@ The first example is a first run: it deploys the shipped `runners.yaml` unchange
 
 ## Upgrade
 
-Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images). Stage a new version in its own directory next to the others. Never overwrite a version directory while containers use it, because Windows cannot replace files that are in use.
+Nothing to stage. By default the distributor follows CircleCI's current release of major version 3 and checks every 24 hours, and a pin or a rollback is one variable of `docker stack deploy`. Running jobs keep the version they started with, and the runner services never restart. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 
 ## Stop and uninstall
 
@@ -382,7 +295,7 @@ Refer to [Uninstall](operations.md#uninstall). Every stop of a busy service kill
 
 ## Troubleshooting
 
-Refer to [Troubleshooting](troubleshooting.md#windows). The most common problems are an image tag that does not match the host build, missing access rights on `C:\machine-runner-swarm`, and a job that ends about 5 seconds after a stop. A task also stays pending when no node carries the `machine-runner-swarm.windows-ltsc2022` label (or `windows-ltsc2025`, for a service on an `ltsc2025` image).
+Refer to [Troubleshooting](troubleshooting.md#windows). The most common problems are an image tag that does not match the host build, a distributor that has not installed the runner yet, and a job that ends about 5 seconds after a stop. A task also stays pending when no node carries the `machine-runner-swarm.windows-ltsc2022` label (or `windows-ltsc2025`, for a service on an `ltsc2025` image).
 
 ## Additional resources
 

@@ -1,6 +1,9 @@
 # Optional class: a persistent (continuous-mode) runner. Deploy with an extra -c flag:
 #   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.yaml runners
 # Create the secret first (the runner config with the token, as in runners.yaml): windows-persistent-token.
+# Unlike the other classes this one does NOT claim through the token proxy: a continuous runner claims a task after every job, and the
+# proxy allows one claim per container. The runner keeps the real class token in its secret file, so every job of the class can read it
+# (docs/security.md, "The persistent class").
 # Label the node that will hold the volume:  docker node update --label-add machine-runner-swarm.class.windows-persistent=true <node>
 #
 # This file repeats the anchors of runners.yaml (an anchor does not reach into another file): keep the common

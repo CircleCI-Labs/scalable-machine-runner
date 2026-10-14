@@ -28,9 +28,10 @@
     service of the stack stays as shipped and is left out of the override).
 
     The token comes from E2E_RUNNER_TOKEN_WINDOWS (scalable-machine-runner-e2e context). The
-    Swarm secret windows-default-token holds the runner config (api.auth_token). It is written to
-    a file outside the artifacts directory only for the instant `docker secret create` needs it,
-    and never printed.
+    Swarm secret windows-default-token holds the runner config (api.auth_token): the token proxy mounts it, and the runners read
+    the placeholder secret runner-placeholder-token instead. It is written to a file outside the artifacts directory only for the
+    instant `docker secret create` needs it, and never printed. The token proxy of the stack stays as shipped (every runner claims
+    through it); its binary is the windows/amd64 build of proxy-test, which the distributor installs from a local mirror.
 
 .EXAMPLE
     .\ci\E2E-Host.ps1 -Mode Run
@@ -43,6 +44,7 @@ param(
     [string] $Image = '',
     [string] $WindowsTag = '',
     [string] $Stack = 'runners',
+    [string] $ProxyBinary = '',
     [string] $Root = 'C:\e2e',
     [string] $IdleTimeout = '5m',
     [string] $MaxRunTime = '15m',
@@ -58,6 +60,11 @@ $wf = $env:CIRCLE_WORKFLOW_ID
 if (-not $wf) { throw 'CIRCLE_WORKFLOW_ID is not set' }
 $build = if ($env:CIRCLE_BUILD_NUM) { $env:CIRCLE_BUILD_NUM } else { 'local' }
 $secrets = 'C:\e2e-secrets'          # never under $Root: $Root is uploaded as artifacts
+# There is no release of the token proxy to download yet: the job gets the windows/amd64 binary that proxy-test built (the workspace),
+# Prepare puts it in a mirror with the SHA256SUMS of a release, and the distributor installs it from there (file:// in a bind mount).
+$proxyVersion = '0.0.0-e2e'
+$proxyMirror = 'C:\e2e-proxy'
+if (-not $ProxyBinary) { $ProxyBinary = if ($env:E2E_PROXY_BIN) { $env:E2E_PROXY_BIN } else { Join-Path $repo 'proxy-bin\machine-runner-swarm-proxy_windows_amd64' } }
 $fullService = "${Stack}_${Service}"
 # The image of the service under test: the stock Server Core image of the shipped stack, unless -Image names another.
 $stockImage = if ($Image) { $Image } else { $null }
@@ -178,6 +185,29 @@ function Exit-WithFailure([string] $Message) {
     exit 1
 }
 
+function Use-ProxyEnvironment {
+    # What `docker stack deploy` reads for the distributor of the stack (the variables of x-distributor-env).
+    $env:MACHINE_RUNNER_SWARM_PROXY_VERSION = $proxyVersion
+    $env:MACHINE_RUNNER_SWARM_PROXY_BASE_URL = 'file:///C:/e2e-proxy'
+}
+function Write-ProxyMirrorOverride {
+    # The mirror, mounted read-only into the distributor (the same override in Prepare and in Run: its spec must not change).
+    $file = Join-Path $logDir 'stack.proxy-mirror.yaml'
+    @('services:', '  runner-distributor-windows:', '    volumes:', '      - type: bind', "        source: '$proxyMirror'", "        target: '$proxyMirror'",
+        '        read_only: true') | Set-Content -LiteralPath $file -Encoding ASCII
+    return $file
+}
+function Initialize-ProxyMirror {
+    if (-not (Test-Path -LiteralPath $ProxyBinary)) { Exit-WithFailure "the token proxy binary $ProxyBinary is missing: the job attaches the workspace of proxy-test" }
+    $dir = Join-Path $proxyMirror "v$proxyVersion"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    Copy-Item -LiteralPath $ProxyBinary -Destination (Join-Path $dir 'machine-runner-swarm-proxy_windows_amd64') -Force
+    $hash = (Get-FileHash -LiteralPath $ProxyBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+    [IO.File]::WriteAllText((Join-Path $dir 'SHA256SUMS'), "$hash  machine-runner-swarm-proxy_windows_amd64`n", (New-Object Text.ASCIIEncoding))
+    Grant-AuthenticatedUser $proxyMirror '(OI)(CI)RX'
+    Write-E2ELog "the token proxy $proxyVersion ($hash) is in the mirror $proxyMirror"
+    Use-ProxyEnvironment
+}
 function Invoke-Prepare {
     Invoke-Docker version | ForEach-Object { Write-Host $_ }
     # Pull before the swarm exists: on a fresh VM the base layer takes about 10 minutes,
@@ -199,12 +229,14 @@ function Invoke-Prepare {
     Import-Module (Join-Path $repo 'windows\tests\SwarmTestHelpers.psm1') -Force
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     Write-RenderedStack
-    Write-E2ELog 'deploying the stack with no runner replicas: the distributor installs the runner and Git'
-    $d = Install-SwarmDistributor -Stack $Stack -StackFile $renderedStack -TimeoutSeconds 1500
+    Initialize-ProxyMirror
+    $mirrorOverride = Write-ProxyMirrorOverride
+    Write-E2ELog 'deploying the stack with no runner replicas: the distributor installs the runner, Git and the token proxy'
+    $d = Install-SwarmDistributor -Stack $Stack -StackFile $renderedStack -TimeoutSeconds 1500 -ExtraOverride $mirrorOverride
     Write-Host $d.Log
     if (-not $d.Ok) { Exit-WithFailure $d.Detail }
     Invoke-StackRemoval
-    $null = Invoke-Docker secret rm "$Service-token"
+    $null = Invoke-Docker secret rm "$Service-token" runner-placeholder-token
 }
 
 function Write-RenderedStack {
@@ -224,7 +256,7 @@ function Write-Override {
         'services:'
     )
     foreach ($s in (Get-RenderedSection $text 'services' '^  ([^ ][^:]*):$' 2)) {
-        if ($s -eq 'runner-distributor-windows') { continue }   # global: as shipped
+        if ($s -eq 'runner-distributor-windows' -or $s -eq 'token-proxy-windows') { continue }   # global, and the proxy that every runner claims through: as shipped
         if ($s -eq $Service) {
             $lines += "  ${s}:"
             if ($stockImage) { $lines += "    image: '$stockImage'" }
@@ -317,7 +349,8 @@ function Invoke-Run {
     foreach ($name in $secretNames) {
         $f = Join-Path $secrets 'secret.yaml'
         $value = 'unused'
-        if ($name -eq "$Service-token") { $value = "api:`n  auth_token: $env:E2E_RUNNER_TOKEN_WINDOWS`n" }
+        if ($name -eq "$Service-token") { $value = "api:`n  auth_token: $env:E2E_RUNNER_TOKEN_WINDOWS`n" }   # the token proxy mounts it
+        if ($name -eq 'runner-placeholder-token') { $value = "api:`n  auth_token: machine-runner-swarm-e2e-placeholder`n" }   # what the runners read
         [IO.File]::WriteAllText($f, $value, (New-Object Text.UTF8Encoding($false)))
         $null = Invoke-Docker secret create $name $f
         $rc = $LASTEXITCODE
@@ -332,8 +365,10 @@ function Invoke-Run {
 
     Write-RenderedStack
     Write-Override
+    Use-ProxyEnvironment
+    $mirrorOverride = Write-ProxyMirrorOverride
     Write-E2ELog "deploying $fullService from $($StackFile.Replace($repo + '\', '')) + override: idle_timeout=$runnerIdle max_run_time=$runnerMaxRun"
-    Invoke-Docker stack deploy --detach=true --resolve-image never -c $renderedStack -c $override $Stack | ForEach-Object { Write-Host $_ }
+    Invoke-Docker stack deploy --detach=true --resolve-image never -c $renderedStack -c $override -c $mirrorOverride $Stack | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure 'docker stack deploy failed' }
     $script:logsProc = Start-Process -FilePath docker.exe -NoNewWindow -PassThru `
         -RedirectStandardOutput $serviceLog -RedirectStandardError (Join-Path $logDir 'service.err') `

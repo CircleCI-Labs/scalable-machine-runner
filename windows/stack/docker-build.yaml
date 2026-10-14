@@ -1,6 +1,9 @@
 # Optional class: Windows image builds with the HOST Docker engine ("pattern A"). Deploy with an extra -c flag:
 #   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\docker-build.yaml runners
 # Create the secret first (the runner config with the token, as in runners.yaml): windows-docker-build-token.
+# Like windows-default, this class claims through the token-proxy-windows of runners.yaml (the service
+# below only adds this class to it), so deploy the two files together. The runner holds
+# the placeholder secret runner-placeholder-token.
 # It only schedules on nodes you label:  docker node update --label-add machine-runner-swarm.docker-build=true <node>
 #
 # !!! The engine's named pipe is ADMINISTRATOR-EQUIVALENT on its node: see the comment on the service.
@@ -12,6 +15,7 @@ x-runner-env: &runner-env
   CIRCLECI_RUNNER_MODE: single-task
   CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
   CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy-windows:8080   # through the token proxy of runners.yaml
   CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
   CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
   # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
@@ -73,6 +77,14 @@ x-git-mount: &git-mount                     # portable Git, where the task agent
     subpath: 'git\current'
 
 services:
+  # Adds this class to the token proxy of runners.yaml (stack files merge secrets and variables by name).
+  token-proxy-windows:
+    environment:
+      MACHINE_RUNNER_SWARM_PROXY_CLASS_WINDOWS_DOCKER_BUILD: 'windows-docker-build=C:\ProgramData\Docker\secrets\windows-docker-build-token'
+    secrets:
+      - source: windows-docker-build-token
+        target: windows-docker-build-token
+
   # Pattern A: Docker builds for WINDOWS images only. The job talks to the host engine through its
   # named pipe, so a job can do anything the engine can: it is administrator-equivalent on that node
   # (and on a Swarm manager it can also read every secret). Only nodes labelled machine-runner-swarm.docker-build=true
@@ -98,7 +110,7 @@ services:
         source: '\\.\pipe\docker_engine'
         target: '\\.\pipe\docker_engine'
     secrets:
-      - source: windows-docker-build-token
+      - source: runner-placeholder-token   # made up: the real token is in token-proxy-windows only
         target: circleci_runner_config.yaml
     deploy:
       <<: *runner-deploy
@@ -116,5 +128,7 @@ volumes:
   runner-bin: {}                            # declared by runners.yaml too: this file must also deploy (and lint) alone
 
 secrets:
+  runner-placeholder-token:
+    external: true
   windows-docker-build-token:
     external: true

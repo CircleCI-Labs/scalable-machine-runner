@@ -52,8 +52,61 @@ Describe 'the stack files' {
         foreach ($s in $script:blocks.Keys) {
             $text = $script:files[$script:fileOf[$s]]
             $text | Should -Match "(?m)^  $s-token:\r?\n    external: true"
-            $script:blocks[$s] | Should -Match "(?m)^      - source: $s-token\r?\n        target: circleci_runner_config\.yaml"
+            if ($s -eq 'windows-persistent') {
+                # a continuous runner claims after every job, so it keeps its own token and does not use the proxy
+                $script:blocks[$s] | Should -Match "(?m)^      - source: $s-token\r?\n        target: circleci_runner_config\.yaml"
+                $script:blocks[$s] | Should -Not -Match 'token-proxy'
+            } else {
+                # the runner reads a made-up token; the class token is in the proxy only
+                $text | Should -Match '(?m)^  runner-placeholder-token:\r?\n    external: true'
+                $script:blocks[$s] | Should -Match "(?m)^      - source: runner-placeholder-token[^\r\n]*\r?\n        target: circleci_runner_config\.yaml"
+                $script:blocks[$s] | Should -Not -Match "source: $s-token"
+            }
         }
+    }
+
+    It 'send the API calls of every proxied class to the token proxy, and the persistent class straight to CircleCI' {
+        foreach ($s in $script:blocks.Keys) {
+            $text = $script:files[$script:fileOf[$s]]
+            if ($s -eq 'windows-persistent') { $text | Should -Not -Match 'CIRCLECI_RUNNER_API_URL' }
+            else { $text | Should -Match '(?m)^  CIRCLECI_RUNNER_API_URL: http://token-proxy-windows:8080' }
+        }
+    }
+
+    It 'run the token proxy as one replica with dnsrr, from the volume (read-only, subpath proxy\current), with its state in a named volume, pinned by label' {
+        $proxy = [regex]::Match($script:files['runners.yaml'], '(?ms)^  token-proxy-windows:\r?\n(.*?)(?=^[a-z])').Groups[1].Value
+        $proxy | Should -Not -BeNullOrEmpty
+        $proxy | Should -Match "(?m)^      - 'C:\\machine-runner-swarm-proxy\\bin\\machine-runner-swarm-proxy\.exe'"
+        $proxy | Should -Match '(?m)^      replicas: 1'
+        $proxy | Should -Match '(?m)^      endpoint_mode: dnsrr'
+        $proxy | Should -Match "(?m)^          subpath: 'proxy\\current'"
+        $proxy | Should -Match '(?m)^        read_only: true'
+        $proxy | Should -Match '(?m)^        source: proxy-state'
+        $proxy | Should -Match '(?m)^      - -state-dir'
+        $proxy | Should -Match '(?m)^          - node\.labels\.machine-runner-swarm\.proxy == true'
+        $proxy | Should -Match '(?m)^          - node\.labels\.machine-runner-swarm\.docker-build != true'
+        $proxy | Should -Match '(?m)^    healthcheck:'
+        $script:files['runners.yaml'] | Should -Match '(?m)^volumes:\r?\n(  .*\r?\n)*?  proxy-state: \{\}'
+        # the class tokens are the secrets of the proxy only, one variable per class
+        $proxy | Should -Match '(?m)^      - source: windows-default-token\r?\n        target: windows-default-token'
+        $proxy | Should -Match "MACHINE_RUNNER_SWARM_PROXY_CLASS_WINDOWS_DEFAULT: 'windows-default=C:\\ProgramData\\Docker\\secrets\\windows-default-token'"
+    }
+
+    It 'add the class of an add-on stack file to the token proxy, with its network, secret and variable' {
+        foreach ($c in @(@('custom-image.yaml', 'windows-custom', 'WINDOWS_CUSTOM'), @('docker-build.yaml', 'windows-docker-build', 'WINDOWS_DOCKER_BUILD'), @('ssh-rerun.yaml', 'windows-default-ssh', 'WINDOWS_DEFAULT_SSH'))) {
+            $text = $script:files[$c[0]]
+            $text | Should -Match '(?m)^  token-proxy-windows:'
+            $text | Should -Match "MACHINE_RUNNER_SWARM_PROXY_CLASS_$($c[2]): '$($c[1])=C:\\ProgramData\\Docker\\secrets\\$($c[1])-token'"
+            $text | Should -Match "(?m)^      - source: $($c[1])-token\r?\n        target: $($c[1])-token"
+        }
+        $script:files['persistent.yaml'] | Should -Not -Match 'token-proxy-windows:'
+    }
+
+    It 'give the proxy settings to the distributor only, and pin nothing in a runner service' {
+        $text = $script:files['runners.yaml']
+        $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_PROXY_VERSION: \$\{MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased\}'
+        $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_PROXY_BASE_URL: \$\{MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github\.com/CircleCI-Labs/scalable-machine-runner/releases/download\}'
+        foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Not -Match 'PROXY_VERSION|PROXY_SHA256' }
     }
 
     It 'have no entrypoint script in a runner service: the runner is the main process' {

@@ -9,20 +9,23 @@
     1. Preflight, printed as "CHECK <name> PASS|FAIL": administrator, Windows Server build, Docker in
        Windows-container mode, Swarm manager (-InitSwarm -AdvertiseAddr <ip> creates one; the address is required, a plain "docker swarm init" fails on some hosts).
        Pull the stock image BEFORE -InitSwarm: the network drops for a few seconds after it.
-    2. -InitSwarm -AdvertiseAddr <ip>: docker swarm init.
+    2. -InitSwarm -AdvertiseAddr <ip>: docker swarm init, and the label machine-runner-swarm.proxy=true on this node, the node of the
+       token proxy (it keeps its state there).
     3. Labels the node with the image tags it can run (the stack files' placement uses them): Server 2022
        gets machine-runner-swarm.windows-ltsc2022=true, Server 2025 gets machine-runner-swarm.windows-ltsc2022=true
        AND machine-runner-swarm.windows-ltsc2025=true, because a 2025 host also runs ltsc2022 images. Server 2019
        is untested and gets no label.
     4. -Class <name>,...: asks for each class's runner token (hidden input) and creates the Swarm secret
        <name>-token. The secret is a minimal runner config file ("api: auth_token: ..."); everything
-       else the runner needs is an environment variable in the stack file. Existing secrets are kept.
+       else the runner needs is an environment variable in the stack file. Existing secrets are kept. The class secrets belong
+       to the token proxy; every runner reads runner-placeholder-token instead (a made-up token), which this step creates too.
     5. -Deploy: docker stack deploy. Without -StackFile it deploys the shipped windows\stack\runners.yaml as it is
        (a first run: it needs just windows-default-token). Once you keep your own copy of the stack files, pass them:
        -StackFile takes one or more files and replaces the default; list runners.yaml first, then each add-on file
        such as custom-image.yaml. The files that are deployed are printed.
     The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION, _RUNNER_MAJOR, _CHECK_INTERVAL, _DOWNLOAD_BASE_URL,
-    _RUNNER_SHA256 and _TOOLS_BASE_URL from the environment of -Deploy (docs\operations.md).
+    _RUNNER_SHA256 and _TOOLS_BASE_URL, and for the token proxy _PROXY_VERSION, _PROXY_BASE_URL and _PROXY_SHA256, from the
+    environment of -Deploy (docs\operations.md).
 
 .EXAMPLE
     # A first run: the shipped runners.yaml, unchanged.
@@ -112,6 +115,15 @@ function Test-Preflight {
     return (@($ok | Where-Object { -not $_ }).Count -eq 0)
 }
 
+function Install-PlaceholderSecret {
+    # The Swarm secret runner-placeholder-token is the config that every runner reads: a made-up token. The class tokens are the
+    # secrets of the token proxy only. It holds nothing secret, so it is created without a prompt.
+    if ((Invoke-Docker @('secret', 'inspect', 'runner-placeholder-token')).ExitCode -eq 0) { return }
+    $r = Invoke-Docker @('secret', 'create', 'runner-placeholder-token', '-') -StdIn "api:`n  auth_token: machine-runner-swarm-placeholder`n"
+    if ($r.ExitCode -ne 0) { throw "docker secret create runner-placeholder-token failed: $($r.Output -join ' ')" }
+    [Console]::Out.WriteLine('created secret runner-placeholder-token')
+}
+
 function Install-ClassSecret {
     # The Swarm secret <class>-token holds a minimal runner config with the token, from a hidden prompt.
     param([string] $Name)
@@ -132,8 +144,12 @@ if ($MyInvocation.InvocationName -ne '.') {
         $r = Invoke-Docker @('swarm', 'init', '--advertise-addr', $AdvertiseAddr)
         if ($r.ExitCode -ne 0) { throw "docker swarm init failed: $($r.Output -join ' ')" }
         for ($i = 0; $i -lt 15 -and -not (Get-DockerInfo).Manager; $i++) { Start-Sleep -Seconds 2 }   # the network blips after init
+        # the node of the token proxy, which keeps its state there (windows\stack\runners.yaml)
+        $r = Invoke-Docker @('node', 'update', '--label-add', 'machine-runner-swarm.proxy=true', (Get-DockerInfo).NodeId)
+        if ($r.ExitCode -ne 0) { throw "docker node update --label-add machine-runner-swarm.proxy=true failed: $($r.Output -join ' ')" }
     }
     Install-CapabilityLabel -NodeId (Get-DockerInfo).NodeId -Build ([int](Get-CimInstance -ClassName Win32_OperatingSystem).BuildNumber)
+    if ($Class.Count -gt 0 -or $Deploy) { Install-PlaceholderSecret }
     foreach ($c in $Class) { Install-ClassSecret -Name $c }
     if ($Deploy) {
         [Console]::Out.WriteLine("deploying $($StackFile -join ', ') as stack $StackName")

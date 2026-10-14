@@ -26,15 +26,20 @@
 # * On a new node the runner tasks fail with "cannot access path ...\_data\current" until its distributor has flipped current
 #   (the first download, about a minute), and Swarm starts the next one after the restart delay. There is no entrypoint script
 #   that could wait instead.
-# * The secret is the runner config, one per class. It is NOT created by this file. A YAML file holding only the token
-#   ("api:" with "  auth_token: <token>") is the secret <service>-token. Create it with
+# * The class tokens never reach a runner container. The service token-proxy-windows holds them and adds the token of a class to
+#   the task-claim call of that class's runners, once per container (docs/security.md, "The token proxy"). A YAML file holding only
+#   the token ("api:" with "  auth_token: <token>") is the secret <service>-token, one per class, mounted into the proxy ONLY. Create
+#   it with
 #       .\windows\Setup.ps1 -Class windows-default     (asks for the token with hidden input and creates the secret)
-#   or with the PowerShell steps in docs/install-windows.md ("Create the secrets"). A shell pipe such as printf is not PowerShell. On Windows a secret lands
-#   at C:\ProgramData\Docker\secrets\<target>, is readable by administrators only, and is "persisted
-#   in clear text to the container's root disk" until the container stops. Enable BitLocker on the
-#   volume that holds the Docker root directory. Jobs run as ContainerAdministrator, so a job can
-#   read that file (the token is not in the job's environment). Treat each resource class as a
-#   trust boundary.
+#   or with the PowerShell steps in docs/install-windows.md ("Create the secrets"). A shell pipe such as printf is not PowerShell.
+#   Every runner reads the secret runner-placeholder-token instead: the same YAML with a made-up token (Setup.ps1 -Placeholder).
+#   Both are NOT created by this file. On Windows a secret lands at C:\ProgramData\Docker\secrets\<target>, is readable by
+#   administrators only, and is "persisted in clear text to the container's root disk" until the container stops. Enable BitLocker
+#   on the volume that holds the Docker root directory. Jobs run as ContainerAdministrator, so a job can read the placeholder; the
+#   class token is in the proxy, on the node that carries the label machine-runner-swarm.proxy=true (docker node update
+#   --label-add machine-runner-swarm.proxy=true <node>; Setup.ps1 -InitSwarm sets it on the node that it creates). The proxy keeps the
+#   addresses of the runners that have claimed in the volume proxy-state, so a restart refuses only them. Treat each resource class
+#   as a trust boundary.
 #
 # Host prerequisites: Windows Server 2022 or 2025, Docker engine in Windows-container mode, Swarm initialised with
 # "docker swarm init --advertise-addr <host IPv4 address>" (pull mcr.microsoft.com/windows/servercore:ltsc2022 BEFORE it: DNS fails
@@ -83,6 +88,7 @@ x-runner-env: &runner-env
   CIRCLECI_RUNNER_MODE: single-task
   CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
   CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy-windows:8080   # the runner and its task agent call the API through the token proxy
   CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
   CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
   # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
@@ -156,6 +162,12 @@ x-distributor-env: &distributor-env
   MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}
   # A mirror of the two pinned Git downloads: a directory URL that holds PortableGit-<version>-64-bit.7z.exe and 7zr.exe.
   MACHINE_RUNNER_SWARM_TOOLS_BASE_URL: ${MACHINE_RUNNER_SWARM_TOOLS_BASE_URL:-}
+  # The token proxy: machine-runner-swarm-proxy_windows_amd64 of the GitHub release v<version> of this repository, verified against that
+  # release's SHA256SUMS. ci/release.sh pins the default below to the release it cuts; in a checkout it is "unreleased", and the
+  # proxy is not installed until you set a version. The same variables as in the Linux stack file.
+  MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}
+  MACHINE_RUNNER_SWARM_PROXY_BASE_URL: ${MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download}
+  MACHINE_RUNNER_SWARM_PROXY_SHA256: ${MACHINE_RUNNER_SWARM_PROXY_SHA256:-}
   # HTTPS_PROXY: http://proxy.example.com:3128    # for every download of the distributor
 
 services:
@@ -172,7 +184,7 @@ services:
       - *runner-mount
       - *git-mount
     secrets:
-      - source: windows-default-token
+      - source: runner-placeholder-token   # made up: the real token is in token-proxy-windows only
         target: circleci_runner_config.yaml
     deploy:
       <<: *runner-deploy
@@ -234,15 +246,84 @@ services:
           - node.platform.os == windows
           - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
 
+  # The token proxy of the Windows classes: the ONLY holder of their tokens. One replica, pinned to the node with the label
+  # machine-runner-swarm.proxy=true, which keeps its state. A claim is accepted from a runner in the DNS set tasks.<service> of
+  # its class, once per container, and gets the token of that class; every other call passes through with the caller's own token. If it is
+  # down, runners cannot claim and the calls of a running job wait until it is back (docs/operations.md). Its binary comes from the
+  # distributor (proxy\current in runner-bin, mounted read-only). A binary in a stock Server Core image has no start script that
+  # could check it, so the distributor checks it before it flips the link, like the runner.
+  token-proxy-windows:
+    image: mcr.microsoft.com/windows/servercore:ltsc2022
+    isolation: process
+    # CircleCI server: your runner API URL in -upstream
+    entrypoint:
+      - 'C:\machine-runner-swarm-proxy\bin\machine-runner-swarm-proxy.exe'
+      - -upstream
+      - https://runner.circleci.com
+      - -state-dir
+      - 'C:\proxy-state'
+    environment:
+      # One variable for each class, because stack files merge variables but replace an entrypoint: an add-on stack file adds its class
+      # with a variable of its own. The value is <service>=<token file>; the proxy resolves tasks.<service>.
+      MACHINE_RUNNER_SWARM_PROXY_CLASS_WINDOWS_DEFAULT: 'windows-default=C:\ProgramData\Docker\secrets\windows-default-token'
+      # What a start with an empty proxy-state means: allow (a first start) or latch (every runner present counts as having claimed).
+      MACHINE_RUNNER_SWARM_PROXY_NO_STATE: ${MACHINE_RUNNER_SWARM_PROXY_NO_STATE:-allow}
+    secrets:
+      - source: windows-default-token
+        target: windows-default-token
+    healthcheck:
+      test: ['CMD', 'curl.exe', '-s', '-f', '-o', 'NUL', 'http://127.0.0.1:8080/healthz']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    volumes:
+      - type: volume
+        source: runner-bin
+        target: 'C:\machine-runner-swarm-proxy'
+        read_only: true
+        volume:
+          subpath: 'proxy\current'          # a link to versions\<version>, resolved when the container is created
+      - type: volume
+        source: proxy-state
+        target: 'C:\proxy-state'
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+    labels:
+      machine-runner-swarm.role: proxy
+    deploy:
+      replicas: 1                           # exactly one: the latch of claimed runners lives in the proxy
+      endpoint_mode: dnsrr                  # no VIP: the proxy must see the address of each runner
+      restart_policy:
+        condition: any                      # until the distributor has installed the binary, the container fails to start
+        delay: 10s
+      update_config:
+        order: stop-first
+        parallelism: 1
+      resources:
+        limits: {cpus: "1", memory: 512m}
+      placement:
+        constraints:
+          - node.platform.os == windows
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: the tokens must not sit next to the engine
+          - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
+          - node.labels.machine-runner-swarm.proxy == true   # the node that keeps proxy-state
+
 secrets:
+  runner-placeholder-token:
+    external: true   # every runner: a made-up token (see the top of this file)
   windows-default-token:
-    external: true
+    external: true   # the class token: token-proxy-windows only
 
 configs:
   # Swarm configs cannot change, so the name carries the first 12 hex digits of the SHA-256 of the file: ci/config-names.sh --write
   # renames it after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
   # distributor, and only the distributor.
-  distributor-windows: {name: machine-runner-swarm-distributor-windows-eba9c41935d9, file: runner-distributor.ps1}
+  distributor-windows: {name: machine-runner-swarm-distributor-windows-c2d1e8a3baae, file: runner-distributor.ps1}
 
 volumes:
-  runner-bin: {}                            # one per node: the runner and Git of that node
+  runner-bin: {}                            # one per node: the runner, Git and the token proxy of that node
+  proxy-state: {}                           # the addresses of the runners that have claimed, on the node of the proxy

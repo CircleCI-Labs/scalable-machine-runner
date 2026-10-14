@@ -1,6 +1,9 @@
 # Optional class: your own image on top of stock Server Core. Deploy with an extra -c flag:
 #   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml runners
 # Create the secret first (the runner config with the token, as in runners.yaml): windows-custom-token.
+# Like windows-default, this class claims through the token-proxy-windows of runners.yaml (the service
+# below only adds this class to it), so deploy the two files together. The runner holds
+# the placeholder secret runner-placeholder-token.
 # Replace the image below with yours: windows\images\example\Dockerfile adds Node.js to stock Server Core and shows the pattern.
 # Your image holds the tools only. The runner and Git are mounted from the volume runner-bin as in runners.yaml (its service
 # runner-distributor-windows fills it, so deploy this file together with runners.yaml), and PATH is set in this file,
@@ -13,6 +16,7 @@ x-runner-env: &runner-env
   CIRCLECI_RUNNER_MODE: single-task
   CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
   CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy-windows:8080   # through the token proxy of runners.yaml
   CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
   CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
   # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
@@ -71,6 +75,14 @@ x-git-mount: &git-mount                     # portable Git, where the task agent
     subpath: 'git\current'
 
 services:
+  # Adds this class to the token proxy of runners.yaml (stack files merge secrets and variables by name).
+  token-proxy-windows:
+    environment:
+      MACHINE_RUNNER_SWARM_PROXY_CLASS_WINDOWS_CUSTOM: 'windows-custom=C:\ProgramData\Docker\secrets\windows-custom-token'
+    secrets:
+      - source: windows-custom-token
+        target: windows-custom-token
+
   # Build your image (it starts FROM stock Server Core) and push it to a registry every Windows node can pull from.
   windows-custom:
     <<: [*runner, *stock]
@@ -83,7 +95,7 @@ services:
       - *runner-mount
       - *git-mount
     secrets:
-      - source: windows-custom-token
+      - source: runner-placeholder-token   # made up: the real token is in token-proxy-windows only
         target: circleci_runner_config.yaml
     deploy:
       <<: *runner-deploy
@@ -103,5 +115,7 @@ volumes:
   runner-bin: {}                            # declared by runners.yaml too: this file must also deploy (and lint) alone
 
 secrets:
+  runner-placeholder-token:
+    external: true
   windows-custom-token:
     external: true

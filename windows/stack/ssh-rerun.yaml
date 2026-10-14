@@ -1,7 +1,10 @@
 # Optional class: runners that support "Rerun job with SSH". UNTESTED on Windows: the Swarm side is proven on Linux only,
 # and the docs for machine runner 3 do not exclude Windows. Deploy with an extra -c flag:
 #   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\ssh-rerun.yaml runners
-# Create the secret first (the runner config with the token, as in runners.yaml): windows-default-ssh-token, and a resource class
+# Create the secret first (the runner config with the token, as in runners.yaml): windows-default-ssh-token.
+# Like windows-default, this class claims through the token-proxy-windows of runners.yaml (the service
+# below only adds this class to it), so deploy the two files together. The runner holds
+# the placeholder secret runner-placeholder-token, and a resource class
 # <namespace>/windows-default-ssh. A rerun with SSH runs on the resource class of the original job, so the job you want to debug
 # must run on this class: point its resource_class at windows-default-ssh, or add the three SSH settings below to an existing service.
 #
@@ -20,6 +23,7 @@ x-runner-env: &runner-env
   CIRCLECI_RUNNER_MODE: single-task
   CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
   CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy-windows:8080   # through the token proxy of runners.yaml
   CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
   CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
   # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
@@ -81,6 +85,14 @@ x-git-mount: &git-mount                     # portable Git, where the task agent
     subpath: 'git\current'
 
 services:
+  # Adds this class to the token proxy of runners.yaml (stack files merge secrets and variables by name).
+  token-proxy-windows:
+    environment:
+      MACHINE_RUNNER_SWARM_PROXY_CLASS_WINDOWS_DEFAULT_SSH: 'windows-default-ssh=C:\ProgramData\Docker\secrets\windows-default-ssh-token'
+    secrets:
+      - source: windows-default-ssh-token
+        target: windows-default-ssh-token
+
   # Same as windows-default, plus the SSH settings. Anyone who can start a job can rerun it with SSH, and a rerun holds the
   # runner for up to 2 hours: docs/resource-classes.md. On Windows the job account is ContainerAdministrator, so the SSH user is too.
   windows-default-ssh:
@@ -100,7 +112,7 @@ services:
       - *runner-mount
       - *git-mount
     secrets:
-      - source: windows-default-ssh-token
+      - source: runner-placeholder-token   # made up: the real token is in token-proxy-windows only
         target: circleci_runner_config.yaml
     deploy:
       <<: *runner-deploy                    # stop-first frees the node's port 54782 before the new task binds it
@@ -121,5 +133,7 @@ volumes:
   runner-bin: {}                            # declared by runners.yaml too: this file must also deploy (and lint) alone
 
 secrets:
+  runner-placeholder-token:
+    external: true
   windows-default-ssh-token:
     external: true

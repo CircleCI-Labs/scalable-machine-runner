@@ -9,7 +9,7 @@ BeforeAll {
     if (-not $env:TEMP) { $env:TEMP = [IO.Path]::GetTempPath() }
     function Use-DistributorEnvironment {
         param([hashtable] $Values = @{})
-        foreach ($n in 'RUNNER_VERSION', 'RUNNER_MAJOR', 'CHECK_INTERVAL', 'DOWNLOAD_BASE_URL', 'RUNNER_SHA256', 'TOOLS_BASE_URL') { Remove-Item "Env:MACHINE_RUNNER_SWARM_$n" -ErrorAction SilentlyContinue }
+        foreach ($n in 'RUNNER_VERSION', 'RUNNER_MAJOR', 'CHECK_INTERVAL', 'DOWNLOAD_BASE_URL', 'RUNNER_SHA256', 'TOOLS_BASE_URL', 'PROXY_VERSION', 'PROXY_BASE_URL', 'PROXY_SHA256') { Remove-Item "Env:MACHINE_RUNNER_SWARM_$n" -ErrorAction SilentlyContinue }
         foreach ($k in $Values.Keys) { Set-Item "Env:MACHINE_RUNNER_SWARM_$k" $Values[$k] }
     }
     $script:manifestJson = @{ releases = [ordered]@{
@@ -71,6 +71,34 @@ Describe 'Get-DistributorSetting' {
         param($Name, $Value)
         Use-DistributorEnvironment @{ $Name = $Value }
         { Get-DistributorSetting } | Should -Throw
+    }
+}
+
+
+Describe 'Get-DistributorSetting, the token proxy' {
+    It 'installs no proxy in a checkout (unreleased) or without a version, and downloads from the GitHub releases of this repository' {
+        Use-DistributorEnvironment
+        $s = Get-DistributorSetting
+        $s.ProxyVersion | Should -Be ''
+        $s.ProxyBase | Should -Be 'https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download'
+        @($s.ProxyHashes).Count | Should -Be 0
+        Use-DistributorEnvironment @{ PROXY_VERSION = 'unreleased' }
+        (Get-DistributorSetting).ProxyVersion | Should -Be ''
+    }
+
+    It 'reads a release, a mirror without a trailing slash, and a list of SHA-256 values in any case' {
+        Use-DistributorEnvironment @{ PROXY_VERSION = '0.3.0'; PROXY_BASE_URL = 'https://mirror.example.com/proxy/'; PROXY_SHA256 = ('A' * 64) + ', ' + ('b' * 64) }
+        $s = Get-DistributorSetting
+        $s.ProxyVersion | Should -Be '0.3.0'
+        $s.ProxyBase | Should -Be 'https://mirror.example.com/proxy'
+        @($s.ProxyHashes) | Should -Be @(('a' * 64), ('b' * 64))
+    }
+
+    It 'refuses a proxy version that is not a release, and a hash that is not a SHA-256' {
+        Use-DistributorEnvironment @{ PROXY_VERSION = 'latest' }
+        { Get-DistributorSetting } | Should -Throw '*MACHINE_RUNNER_SWARM_PROXY_VERSION*'
+        Use-DistributorEnvironment @{ PROXY_VERSION = '0.3.0'; PROXY_SHA256 = 'abc' }
+        { Get-DistributorSetting } | Should -Throw '*MACHINE_RUNNER_SWARM_PROXY_SHA256*'
     }
 }
 

@@ -254,32 +254,39 @@ function Install-SwarmDistributor {
     .SYNOPSIS
         Deploys the shipped windows\stack\runners.yaml with no runner replicas, so that its distributor service installs the
         runner and portable Git into the volume <Stack>_runner-bin, and waits until it has flipped both links. Returns
-        @{ Ok; Detail; Log }. The Swarm secret of the class is a made-up one, created here when it is missing.
+        @{ Ok; Detail; Log }. The Swarm secrets of the class and of the runners' placeholder are made-up ones, created here when they are missing. The token proxy has no node label in the tests and stays pending. ExtraOverride is one more compose file for the deploy (the e2e adds a mirror of the proxy to the distributor); when MACHINE_RUNNER_SWARM_PROXY_VERSION is set in the environment, the distributor must have installed the proxy too.
     #>
     param(
         [string] $Stack = 'runners',
         [string] $StackFile = (Join-Path $PSScriptRoot '..\stack\runners.yaml'),
         [int] $TimeoutSeconds = 1500,
-        [string] $DockerCommand = 'docker'
+        [string] $DockerCommand = 'docker',
+        [string] $ExtraOverride = ''
     )
-    $secret = 'windows-default-token'
-    if ((Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('secret', 'inspect', $secret)).ExitCode -ne 0) {
-        $file = Join-Path ([IO.Path]::GetTempPath()) "swarm-secret-$PID.yaml"
-        [IO.File]::WriteAllText($file, "api:`n  auth_token: swarm-test-not-a-real-token`n")
-        $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('secret', 'create', $secret, $file)
-        Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
-        if ($r.ExitCode -ne 0) { return @{ Ok = $false; Detail = "docker secret create failed: $($r.Output -join ' ')"; Log = '' } }
+    # the class token (the token proxy's secret) and the placeholder that the runners read: both made up
+    foreach ($secret in 'windows-default-token', 'runner-placeholder-token') {
+        if ((Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('secret', 'inspect', $secret)).ExitCode -ne 0) {
+            $file = Join-Path ([IO.Path]::GetTempPath()) "swarm-secret-$PID.yaml"
+            [IO.File]::WriteAllText($file, "api:`n  auth_token: swarm-test-not-a-real-token`n")
+            $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('secret', 'create', $secret, $file)
+            Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+            if ($r.ExitCode -ne 0) { return @{ Ok = $false; Detail = "docker secret create failed: $($r.Output -join ' ')"; Log = '' } }
+        }
     }
     $override = Join-Path ([IO.Path]::GetTempPath()) "swarm-distributor-override-$PID.yaml"
     [IO.File]::WriteAllText($override, "services:`n  windows-default:`n    deploy:`n      replicas: 0`n")
-    $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('stack', 'deploy', '--resolve-image', 'never', '-c', $StackFile, '-c', $override, $Stack)
+    $deploy = @('stack', 'deploy', '--resolve-image', 'never', '-c', $StackFile, '-c', $override)
+    if ($ExtraOverride) { $deploy += @('-c', $ExtraOverride) }
+    $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList ($deploy + @($Stack))
     Remove-Item -LiteralPath $override -Force -ErrorAction SilentlyContinue
     if ($r.ExitCode -ne 0) { return @{ Ok = $false; Detail = "docker stack deploy failed: $($r.Output -join ' ')"; Log = '' } }
     $service = "${Stack}_runner-distributor-windows"
     $log = ''
     $ok = Wait-SwarmCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 10 -Condition {
         $script:distLog = ((Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('service', 'logs', '--raw', $service)).Output -join "`n")
-        ($script:distLog -match '\[ ok \] current -> versions') -and ($script:distLog -match '\[ ok \] git\\current -> git')
+        $proxyOk = $true
+        if ($env:MACHINE_RUNNER_SWARM_PROXY_VERSION -and $env:MACHINE_RUNNER_SWARM_PROXY_VERSION -ne 'unreleased') { $proxyOk = ($script:distLog -match '\[ ok \] proxy\\current -> versions') }
+        ($script:distLog -match '\[ ok \] current -> versions') -and ($script:distLog -match '\[ ok \] git\\current -> git') -and $proxyOk
     }
     $log = $script:distLog
     return @{ Ok = $ok; Detail = "the distributor did not install the runner and Git within ${TimeoutSeconds}s"; Log = $log }

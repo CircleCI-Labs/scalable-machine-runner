@@ -1002,10 +1002,12 @@ jobs:
               | if length > 0
                 then "a docs-only change would run: " + join(", ") + " (add filters: not pipeline.parameters.docs-only)" | halt_error(1)
                 else empty end'
-            # The weekly scan sets security-scan: the ci and docs-site workflows must not run with it.
+            # The weekly scan sets security-scan: it runs the workflow security-scan and not ci or docs-site, and only then.
             /tmp/cli/circleci config process .circleci/continue.yml --pipeline-parameters '{security-scan: true}' > /tmp/scan.yml
-            yq -o=json '.workflows | del(.version)' /tmp/scan.yml | jq -e 'has("ci") or has("docs-site") | not' > /dev/null \
-              || { echo "security-scan: true must not run the ci or docs-site workflow"; exit 1; }
+            yq -o=json '.workflows | del(.version) | keys' /tmp/scan.yml | jq -e '. == ["security-scan"]' > /dev/null \
+              || { echo "security-scan: true must run the security-scan workflow and no other"; exit 1; }
+            yq -o=json '.workflows | has("security-scan") | not' /tmp/compiled.yml | jq -e . > /dev/null \
+              || { echo "the security-scan workflow runs without security-scan: true"; exit 1; }
       - run:
           name: The setup gate (table test), the three exclusive setup workflows (compiled per branch), the changed-files script and the deploy marker script
           command: |
@@ -1028,6 +1030,45 @@ jobs:
               | [$jobs[].key | select(IN($needed[]) | not) | select(IN("release", $gate) or startswith("serial-end-") or IN($optional[]) | not)] - $required
               | if length > 0 then "release does not require: " + join(", ") | halt_error(1) else empty end'
             echo "every job of the ci workflow is a requirement of the release"
+
+  # ---------------------------------------------------------------------------
+  # Security scan (docs/ci.md, "Security scan"): the workflow security-scan, weekly, never with the ci workflow
+  # ---------------------------------------------------------------------------
+  security-scan-images:
+    description: >
+      Trivy on every image that the repository pins (ci/security-scan.sh images): the CI jobs, the tests, the stack files.
+      Fails on a HIGH or CRITICAL finding that has a fix; the reports are artifacts. It pulls each image from its registry
+      and builds nothing, so it needs no token. Runs only in the workflow security-scan.
+    executor: linux-vm
+    environment:
+      TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+    steps:
+      - checkout
+      - run:
+          name: Trivy on every pinned image (ci/security-scan.sh images)
+          no_output_timeout: 45m
+          command: ci/security-scan.sh images
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+          when: always
+
+  security-scan-go:
+    description: >
+      govulncheck on proxy/ with the Go toolchain of the proxy builds (ci/security-scan.sh go). Fails on a vulnerability
+      that the proxy calls and that has a fix. Runs only in the workflow security-scan.
+    docker:
+      - image: golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: govulncheck on proxy/ (ci/security-scan.sh go)
+          command: ci/security-scan.sh go
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+          when: always
 
   docs-site-build:
     description: >
@@ -1316,3 +1357,11 @@ workflows:
           filters:
             branches:
               only: main
+
+  # The weekly scan (docs/ci.md, "Security scan"): a schedule sets security-scan, and the setup phase passes it on. The ci and
+  # docs-site workflows are off then, so no build, no e2e and no release runs. The jobs have no context.
+  security-scan:
+    when: << pipeline.parameters.security-scan >>
+    jobs:
+      - security-scan-images
+      - security-scan-go

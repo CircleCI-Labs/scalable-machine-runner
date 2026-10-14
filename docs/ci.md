@@ -147,7 +147,7 @@ These were measured on 2026-10-12 and shaped the scripts. Check them first when 
 | the same, with `E2E_RUNNER_TOKEN_WINDOWS` present | `setup-e2e` | adds `e2e-windows` | adds the Windows e2e groups |
 | `main` with both tokens | `setup-e2e` | adds `release` | adds the `release` job |
 | any of the above, when the push changes documentation only ([below](#documentation-only-changes)) | the same workflow | `docs-only`, and `full-suite`, `e2e-*` and `release` off | the lint jobs and `docs-site-build` only |
-| the schedule of the security scan | `setup-scan`, no context | `security-scan` | the workflow `security-scan` only |
+| the schedule of the [security scan](#security-scan) | `setup-scan`, no context | `security-scan` | the workflow `security-scan` only |
 | a tag | none runs a job | nothing | nothing: the setup job has no tag filter, so CircleCI runs no job for the tag |
 
 The two setup workflows for pushes are exclusive: `setup-e2e` has `when` the branch is `main` or starts with `smr-swarm/`, and `setup-plain` has `when` it is not. The `setup` job of `setup-e2e` has the `scalable-machine-runner-e2e` context attached, which holds the runner tokens, and the job of `setup-plain` has no context at all, so the tokens exist in no job of any other branch. A job of another branch could otherwise name the e2e runner class and read the token of the runner that claims it. The e2e jobs are added to the pipeline only when the context's job sees a non-empty `E2E_RUNNER_TOKEN_LINUX` or `E2E_RUNNER_TOKEN_WINDOWS`. Without the context or its secrets the pipeline still runs lint, builds and the local tests, and stays green. The third workflow, `setup-scan`, runs only when the pipeline parameter `security-scan` is `true`, on whatever branch the schedule names, and the other two do not run then: the scan never has the e2e context, not even on `main`.
@@ -356,6 +356,7 @@ docker stack config -c windows/stack/custom-image.yaml > /dev/null
 circleci config validate .circleci/config.yml && circleci config validate .circleci/continue.yml
 ci/tests/setup-gate.sh               # the setup gate: which suites a branch gets
 ci/tests/setup-config.sh             # only main and smr-swarm/* get the e2e context (compiles config.yml per branch)
+ci/security-scan.sh refs             # the images that the weekly scan covers (the scan itself: Docker and network)
 ci/tests/changed-files.sh            # the changed files and the release question of a push, on throwaway repositories
 ci/tests/deploy-marker.sh            # the deploy markers, against a stub of the circleci command
 circleci config process .circleci/continue.yml --pipeline-parameters '{full-suite: true, e2e-linux: true, e2e-windows: true, release: true}' > /dev/null
@@ -457,6 +458,66 @@ The site has its own context and not the release context. The release token can 
 
 When the repository is renamed to `machine-runner-swarm`, the Pages address changes with it and GitHub does not redirect the old one. Change the two lines of `site/hugo.yaml` that name the repository (`baseURL` and the GitHub link of the menu). The publication follows the repository that the pipeline runs in.
 
+## Security scan
+
+A weekly workflow, `security-scan`, looks for known vulnerabilities in what the repository pins. It is a workflow of its own in `.circleci/continue.yml`, started by a schedule trigger, and it never runs the `ci` workflow: no build, no e2e job and no release. It has no context, so it holds no secret.
+
+| Job | Executor | What it does |
+|---|---|---|
+| `security-scan-images` | `ubuntu-2604:current`, Docker | [`ci/security-scan.sh images`](../ci/security-scan.sh): Trivy on every image that the repository pins. The script finds them in the files: every reference with a digest (`name:tag@sha256:...`: the CI jobs, the tests, the stack files) and the `image:` of every stack file, so the `cimg` classes, CoreDNS and `alpine:3.24` are in too. Trivy pulls each image from its registry (`--image-src remote`) and builds nothing |
+| `security-scan-go` | `golang:1.27.2`, small | `ci/security-scan.sh go`: `govulncheck` on `proxy/` with the Go toolchain of the proxy builds. It fails on a vulnerability that the proxy calls and that has a fix (a standard library fix means a new Go release) |
+
+- **What fails.** A HIGH or CRITICAL finding that has a fixed version fails the job, and the log lists up to 12 findings for each image with the installed and the fixed version. A finding with no fix yet is counted and does not fail. An image that Trivy cannot pull also fails: a pin that cannot be scanned is a problem. `.trivyignore` applies, with its expiry dates; the policy for an entry is in that file.
+- **Expect red at first.** The tools that the CI jobs run in (`cimg`, `hadolint`, `shellcheck`, `mermaid-cli`) bundle their own Go binaries and system packages, and most of the pinned images have a fixed HIGH finding on any given week. A new tag from upstream, which Renovate proposes ([Pinned versions](#pinned-versions)), clears it. A finding that only upstream can fix goes into `.trivyignore` with an owner and a date. The failure stays in this workflow: it is not part of the `ci` workflow, so it blocks no pull request and no release.
+- **Windows images.** `mcr.microsoft.com/windows/servercore` is listed and skipped. Trivy finds no operating system in a Windows image when it runs on Linux (it returns an empty, clean report), so the scan would claim a result that it does not have. Follow the Microsoft container release notes for Server Core.
+- **Reports.** The job stores `trivy-<image>.json` for every image, `govulncheck-proxy.json`, and the summary of each command as artifacts (`reports/`).
+
+The existing `trivy` command of `linux-image-example` is a different check: it gates the image that this repository builds, against its base.
+
+### Create the schedule
+
+The workflow runs when the pipeline parameter `security-scan` is `true`. Nothing in the repository creates the schedule: a maintainer does this once, with a token or in the web app. Use the branch `main`, so the scan reads the pins of `main`. The schedule below runs every Monday at 06:00 UTC, after Renovate has opened its pull requests (it runs before 06:00 UTC on Monday).
+
+**In the web app.** Open the project, **Project Settings**, **Project Setup** (or **Triggers**). Next to the pipeline, select **Schedule +** and fill in the form:
+
+| Field | Value |
+|---|---|
+| Name | `weekly-security-scan` |
+| Branch | `main` |
+| Pipeline attribution | The scheduling system |
+| Parameters | `security-scan` = `true` |
+| Repeats | Weekly, on Monday |
+| Start time (UTC) | 06 |
+| Times per hour | 1 |
+
+Enable the trigger and save.
+
+**With the API.** The CircleCI CLI has no command for schedules. Create a personal API token, keep it in `CIRCLECI_TOKEN` (never in a file of the repository, and never printed), and run:
+
+```bash
+curl --request POST "https://circleci.com/api/v2/project/gh/CircleCI-Labs/scalable-machine-runner/schedule" \
+  --header "circle-token: ${CIRCLECI_TOKEN}" \
+  --header "Content-Type: application/json" \
+  --data '{
+    "name": "weekly-security-scan",
+    "description": "Trivy on every pinned image and govulncheck on the proxy (docs/ci.md, Security scan)",
+    "attribution-actor": "system",
+    "parameters": {"branch": "main", "security-scan": true},
+    "timetable": {"per-hour": 1, "hours-of-day": [6], "days-of-week": ["MON"]}
+  }'
+```
+
+To try it once before the first Monday, start a pipeline with the same parameter. Use the branch of the pull request to try a change, or `main` afterwards:
+
+```bash
+curl --request POST "https://circleci.com/api/v2/project/gh/CircleCI-Labs/scalable-machine-runner/pipeline" \
+  --header "circle-token: ${CIRCLECI_TOKEN}" \
+  --header "Content-Type: application/json" \
+  --data '{"branch": "main", "parameters": {"security-scan": true}}'
+```
+
+The pipeline shows the workflow `security-scan` and the jobs `security-scan-images` and `security-scan-go` (and the `setup` job of the workflow `setup-scan`). With the scheduling system as the actor, CircleCI sends no failure e-mail to a person. To hear about a failed scan, add the project to the CircleCI Slack app (**Project Settings**, **Notifications**) or set `attribution-actor` to `current` so that the actor of the token gets the e-mail. To stop the scan, disable or delete the schedule in the same place.
+
 ## Deploys
 
 The pipeline records its two deployments in the Deploys view of CircleCI (**Deploys** in the web app), with deploy markers: `circleci run release plan` creates the deploy as pending, and `circleci run release update` moves it to `RUNNING` and then to `SUCCESS` or `FAILED`.
@@ -487,7 +548,7 @@ Every tool image is pinned by tag and digest, and every download by version and 
 |---|---|---|
 | Images with a digest | `.circleci/*.yml`, `linux/stack/*.yaml`, `windows/stack/*.yaml`, `ci/`, the tests, the docs | One regex manager for `name:tag@sha256:...` in any file |
 | Hugo, lychee, the CircleCI CLI | `docs-site` command and `lint-circleci` in `.circleci/continue.yml` | A `# renovate:` comment above the version variable |
-| git-cliff, cosign, gh, Go | `ci/release.sh` | The same comment |
+| git-cliff, cosign, gh, Go, govulncheck | `ci/release.sh`, `ci/security-scan.sh` | The same comment |
 | yamllint | `lint-yaml` | A regex for `yamllint==X` (PyPI) |
 | Kata Containers | `KATA_VERSION` in `linux/tests/microvm.sh` | A regex (GitHub releases) |
 | PortableGit, 7-Zip | `ReleaseTag` and `SevenZipVersion` in `windows/stack/runner-distributor.ps1` | A regex each (GitHub releases) |
@@ -510,7 +571,7 @@ Renovate cannot compute a SHA-256 value. For a tool that is pinned with one (Hug
 
 Renovate does not touch these. Change the version and its checksum together, and run the check of the job that uses it.
 
-- Images without a digest in the stack files (`coredns/coredns`, `alpine:3.24` of the token proxy, the `cimg` classes) and the Windows `servercore` tags: the tag is a choice for users, and Windows tags must match the host.
+- Images without a digest in the stack files (`coredns/coredns`, `alpine:3.24` of the token proxy, the `cimg` classes) and the Windows `servercore` tags: the tag is a choice for users, and Windows tags must match the host. The weekly [security scan](#security-scan) still scans them (not the Windows images).
 - PSScriptAnalyzer and Pester (`lint-powershell`, `windows-swarm`, `windows/tests/Invoke-UnitTests.ps1`).
 - The Mermaid script of the site (`params.mermaid.base` in `site/hugo.yaml`): it must match the version that the `lint-docs-mermaid` image bundles.
 - The runner build of the e2e sweeper: the image tag in `ci/e2e-host.sh` and the `circleci-runner.exe` URL and SHA-256 in `ci/E2E-Host.ps1` move together.
@@ -567,7 +628,7 @@ Measured on 2026-10-13 (pipeline `9aed4106`, a full run on `smr-swarm/ci`). Cred
 | Feature branch (the jobs of every pipeline) | 1,500, of which the two Windows jobs are 1,200 | 18 min |
 | `main` or `smr-swarm/*` (every job except `release`) | 3,800 | 25 min |
 
-Windows dominates the cost: every Windows job pulls the 2 GB Server Core image onto a fresh VM (about 5 to 10 minutes). A pull request that changes documentation only costs the lint jobs and the docs build (about 200 credits). The only schedule is the weekly security scan.
+Windows dominates the cost: every Windows job pulls the 2 GB Server Core image onto a fresh VM (about 5 to 10 minutes). A pull request that changes documentation only costs the lint jobs and the docs build (about 200 credits). The only schedule is the weekly [security scan](#security-scan), about 150 credits a run.
 
 ## Troubleshooting
 

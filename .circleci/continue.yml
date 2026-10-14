@@ -355,7 +355,9 @@ jobs:
       - run:
           name: Static builds for every platform of the release (ci/build-proxy.sh)
           command: |
-            ci/build-proxy.sh /tmp/proxy-bin ci
+            # 0.0.0-e2e is the version that the Windows e2e host serves the windows/amd64 build as (ci/E2E-Host.ps1):
+            # the distributor checks that the binary reports the version of its release
+            ci/build-proxy.sh /tmp/proxy-bin 0.0.0-e2e
             if [ "$(ls /tmp/proxy-bin | sort)" != "$(ci/build-proxy.sh --assets | sort)" ]; then
               echo "the builds are not the assets that the release uploads"; exit 1
             fi

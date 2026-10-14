@@ -59,8 +59,7 @@ swarm_init() {
   if [[ $(docker info --format '{{.Swarm.LocalNodeState}}') == active ]]; then info "[ ok ] Swarm is already active"; return; fi
   docker swarm init --advertise-addr 127.0.0.1 --listen-addr 127.0.0.1:2377 >/dev/null
   docker swarm update --task-history-limit 2 >/dev/null   # keep few stopped containers around
-  docker node update --label-add machine-runner-swarm.proxy=true "$(docker info --format '{{.Swarm.NodeID}}')" >/dev/null   # the node of the token proxy (runners.yaml)
-  info "[ ok ] Swarm initialised (single node, 127.0.0.1), and this node is the node of the token proxy"
+  info "[ ok ] Swarm initialised (single node, 127.0.0.1): a manager, so it also runs the token proxy"
 }
 
 # swarm_create_secret SERVICE: the secret is the runner config the runner reads with --config.

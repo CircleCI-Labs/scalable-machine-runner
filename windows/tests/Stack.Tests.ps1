@@ -73,7 +73,7 @@ Describe 'the stack files' {
         }
     }
 
-    It 'run the token proxy as one replica with dnsrr, from the volume (read-only, subpath proxy\current), with its state in a named volume, pinned by label' {
+    It 'run the token proxy as one replica with dnsrr, from the volume (read-only, subpath proxy\current), with its state in a named volume, on a manager by default' {
         $proxy = [regex]::Match($script:files['runners.yaml'], '(?ms)^  token-proxy-windows:\r?\n(.*?)(?=^[a-z])').Groups[1].Value
         $proxy | Should -Not -BeNullOrEmpty
         $proxy | Should -Match "(?m)^      - 'C:\\machine-runner-swarm-proxy\\bin\\machine-runner-swarm-proxy\.exe'"
@@ -83,7 +83,8 @@ Describe 'the stack files' {
         $proxy | Should -Match '(?m)^        read_only: true'
         $proxy | Should -Match '(?m)^        source: proxy-state'
         $proxy | Should -Match '(?m)^      - -state-dir'
-        $proxy | Should -Match '(?m)^          - node\.labels\.machine-runner-swarm\.proxy == true'
+        $proxy | Should -Match '(?m)^          - "\$\{MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node\.role == manager\}"'
+        $proxy | Should -Not -Match 'machine-runner-swarm\.proxy ==' -Because 'a manager is the default and needs no label'
         $proxy | Should -Match '(?m)^          - node\.labels\.machine-runner-swarm\.docker-build != true'
         $proxy | Should -Match '(?m)^    healthcheck:'
         $script:files['runners.yaml'] | Should -Match '(?m)^volumes:\r?\n(  .*\r?\n)*?  proxy-state: \{\}'

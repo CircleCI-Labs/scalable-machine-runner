@@ -133,7 +133,6 @@ done
 dind_load "$MGR" "$COREDNS_IMAGE"
 dind_load "$MGR" "$PROXY_IMAGE"
 host_kernel=$(docker exec "$KN" uname -r)
-idocker "$MGR" node update --label-add machine-runner-swarm.proxy=true "$MGR" > /dev/null   # the node of the proxy: what setup.sh --swarm-init does
 
 # Node setup, as docs/microvm.md says: the node file with the gateway of docker_gwbridge, on both nodes (the manager needs it for the guard test).
 node_resolv() { # NODE

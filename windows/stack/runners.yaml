@@ -38,10 +38,9 @@
 #   Both are NOT created by this file. On Windows a secret lands at C:\ProgramData\Docker\secrets\<target>, is readable by
 #   administrators only, and is "persisted in clear text to the container's root disk" until the container stops. Enable BitLocker
 #   on the volume that holds the Docker root directory. Jobs run as ContainerAdministrator, so a job can read the placeholder; the
-#   class token is in the proxy, on the node that carries the label machine-runner-swarm.proxy=true (docker node update
-#   --label-add machine-runner-swarm.proxy=true <node>; Setup.ps1 -InitSwarm sets it on the node that it creates). The proxy keeps the
-#   addresses of the runners that have claimed in the volume proxy-state, so a restart refuses only them. Treat each resource class
-#   as a trust boundary.
+#   class token is in the proxy, which runs on a manager by default, with no label (in a swarm whose managers are Linux hosts, or with
+#   several managers, pin it: see token-proxy-windows below). The proxy keeps the addresses of the runners that have claimed in the
+#   volume proxy-state, so a restart refuses only them. Treat each resource class as a trust boundary.
 #
 # Host prerequisites: Windows Server 2022 or 2025, Docker engine in Windows-container mode, Swarm initialised with
 # "docker swarm init --advertise-addr <host IPv4 address>" (pull mcr.microsoft.com/windows/servercore:ltsc2022 BEFORE it: DNS fails
@@ -252,8 +251,11 @@ services:
           - node.platform.os == windows
           - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
 
-  # The token proxy of the Windows classes: the ONLY holder of their tokens. One replica, pinned to the node with the label
-  # machine-runner-swarm.proxy=true, which keeps its state. A claim is accepted from a runner in the DNS set tasks.<service> of
+  # The token proxy of the Windows classes: the ONLY holder of their tokens. One replica, on a manager by default, with no label:
+  # that node keeps its state. If the proxy moves to another node, its state stays behind, and docs/operations.md says what the
+  # runners then see. Where the managers are Linux hosts, or there are several, pin it to a Windows node:
+  # docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
+  # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'. A claim is accepted from a runner in the DNS set tasks.<service> of
   # its class, once per container, and gets the token of that class; every other call passes through with the caller's own token. If it is
   # down, runners cannot claim and the calls of a running job wait until it is back (docs/operations.md). Its binary comes from the
   # distributor (proxy\current in runner-bin, mounted read-only). A binary in a stock Server Core image has no start script that
@@ -316,7 +318,7 @@ services:
           - node.platform.os == windows
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: the tokens must not sit next to the engine
           - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
-          - node.labels.machine-runner-swarm.proxy == true   # the node that keeps proxy-state
+          - "${MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node.role == manager}"   # the node that keeps proxy-state
 
 secrets:
   runner-placeholder-token:

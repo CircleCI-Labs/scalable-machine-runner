@@ -38,7 +38,6 @@ dind_load "$mgr" "$PROXY_IMAGE"
 dind_load "$mgr" "$DIST_IMAGE"
 publish_runner real
 publish_proxy 0.0.1-test
-idocker "$mgr" node update --label-add machine-runner-swarm.proxy=true "$(idocker "$mgr" info --format '{{.Swarm.NodeID}}')" > /dev/null   # the node of the proxy: what setup.sh --swarm-init does
 state_dir=/var/lib/docker/volumes/${STACK}_proxy-state/_data
 bin_vol=/var/lib/docker/volumes/${STACK}_runner-bin/_data
 DIST_ENV=(MACHINE_RUNNER_SWARM_CHECK_INTERVAL=5s)

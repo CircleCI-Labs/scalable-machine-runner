@@ -357,13 +357,15 @@ make_override() {
   } > "$file"
 }
 DIST_ENV=()
+DEPLOY_ENV=()   # KEY=value variables of the deploy command itself, for the interpolation of the stack files
 
 # deploy_stack NODE OVERRIDE_FILE [STACK_FILE...]: copy the real stack file(s) (default runners.yaml) and
 # OVERRIDE_FILE into NODE and deploy them, then the files of EXTRA_OVERRIDES (absolute paths) after the override. $SWARM_TEST_HOST replaces CHANGE-ME in persistent.yaml, the way
 # its comment tells a user to edit it.
 deploy_stack() {
-  local node=$1 override=$2 f tmp
-  local -a args=() extra=()
+  local node=$1 override=$2 f tmp kv
+  local -a args=() extra=() envargs=()
+  for kv in "${DEPLOY_ENV[@]:-}"; do [[ -z $kv ]] || envargs+=(-e "$kv"); done   # variables of the deploy itself (MACHINE_RUNNER_SWARM_PROXY_PLACEMENT)
   shift 2
   [[ $# -gt 0 ]] || set -- runners.yaml
   tmp=$(mktemp -d)
@@ -385,8 +387,8 @@ deploy_stack() {
     docker cp "$f" "$node:/stack/${f##*/}"
     extra+=(-c "/stack/${f##*/}")
   done
-  idocker "$node" stack deploy --resolve-image never "${args[@]}" -c /stack/override.yaml "${extra[@]}" "$STACK" >/dev/null 2>&1 ||
-    idocker "$node" stack deploy --resolve-image never "${args[@]}" -c /stack/override.yaml "${extra[@]}" "$STACK" >&2
+  docker exec -i "${envargs[@]}" "$node" docker stack deploy --resolve-image never "${args[@]}" -c /stack/override.yaml "${extra[@]}" "$STACK" >/dev/null 2>&1 ||
+    docker exec -i "${envargs[@]}" "$node" docker stack deploy --resolve-image never "${args[@]}" -c /stack/override.yaml "${extra[@]}" "$STACK" >&2
 }
 
 # service_logs NODE SERVICE

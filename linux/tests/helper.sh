@@ -32,10 +32,10 @@ grep -q 'Swarm initialised' <<< "$out" || fail "--swarm-init: $out"
 out=$(setup --swarm-init </dev/null)
 grep -q 'already active' <<< "$out" || fail "--swarm-init is not idempotent: $out"
 addr=$(idocker "$node" info --format '{{.Swarm.NodeAddr}}')
-label=$(idocker "$node" node inspect self --format '{{index .Spec.Labels "machine-runner-swarm.proxy"}}')
-echo "RESULT test=helper step=swarm-init state=active idempotent=yes node_addr=$addr proxy_label=$label"
+role=$(idocker "$node" node inspect self --format '{{.Spec.Role}}')
+echo "RESULT test=helper step=swarm-init state=active idempotent=yes node_addr=$addr role=$role"
 [[ $addr == 127.0.0.1 ]] || fail "the single node should advertise 127.0.0.1, got $addr"
-[[ $label == true ]] || fail "--swarm-init did not label the node of the token proxy"
+[[ $role == manager ]] || fail "--swarm-init did not make a manager, which is where the token proxy runs"
 
 out=$(printf '%s\n' "$SENTINEL_TOKEN" | setup --secret linux-default)
 grep -q 'created secret linux-default-token' <<< "$out" || fail "--secret: $out"

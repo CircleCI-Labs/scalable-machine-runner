@@ -201,6 +201,8 @@ services:
       replicas: $4
       placement:
         constraints: ["node.platform.arch == aarch64"]
+  token-proxy:
+    deploy: {replicas: 0}
   runner-distributor:
     environment:
       MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: "$MIRROR_URL"

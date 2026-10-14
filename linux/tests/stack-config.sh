@@ -132,7 +132,11 @@ else
   check token-proxy 'placement constraint node.platform.os == linux' '^          - node.platform.os == linux$'
   check token-proxy 'the Docker-build isolation constraint (docker-build != true)' '^          - node.labels.machine-runner-swarm.docker-build != true$'
   check token-proxy 'the microVM isolation constraint (Docker DNS, which finds tasks.<service>, does not work in a Kata VM)' '^          - node.labels.machine-runner-swarm.microvm != true$'
-  check token-proxy 'the node label that keeps proxy-state and the proxy together' '^          - node.labels.machine-runner-swarm.proxy == true$'
+  check token-proxy 'a manager by default, with no label (the node that keeps proxy-state)' '^          - node.role == manager$'
+  if grep -q 'machine-runner-swarm.proxy' <<< "$block"; then
+    echo "  token-proxy: the default placement needs a node label (a manager is the default; the label is an optional pin)"
+    problems=$((problems + 1))
+  fi
   check token-proxy 'a healthcheck' '^    healthcheck:$'
   check token-proxy 'the per-node volume runner-bin, read-only' '^        source: runner-bin$'
   check token-proxy 'the state volume proxy-state' '^        source: proxy-state$'
@@ -233,6 +237,15 @@ check runner-distributor 'the proxy version from the environment of the deploy' 
 for svc in linux-default linux-java linux-hardened; do
   if grep -q 'mirror.example.com\|RUNNER_SHA256\|PROXY_VERSION\|PROXY_SHA256' <<< "$(service_block "$svc")"; then echo "  $svc: the distributor's settings reached a runner service"; problems=$((problems + 1)); fi
 done
+
+# the proxy placement can be pinned at deploy time (a label on one manager, or a worker), and the pin replaces the manager default
+cfg=$(MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true' docker stack config -c "$dir/runners.yaml")
+block=$(service_block token-proxy)
+check token-proxy 'the pin by label from the environment of the deploy' '^          - node.labels.machine-runner-swarm.proxy == true$'
+if grep -q 'node.role == manager' <<< "$block"; then
+  echo "  token-proxy: the pin by label must replace the manager default, not add to it"
+  problems=$((problems + 1))
+fi
 
 cfg=$(docker stack config -c "$dir/runners.yaml" -c "$dir/microvm.yaml")
 # microvm.yaml: a service that adds SYS_ADMIN is safe only inside a VM, so it must demand one (on runc it would be a host escape)

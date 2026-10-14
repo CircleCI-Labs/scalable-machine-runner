@@ -256,7 +256,7 @@ function Install-SwarmDistributor {
     .SYNOPSIS
         Deploys the shipped windows\stack\runners.yaml with no runner replicas, so that its distributor service installs the
         runner and portable Git into the volume <Stack>_runner-bin, and waits until it has flipped both links. Returns
-        @{ Ok; Detail; Log }. The Swarm secrets of the class and of the runners' placeholder are made-up ones, created here when they are missing. The token proxy has no node label in the tests and stays pending. ExtraOverride is one more compose file for the deploy (the e2e adds a mirror of the proxy to the distributor); when MACHINE_RUNNER_SWARM_PROXY_VERSION is set in the environment, the distributor must have installed the proxy too.
+        @{ Ok; Detail; Log }. The Swarm secrets of the class and of the runners' placeholder are made-up ones, created here when they are missing. The token proxy gets no replica here (it would run on this manager and wait for a binary): the tests that need it deploy it themselves. ExtraOverride is one more compose file for the deploy (the e2e adds a mirror of the proxy to the distributor); when MACHINE_RUNNER_SWARM_PROXY_VERSION is set in the environment, the distributor must have installed the proxy too.
     #>
     param(
         [string] $Stack = 'runners',
@@ -276,7 +276,7 @@ function Install-SwarmDistributor {
         }
     }
     $override = Join-Path ([IO.Path]::GetTempPath()) "swarm-distributor-override-$PID.yaml"
-    [IO.File]::WriteAllText($override, "services:`n  windows-default:`n    deploy:`n      replicas: 0`n")
+    [IO.File]::WriteAllText($override, "services:`n  windows-default:`n    deploy:`n      replicas: 0`n  token-proxy-windows:`n    deploy:`n      replicas: 0`n")
     $deploy = @('stack', 'deploy', '--resolve-image', 'never', '-c', $StackFile, '-c', $override)
     if ($ExtraOverride) { $deploy += @('-c', $ExtraOverride) }
     $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList ($deploy + @($Stack))

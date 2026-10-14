@@ -2,7 +2,6 @@
 #
 #   printf %s "$TOKEN" | linux/setup.sh --secret linux-default      # one secret per class, see below
 #   printf %s machine-runner-swarm-placeholder | linux/setup.sh --secret runner-placeholder   # once: what the runners hold instead
-#   docker node update --label-add machine-runner-swarm.proxy=true <node>   # once: the node of the token proxy (setup.sh --swarm-init does it)
 #   docker stack deploy -c linux/stack/runners.yaml runners
 #
 # That is the whole install: nothing is installed on the nodes by hand. The service runner-distributor runs on every Linux node, also
@@ -218,7 +217,10 @@ services:
   # calls pass through with the caller's own token. If it is down, runners cannot claim and the task agent cannot reach the API
   # until it is back (docs/operations.md). The distributor of its node installs the binary (proxy/current in runner-bin), the
   # entrypoint waits for it and checks its SHA-256 record. It keeps the addresses of the runners that have claimed in the small
-  # volume proxy-state, so that a restart refuses only them: pin it to the node that keeps the volume (the label below).
+  # volume proxy-state, so that a restart refuses only them. It runs on a manager by default, with no label. If the proxy moves to
+  # another node, its state stays behind, and docs/operations.md says what the runners then see. In a cluster with several
+  # managers, pin it to one: docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
+  # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'.
   token-proxy:
     image: alpine:3.24   # a stock image: the binary is static, alpine brings the CA bundle for the HTTPS upstream
     user: "65534"
@@ -269,7 +271,7 @@ services:
           - node.platform.os == linux
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: the tokens must not sit next to the Docker socket
           - node.labels.machine-runner-swarm.microvm != true   # Docker's DNS, which finds tasks.<service>, does not work in a Kata VM
-          - node.labels.machine-runner-swarm.proxy == true   # the node that keeps proxy-state; choose one that runs no jobs when you can
+          - "${MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node.role == manager}"   # the node that keeps proxy-state; choose one that runs no jobs when you can
 
 networks:
   # One overlay per class: classes cannot reach each other (replicas of a class still can).

@@ -81,6 +81,21 @@ type proxy struct {
 	mu sync.Mutex // guards the latched and busy maps of every class, and the state file
 }
 
+// describe lists what DNS says for every class, for the log line of a claim from an address that belongs to none: a runner that
+// Swarm has just started, and a DNS answer that does not list it yet, look the same from the outside.
+func describe(classes []*class, sets map[*class]map[string]bool) string {
+	var parts []string
+	for _, c := range classes {
+		var ips []string
+		for ip := range sets[c] {
+			ips = append(ips, ip)
+		}
+		sort.Strings(ips)
+		parts = append(parts, c.dns+" lists ["+strings.Join(ips, " ")+"]")
+	}
+	return strings.Join(parts, ", ")
+}
+
 func norm(s string) string {
 	if a, err := netip.ParseAddr(s); err == nil {
 		return a.Unmap().String()
@@ -237,7 +252,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case owners == 0:
-		why = "not a runner of any class"
+		why = "not a runner of any class (" + describe(p.classes, sets) + ")"
 	case owners > 1: // overlapping networks: do not guess whose token this is
 		why = "the address belongs to several classes"
 	case c.latched[ip]:

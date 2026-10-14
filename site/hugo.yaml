@@ -62,7 +62,9 @@ params:
     eyebrow: CircleCI Labs
     title: Machine runner swarm
     tagline: CircleCI machine runners on Docker Swarm, in containers or microVMs
-    notice: Created by engineers at CircleCI. Used by real CircleCI customers. Not officially supported by CircleCI support.
+    notice: >-
+      Not an official CircleCI product and not supported by CircleCI Support.
+      Field engineers at CircleCI created it and maintain it on a best-effort basis.
     lead: One Swarm service for each resource class, a clean environment for every job, on Linux and on Windows Server.
     features:
       - icon: layers
@@ -83,10 +85,11 @@ params:
         link: docs/security/security/
 
   banner:
-    # A new key shows the banner again to visitors who closed the old one.
-    key: labs-not-supported
+    # The banner cannot be dismissed: custom.css hides the close button, and custom/banner.html renders the text.
+    # A new key shows the banner again to visitors who closed an old one.
+    key: labs-disclaimer
     message: >-
-      **CircleCI Labs project, not officially supported.**
+      **CircleCI Labs project.** Not an official CircleCI product and not supported by CircleCI Support.
 
   navbar:
     displayTitle: true

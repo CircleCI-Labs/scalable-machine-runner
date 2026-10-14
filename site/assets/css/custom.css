@@ -1,8 +1,9 @@
 /*
  * The CircleCI look of the docs site (docs/ci.md, "Docs site"). Hextra loads this file after its own CSS, so plain
  * rules here override the theme. The values come from the CircleCI brand guidelines: the colors, Inter for text and
- * Space Grotesk for the mega title only, IBM Plex Mono for code, Lucide icons, and the bundled logo and jelly pixels, unchanged.
- * The structure follows circleci.com/docs: a header with the logo and a product tag, a left navigation of
+ * Space Grotesk for the mega title only, IBM Plex Mono for code, Lucide icons, and the bundled jelly pixels, unchanged.
+ * The mark of the site is the icon of the CircleCI-Labs organization, never the logo of CircleCI.
+ * The structure follows circleci.com/docs: a header with the mark and the name, a left navigation of
  * labelled sections, blue links, and dark rounded code blocks.
  */
 
@@ -94,18 +95,6 @@ body {
   outline-offset: 2px;
 }
 
-.cci-show-dark {
-  display: none;
-}
-
-.dark .cci-show-light {
-  display: none;
-}
-
-.dark .cci-show-dark {
-  display: inline-block;
-}
-
 .cci-tag {
   display: inline-flex;
   align-items: center;
@@ -119,26 +108,38 @@ body {
   line-height: 1.5;
 }
 
-/* ---------- Banner (CircleCI Labs: not officially supported) ---------- */
+/* ---------- Banner: the Labs disclaimer, on every page, not dismissible ---------- */
 
-.hextra-banner {
-  background: var(--cci-fog);
-  color: var(--cci-terminal);
-  border-bottom: 1px solid color-mix(in srgb, var(--cci-midnight) 12%, transparent);
+.hextra-banner,
+.hextra-banner-hidden .hextra-banner {
+  display: block;
+  background: var(--cci-midnight);
+  color: #fff;
+  border-bottom: 1px solid color-mix(in srgb, #fff 12%, transparent);
 }
 
 .dark .hextra-banner {
   background: var(--cci-9pm);
-  color: #fff;
-  border-bottom-color: color-mix(in srgb, #fff 10%, transparent);
-}
-
-.hextra-banner strong {
-  font-weight: 600;
 }
 
 .hextra-banner-close-button {
-  color: inherit;
+  display: none;
+}
+
+.cci-banner-link {
+  color: #fff;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--cci-green);
+}
+
+.cci-banner-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+.cci-banner-link strong {
+  font-weight: 600;
 }
 
 /* ---------- Header ---------- */
@@ -168,22 +169,38 @@ body {
   text-decoration: none;
 }
 
-.cci-brand-logo {
-  height: 1.75rem;
-  width: auto;
+.cci-brand-icon {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  box-shadow: 0 0 0 1px var(--cci-border);
+}
+
+.cci-brand-org {
+  color: var(--cci-heading);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.cci-brand-sep {
+  display: none;
+  color: var(--cci-muted);
+  font-size: 1.25rem;
+  font-weight: 300;
 }
 
 .cci-brand-name {
   display: none;
-  padding-left: 0.75rem;
-  border-left: 1px solid var(--cci-border);
   color: var(--cci-heading);
   font-size: 1rem;
-  font-weight: 500;
+  font-weight: 400;
   white-space: nowrap;
 }
 
 @media (min-width: 80rem) {
+  .cci-brand-sep,
   .cci-brand-name {
     display: inline;
   }
@@ -877,9 +894,20 @@ body {
   gap: 2.5rem;
 }
 
-.cci-footer-logo {
-  height: 1.75rem;
-  width: auto;
+.cci-footer-org {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  color: #fff;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.cci-footer-icon {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
 }
 
 .cci-footer-about p {
@@ -1032,6 +1060,7 @@ body {
 
 .cci-eyebrow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.625rem;
   margin: 0;
@@ -1042,12 +1071,25 @@ body {
   text-transform: uppercase;
 }
 
-.cci-eyebrow::before {
-  content: "";
-  width: 0.75rem;
-  height: 0.75rem;
-  border-radius: 0.1875rem;
-  background: var(--cci-green);
+.cci-eyebrow-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.4375rem;
+  box-shadow: 0 0 0 1px var(--cci-border);
+}
+
+.cci-eyebrow .cci-tag {
+  background: var(--cci-midnight);
+  border-color: var(--cci-midnight);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.dark .cci-eyebrow .cci-tag {
+  background: var(--cci-9pm);
+  border-color: var(--cci-9pm);
 }
 
 .cci-mega {
@@ -1084,16 +1126,25 @@ body {
   margin-top: 2.25rem;
 }
 
-.cci-notice .cci-tag {
-  margin-right: 0.375rem;
-}
-
 .cci-notice {
   max-width: 36rem;
   margin: 2rem 0 0;
-  color: var(--cci-muted);
-  font-size: 0.875rem;
-  line-height: 1.5;
+  padding-left: 1rem;
+  border-left: 3px solid var(--cci-green);
+  color: var(--cci-fg);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.cci-notice strong {
+  color: var(--cci-heading);
+  font-weight: 600;
+}
+
+.cci-notice a {
+  color: var(--cci-link-color);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .cci-hero-art {
@@ -1357,7 +1408,9 @@ body {
 
 /* The banner and the header are both sticky: the header must cover the banner, not extend below itself */
 @media (max-width: 47.99rem) {
+  /* The banner scrolls away, and the header sticks: no sliver of the banner is left under the header */
   .hextra-banner {
+    position: static;
     font-size: 0.8125rem;
   }
 
@@ -1370,12 +1423,13 @@ body {
     padding-right: 0.25rem;
   }
 
-  .cci-brand-logo {
-    height: 1.5rem;
+  .cci-brand-icon {
+    width: 1.75rem;
+    height: 1.75rem;
   }
 
-  .cci-brand .cci-tag {
-    font-size: 0.75rem;
+  .cci-brand-org {
+    font-size: 1rem;
   }
 
   .hextra-nav-container .hextra-search-trigger {

@@ -49,7 +49,11 @@ sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml` -}}
     <section class="cci-hero" aria-labelledby="cci-hero-title">
       <div class="cci-wrap cci-hero-grid">
         <div class="cci-hero-copy">
-          <p class="cci-eyebrow">{{ $home.eyebrow }}</p>
+          <p class="cci-eyebrow">
+            <img class="cci-eyebrow-icon" src="{{ "images/circleci-labs-icon.png" | relURL }}" alt="" width="28" height="28" />
+            <span>{{ $home.eyebrow }}</span>
+            <span class="cci-tag">Not an official CircleCI product</span>
+          </p>
           <h1 id="cci-hero-title" class="cci-mega">{{ $home.title }}</h1>
           <p class="cci-hero-tagline">{{ $home.tagline }}</p>
           <p class="cci-hero-lead">{{ $home.lead }}</p>
@@ -57,7 +61,7 @@ sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml` -}}
             <a class="cci-btn cci-btn-primary" href="{{ "docs/get-started/quickstart-linux/" | relURL }}">Start on Linux {{ partial "utils/icon.html" (dict "name" "arrow-right" "attributes" `height=20 aria-hidden="true"`) }}</a>
             <a class="cci-btn cci-btn-secondary" href="{{ "docs/get-started/quickstart-windows/" | relURL }}">Start on Windows Server</a>
           </div>
-          <p class="cci-notice"><span class="cci-tag">Labs</span> {{ $home.notice }}</p>
+          <p class="cci-notice" role="note"><strong>CircleCI Labs project.</strong> {{ $home.notice }} <a href="#support">Read the support notice</a>.</p>
         </div>
 
         <div class="cci-hero-art">

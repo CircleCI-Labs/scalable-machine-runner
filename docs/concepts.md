@@ -123,7 +123,7 @@ A clean environment means that a job starts in a container created from the imag
 | Users, groups, and sudo rules created by an earlier job | The kernel: all containers on a node share it |
 | On Windows, the registry, the user profile, `%TEMP%`, and `C:\ProgramData` | Data of finished containers that Swarm has not yet pruned from the node disk |
 
-The runner is mounted read-only, so a job cannot change what the next job runs. On Linux it comes from the per-node volume `runner-bin`, which a service of the stack fills. Refer to [The runner distributor on Linux](#the-runner-distributor-on-linux). On Windows it is the host directory `C:\machine-runner-swarm\current`, a link to the installed version. A new runner version is a new directory and a moved link: Docker follows the link when it creates a container, so the next job runs the new version, and a job that runs now finishes on the old one. Refer to [Upgrade the runner](operations.md#upgrade-the-runner-and-images).
+The runner is mounted read-only, so a job cannot change what the next job runs. On Linux it comes from the per-node volume `runner-bin`, which a service of the stack fills. Refer to [The runner distributor on Linux](#the-runner-distributor-on-linux). On Windows it comes from the same volume, filled by the service `runner-distributor-windows`, through two links that Docker resolves when it creates a container. Refer to [The runner distributor on Windows](#the-runner-distributor-on-windows). A new runner version is a new directory and a moved link, so the next job runs the new version, and a job that runs now finishes on the old one. Refer to [Upgrade the runner](operations.md#upgrade-the-runner-and-images).
 
 The working directory needs no cleanup in a single-task class, because the container is discarded. On Linux, the runner does not clean it at all. The runner user cannot remove files that the job user owns, so the stack sets `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` to `"false"`. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
 
@@ -148,6 +148,17 @@ The runner services carry no version and no hash. Which version the nodes run is
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12` | The distributor pins that version. It switches to an installed version without any network, so a rollback needs no download |
 
 The distributor verifies every download against a SHA-256 and records the SHA-256 of the binary next to it. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux) for the settings and to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) for the checks.
+
+## The runner distributor on Windows
+
+The Windows services use the stock Server Core image, and the image holds none of the runner and none of Git. The service `runner-distributor-windows` does what the Linux distributor does, with the same settings, the same version policy and the same rule that a runner service carries no version: `docker stack deploy` is the whole install, and the only upgrade path.
+
+- **The service.** A `global` service on the nodes with the label `machine-runner-swarm.windows-ltsc2022`, from the stock `servercore:ltsc2022` image with process isolation. Its PowerShell script, `windows\stack\runner-distributor.ps1`, is a Swarm config.
+- **The volume and the links.** It writes to `runner-bin`: `versions\<version>` for the runner (with `SHA256`, `TARBALL` and `VERSION`), `git\<git version>` for portable Git, and two relative directory symbolic links, `current` and `git\current`. Every class mounts the volume read-only twice, with `volume.subpath`: `current` at `C:\machine-runner-swarm`, and `git\current` at `C:\Program Files\Git`, where the task agent expects `tar.exe`.
+- **No entrypoint.** `circleci-runner.exe` is the main process. A runner task that starts before the first flip fails and starts again after the restart delay, so a new node needs no order, and nothing checks the binary when a container starts. Refer to [Runner binary integrity on Windows](security.md#runner-binary-integrity-on-windows).
+- **Locked files.** Windows cannot replace or delete files that a running container uses. The distributor installs a version next to the others, flips the link, and removes an old version only when no container uses it. A running job keeps its version, and the runner services never restart, so no busy job is killed by an upgrade.
+
+Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows) for the settings.
 
 ## Users and the runner token on Linux
 
@@ -218,7 +229,7 @@ A plain `docker compose up` restarts the same container, so the environment is n
 | Default class, hardened class | The Linux default classes (`linux-default`, `linux-java`) keep passwordless sudo for jobs. The hardened class (`linux-hardened`) removes sudo and steps every job down with `setpriv --no-new-privs`. Refer to [Users and the runner token on Linux](#users-and-the-runner-token-on-linux) |
 | Token secret | The Swarm secret `<service>-token`. It is a runner config file that holds the token of the resource class |
 | Entrypoint | On Linux, the script `circleci-runner-entrypoint`, which a Swarm config delivers. It checks the runner, prepares the users, and then starts the runner. On Windows there is none: the runner is the main process |
-| Runner distributor | On Linux, the `global` service `runner-distributor`. On every node it downloads, verifies, and installs the runner into `runner-bin`, moves `current`, and looks again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL`. Refer to [The runner distributor on Linux](#the-runner-distributor-on-linux) |
+| Runner distributor | On Linux, the `global` service `runner-distributor`; on Windows, `runner-distributor-windows` (it installs portable Git too). On every node it downloads, verifies, and installs the runner into `runner-bin`, moves `current`, and looks again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL`. Refer to [The runner distributor on Linux](#the-runner-distributor-on-linux) |
 | `runner-bin` | The named volume, one on every Linux node, that holds the runner versions. The distributor writes it, and the runner services mount it read-only at `/opt/machine-runner-swarm` |
 | `current` | The link in `runner-bin` that points to the active `versions/<version>`. A container resolves it once, when it starts. As a value of `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, `current` makes the distributor follow CircleCI's current release |
 | Record | The file `versions/<version>/SHA256`, which holds the SHA-256 of the binary in the format of `sha256sum -c`. The distributor writes it when it installs a version, and the entrypoint checks the binary against it at every container start |

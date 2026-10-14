@@ -35,7 +35,7 @@ This page describes what the stack protects, what it does not protect, and which
 |---|---|---|
 | A job leaves state for the next job | Single-task mode and a new container for every job | Anything on mounted volumes or on a mounted Docker engine. Refer to [What a clean environment covers](concepts.md#what-a-clean-environment-covers) |
 | A job reads the runner token | The token is a file that only the runner user and root can read, and is not in the environment. Hardened classes remove sudo | In the default Linux class, a job that uses sudo reads it. On Windows, a job reads it |
-| A job replaces the runner or entrypoint | On Linux, the runner is in a per-node volume that the container mounts read-only and that only root owns, the entrypoint is a Swarm config, and the entrypoint checks the runner against its SHA-256 record at every container start. On Windows, the directory with the runner is mounted read-only | On Linux, a privileged sibling container can still change the volume. Refer to [Runner binary integrity on Linux](#runner-binary-integrity-on-linux) |
+| A job replaces the runner or entrypoint | On Linux, the runner is in a per-node volume that the container mounts read-only and that only root owns, the entrypoint is a Swarm config, and the entrypoint checks the runner against its SHA-256 record at every container start. On Windows, the volume with the runner and Git is mounted read-only, and the distributor compares the runner with its record at every check | On Linux, a privileged sibling container can still change the volume. Refer to [Runner binary integrity on Linux](#runner-binary-integrity-on-linux) |
 | A job reaches other tenants through the network | One overlay network for each Linux class | Replicas of one class reach each other. Refer to [Isolation between runners](#isolation-between-runners) |
 | A job breaks out of the container | Default seccomp and AppArmor profiles, dropped capabilities, no privileged mode | Containers share the host kernel. A kernel or runtime vulnerability bypasses every control on this page |
 | A job takes over the node through Docker | The Docker engine is not mounted by default | The opt-in docker-build classes are root-equivalent, and administrator-equivalent on Windows. Refer to [Docker Builds](docker-builds.md) |
@@ -128,6 +128,12 @@ To take the manifest out of the chain, set `MACHINE_RUNNER_SWARM_RUNNER_SHA256` 
 - The docker-build class mounts the Docker socket of the host and is root-equivalent on its node, so it can change the volume too. Refer to [Docker Builds](docker-builds.md).
 - Whoever can update the `runner-distributor` service, for example a user in the `docker` group of a manager, chooses the version and the download address. A list in `MACHINE_RUNNER_SWARM_RUNNER_SHA256` limits what can be installed to the tarballs on it.
 
+## Runner binary integrity on Windows
+
+The trust is the one of Linux: the service `runner-distributor-windows` downloads the tarball over HTTPS from the release bucket of CircleCI, compares its SHA-256 with the `manifest.json` of CircleCI (or with your `MACHINE_RUNNER_SWARM_RUNNER_SHA256` list), checks that the binary reports the version, and records the SHA-256 of the binary in `versions\<version>\SHA256`. Portable Git and `7zr.exe` are pinned by SHA-256 in the script, so a new Git version is a new script and a new release of this repository.
+
+Two things differ. The runner is the main process of the container and there is no entrypoint, so **nothing checks the binary when a container starts**. The distributor compares the active binary with its record at every check interval (24 hours by default) and installs it again when it changed. And a job runs as an administrator, but in its own container: the volume is mounted read-only through two links, so a job cannot change the runner or Git. A container with write access to the volume, for example one of the docker-build class (it controls the engine and is root-equivalent on its node), can still change them. Refer to [Docker Builds](docker-builds.md).
+
 ## Compared with the official runner installs
 
 This table puts the Linux classes of this repository next to the installs that CircleCI documents. The first three columns come from the public CircleCI documentation only, and the last two from the tests of this repository. Where the public documentation says nothing, the cell says so.
@@ -187,7 +193,7 @@ Do not set the variable to `true` on Linux. Refer to [Error: failed to remove wo
 
 | Control | Setting in `windows\stack\runners.yaml` |
 |---|---|
-| Runner and Git | Read-only mounts of `C:\machine-runner-swarm`. Authenticated Users have read and execute access, and a job cannot write |
+| Runner and Git | Read-only mounts of the volume `runner-bin` (`current` at `C:\machine-runner-swarm`, `git\current` at `C:\Program Files\Git`). A job cannot write. Refer to [Runner binary integrity on Windows](#runner-binary-integrity-on-windows) |
 | Secret | Administrators and `SYSTEM` only. Refer to [Token model on each OS](#token-model-on-each-os) |
 | Working directory | `CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"` |
 | Logs | Text format. The `json-file` log driver with rotation |

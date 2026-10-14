@@ -21,9 +21,9 @@ Nothing, with one optional exception on Windows.
 | | You build | Optional |
 |---|---|---|
 | Linux | Nothing. The stack mounts the runner from a per-node volume, which its `runner-distributor` service fills, and the entrypoint from a Swarm config, into a stock image such as `cimg/base`. `docker stack deploy` is the whole install | A custom image when jobs need tools, because the hardened class cannot install packages at run time. It needs util-linux `setpriv`. Refer to [Images](images.md) |
-| Windows | Nothing. The stack mounts the runner and portable Git from `C:\machine-runner-swarm` into the stock Server Core image. `windows\Setup.ps1` stages them | A custom image for your tools, and a DIY image that lets a job finish after a stop. Refer to [Windows images](images.md#windows-bring-your-own-image) and [the stop-timeout image](operations.md#optional-an-image-that-lets-a-job-finish-after-a-stop-diy) |
+| Windows | Nothing. The service `runner-distributor-windows` of the stack installs the runner and portable Git into a volume that the stack mounts into the stock Server Core image | A custom image for your tools, and a DIY image that lets a job finish after a stop. Refer to [Windows images](images.md#windows-bring-your-own-image) and [the stop-timeout image](operations.md#optional-an-image-that-lets-a-job-finish-after-a-stop-diy) |
 
-This repository publishes no images. A Linux node needs a Docker engine and a Swarm join, and nothing else. A Windows host needs the files from the install page and a Docker engine.
+This repository publishes no images. A Linux node needs a Docker engine and a Swarm join, and nothing else. A Windows node needs a Docker engine, the `ltsc2022` base image, and a Swarm join, and nothing else.
 
 ## What do `sudo -niHu` and `setpriv` mean?
 
@@ -41,9 +41,9 @@ Both give the same result. The helper is optional, and every step of it is on th
 | | `setup.sh` or `Setup.ps1` does | It does not |
 |---|---|---|
 | Linux | Checks the node, creates a single-node Swarm on the loopback address, creates secrets from hidden prompts, and deploys the stack files you name | Install Docker, install the runner (the `runner-distributor` service does that on every node), create resource classes or tokens, edit or copy the stack file, label or join nodes, or build images |
-| Windows | Stages the runner and Git with the access rights and the `current` junction, creates the Swarm, labels the node with the image tags it can run, creates secrets, and deploys | Install Docker or Windows features, create classes or tokens, edit or copy the stack file, add the labels of the optional classes, join other nodes, or build images |
+| Windows | Creates the Swarm, labels the node with the image tags it can run, creates secrets, and deploys | Install Docker or Windows features, create classes or tokens, edit or copy the stack file, add the labels of the optional classes, join other nodes, or build images |
 
-The steps run in a fixed order, and a rerun is safe. On Windows, the helper pins a runner version and its checksum, and does not look up the latest. On Linux, the helper does not touch the runner. Refer to [Optional: use the setup helper](install-linux.md#optional-use-the-setup-helper) and [the Windows helper](install-windows.md#optional-use-the-setup-helper).
+The steps run in a fixed order, and a rerun is safe. The helper installs no runner on either OS: the distributor service of the stack does. Refer to [Optional: use the setup helper](install-linux.md#optional-use-the-setup-helper) and [the Windows helper](install-windows.md#optional-use-the-setup-helper).
 
 ## Why Swarm and not container runner or another runner?
 
@@ -139,9 +139,9 @@ Stopping a busy stock Server Core container from outside kills its job after abo
 
 ## Which runner version do the nodes run?
 
-On Linux, the `runner-distributor` service decides, and the setup helper installs nothing. With the default setting, `current`, it follows the current release of CircleCI within major version 3, looks again every 24 hours, and verifies the SHA-256 of every download. To stay on a version, pin it with `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, and to go back, pin an older one. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+The `runner-distributor` service of the stack decides, and the setup helper installs nothing. With the default setting, `current`, it follows the current release of CircleCI within major version 3, looks again every 24 hours, and verifies the SHA-256 of every download. To stay on a version, pin it with `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, and to go back, pin an older one. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
-On Windows, `windows\Setup.ps1` installs a pinned version and verifies its SHA-256 checksum. Pass the version you want with `-RunnerVersion`, where the checksum comes from the release manifest.
+On Windows, `runner-distributor-windows` decides in the same way, with the same variables. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 
 ## How do I verify a release?
 

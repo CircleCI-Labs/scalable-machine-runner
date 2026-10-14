@@ -346,17 +346,21 @@ The container runs and logs the start-up lines, but the runner never claims a jo
 
 **Fix.** Never set `user:` in a Windows service, and never change `USER` in a derived image.
 
-### Access is denied on C:\machine-runner-swarm
+### The Windows runner fails to start: cannot access path current
 
-Starting `C:\machine-runner-swarm\bin\circleci-runner.exe` in a container fails with `Access is denied`, or reading `C:\machine-runner-swarm\VERSION` fails on the host.
+`docker service ps --no-trunc runners_windows-default` shows tasks that fail with `cannot access path ...\runner-bin\_data\current` (or `...\git\current`) or with `invalid mount config`, and Swarm starts the next task after 10 seconds.
 
-**Cause.** Files under `C:\machine-runner-swarm` have no usable access control list. The recursive `icacls` call can leave files with an empty list.
+**Cause.** The service `runner-distributor-windows` has not flipped the links `current` and `git\current` of the volume on this node yet. This is normal on a new node, because the first download of the runner and of portable Git takes a few minutes. It lasts when the distributor cannot install.
 
-**Fix.** Let every file inherit the access of the directory.
+**Fix.** Read the log of the distributor: `docker service logs runners_runner-distributor-windows`. A `SHA-256 mismatch`, a `cannot download` line, or `not adopting it` names the cause. The service must run on the node: `docker service ps runners_runner-distributor-windows` needs a task there, so the node must carry the label `machine-runner-swarm.windows-ltsc2022=true`, and the base image must be pulled. On a host behind a proxy, set `HTTPS_PROXY` on the distributor service. For a site without internet access, refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 
-```powershell
-icacls 'C:\machine-runner-swarm\*' /reset /T /C /Q
-```
+### The distributor of Windows keeps a version that should be gone
+
+The log says `circleci-runner <version> is in use: removing it at a later check`.
+
+**Cause.** Windows cannot remove files that a running container uses. A job on that version is still running.
+
+**Fix.** None needed: the distributor removes the version at a later check, when the job has ended.
 
 ### Error: could not find the system's IP address
 
@@ -368,7 +372,7 @@ icacls 'C:\machine-runner-swarm\*' /reset /T /C /Q
 
 Outbound connections fail with `Unable to connect to the remote server` or `no such host` for a few seconds after you create the swarm.
 
-**Fix.** Stage `C:\machine-runner-swarm` and pull the images first, and run `docker swarm init` last. `Setup.ps1` stages before it starts Swarm.
+**Fix.** Pull the images first, and run `docker swarm init` last. The distributor retries its downloads.
 
 ### Windows container exits with code 3221225786 after a stop
 
@@ -431,4 +435,4 @@ $ docker stack ps runners --no-trunc
 $ docker service logs --tail 200 runners_<service>
 ```
 
-On Linux, include the runner version and the log of the distributor: `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node, and `docker service logs --tail 100 runners_runner-distributor`. On Windows, include the contents of `C:\machine-runner-swarm\current\VERSION`. Then open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).
+On Linux, include the runner version and the log of the distributor: `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node, and `docker service logs --tail 100 runners_runner-distributor`. On Windows, include the log of `runner-distributor-windows`: `docker service logs --tail 100 runners_runner-distributor-windows`. Then open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).

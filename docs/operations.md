@@ -304,38 +304,34 @@ $ sudo env MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/cir
 
 ### Upgrade the runner on Windows
 
-The layout is the one of Linux. Each version has its own directory, `C:\machine-runner-swarm\<version>`, and the junction `C:\machine-runner-swarm\current` points to the installed version. The stack mounts the junction. Docker follows it when it creates a container, so the next container, which is the next job, runs the new version, and a job that runs now keeps the directory that it started with. `windows\tests\Test-Upgrade.ps1` checks this in CI. Windows cannot replace files that a running container uses, so never overwrite a version directory.
+The service `runner-distributor-windows` is the only way a runner and Git reach a Windows node. It works as the [Linux distributor](#upgrade-the-runner-on-linux): the same variables, the same policy, and the same rule that a runner service carries no version and no hash. An upgrade, a pin, and a rollback therefore change the distributor only. **No runner service restarts, so no busy job is killed**, which a stop would do after about 5 seconds. Refer to [Stop a busy Windows container](#stop-a-busy-windows-container).
 
-1. On every Windows node, stage the new version next to the old one. The helper downloads the runner and Git, verifies the checksums, and moves the junction:
+The distributor installs into the volume `runner-bin`, next to the versions that exist: `versions\<version>` for the runner, `git\<git version>` for portable Git. The links `current` and `git\current` are relative directory symbolic links to them, and the runner services mount the volume read-only through them: `current` at `C:\machine-runner-swarm`, and `git\current` at `C:\Program Files\Git`. Docker resolves a link when it creates a container, so the next container, which is the next job, runs the new version, and a job that runs now keeps the directory that it started with. Windows cannot replace or delete files that a running container uses, so the distributor never overwrites a version and never removes one that is in use: it tries again at its next check. `windows\tests\Test-Distributor.ps1` checks all of this in CI.
 
-   ```powershell
-   .\windows\Setup.ps1 -RunnerVersion <new version> -StageOnly
-   ```
+The settings are the variables of [the Linux table](#settings-of-the-distributor), set in `x-distributor-env` of `windows\stack\runners.yaml` and read from the environment of `docker stack deploy`, plus one for the pinned downloads of Git and 7-Zip:
 
-   By hand, repeat the steps of [Stage the runner and Git](install-windows.md#3-stage-the-runner-and-git) with the new `$runnerVersion`.
+| Variable | Effect |
+|---|---|
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | `current` (default) follows the manifest of CircleCI within `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` (default `3`) and looks again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` (default `24h`). A version such as `3.1.12` pins it |
+| `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | A comma-separated list of the SHA-256 values of the `circleci-runner_windows_amd64.tar.gz` tarballs that may be installed. It replaces the value of the manifest |
+| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | A mirror: `manifest.json` and `<version>/circleci-runner_windows_amd64.tar.gz` below this URL |
+| `MACHINE_RUNNER_SWARM_TOOLS_BASE_URL` | A directory URL that holds `PortableGit-<version>-64-bit.7z.exe` and `7zr.exe`, the two downloads that the script pins by SHA-256. Without it they come from GitHub |
 
-2. Check the version on each node:
+In PowerShell, set the variables in the environment of the shell that runs the deploy:
 
-   ```powershell
-   (Get-Item C:\machine-runner-swarm\current).Target
-   C:\machine-runner-swarm\current\bin\circleci-runner.exe --version
-   ```
+```powershell
+$env:MACHINE_RUNNER_SWARM_RUNNER_VERSION = '3.1.12'
+docker stack deploy -c deploy\runners.yaml runners
+```
 
-3. A replica that already waits for a job keeps the old version until it claims a job or exits after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack file. A forced update replaces it at once, but it also stops the containers of the service, which kills a running job after about 5 seconds. Force the update only while the class is idle. Refer to [Stop a busy Windows container](#stop-a-busy-windows-container).
+- **Upgrade.** With the default, a new release reaches every node within one check interval, with no redeploy. To move to a version yourself, pin it as above. A deploy without the variable sets `current` again, so set the same values on every deploy.
+- **Freeze the nodes now.** Pin the version that the nodes run now. It is installed, so the pin needs no network: `docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 runners_runner-distributor-windows`.
+- **Roll back.** Pin an older version. The distributor keeps the last 3 versions that were active, so a rollback to one of them only moves the link, with no network. A version that was removed is downloaded again.
+- **See what runs.** `docker service logs runners_runner-distributor-windows` shows each flip. On the node, `docker run --rm --mount type=volume,source=runners_runner-bin,target=C:\v,readonly mcr.microsoft.com/windows/servercore:ltsc2022 powershell -Command "Get-Content C:\v\history; (Get-Item C:\v\current).Target"` shows the history and the active version.
+- **Replicas that wait for a job** keep the old version until they claim a job or exit after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack file. A forced update replaces them at once, but it also stops the containers of the service, which kills a running job after about 5 seconds. Force the update only while the class is idle: `docker service update --force runners_windows-default`.
+- **A mirror.** Copy `manifest.json` and the tarballs as for [Linux](#run-the-downloads-from-a-mirror), with `windows` and `amd64` in the names, and copy the two pinned Git downloads into the tools directory. The distributor downloads with PowerShell, so an `https` mirror needs a certificate that the stock Server Core image trusts.
 
-   ```powershell
-   docker service update --force runners_windows-default
-   ```
-
-4. To roll back, run the helper with the previous version. It is staged already, so the command only moves the junction back:
-
-   ```powershell
-   .\windows\Setup.ps1 -RunnerVersion <previous version> -StageOnly
-   ```
-
-5. Delete the old version directory when no container uses it.
-
-A junction cannot be replaced in one step, so for a moment `current` does not exist. A container that Swarm creates in that moment does not start, and Swarm starts the next one after the restart delay of 10 seconds. The window is a few milliseconds long.
+A link cannot be replaced in one step on Windows, so for a moment `current` does not exist. A container that Swarm creates in that moment does not start, and Swarm starts the next one after the restart delay of 10 seconds. The window is a few milliseconds long. On a new node, the runner tasks fail in the same way until the first download of the distributor is done. The runner has no start-time check of the binary on Windows, because no entrypoint script exists: the distributor compares the active binary with its record at every check and installs it again when it changed. Refer to [Runner binary integrity on Windows](security.md#runner-binary-integrity-on-windows).
 
 ### Update the images
 
@@ -545,27 +541,10 @@ On a node that runs a docker-build class, jobs also leave images, volumes, and b
 
    The volume of the Windows persistent class is `runners_windows-persistent-cache`.
 
-   On Linux, the volume `runners_runner-bin` holds the runner and stays on every node after `docker stack rm`. Remove it on every Linux node:
+   The volume `runners_runner-bin` holds the runner (and Git on Windows) and stays on every node after `docker stack rm`. Remove it on every node, on Windows after the last container of the stack is gone:
 
    ```console
    $ docker volume rm runners_runner-bin
    ```
 
-3. Remove the nodes from the Swarm. Run `docker swarm leave` on each worker, then `docker swarm leave --force` on the last manager.
-4. On Windows, remove the host files. Linux nodes have none:
-
-   ```powershell
-   cmd /c rmdir C:\machine-runner-swarm\current
-   Remove-Item C:\machine-runner-swarm -Recurse -Force
-   ```
-
-5. Remove the images that you no longer need with `docker image rm`.
-6. In CircleCI, delete the tokens and then the resource classes. A class cannot be deleted while it has tokens.
-
-   ```console
-   $ circleci runner token list --resource-class <namespace>/linux-default
-   $ circleci runner token delete <token ID>
-   $ circleci runner resource-class delete <namespace>/linux-default
-   ```
-
-7. On Windows, keep BitLocker on if the host holds other data.
+3. Remove the nodes from the Swarm. Run `docker swarm leave` on each worker, then `docker swarm leave --force` on the last manager. No node has files outside Docker to remove.

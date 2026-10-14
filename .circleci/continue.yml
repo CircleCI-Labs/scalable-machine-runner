@@ -1038,7 +1038,8 @@ jobs:
   security-scan-images:
     description: >
       Trivy on every image that the repository pins (ci/security-scan.sh images): the CI jobs, the tests, the stack files.
-      Fails on a HIGH or CRITICAL finding that has a fix; the reports are artifacts. It pulls each image from its registry
+      Fails on a CRITICAL finding that has a fix and reports the HIGH ones (a table and a JSON file per image, as artifacts).
+      It pulls each image from its registry
       and builds nothing, so it needs no token. Runs only in the workflow security-scan.
     executor: linux-vm
     environment:
@@ -1056,8 +1057,8 @@ jobs:
 
   security-scan-go:
     description: >
-      govulncheck on proxy/ with the Go toolchain of the proxy builds (ci/security-scan.sh go). Fails on a vulnerability
-      that the proxy calls and that has a fix. Runs only in the workflow security-scan.
+      govulncheck on proxy/ with the Go toolchain of the proxy builds (ci/security-scan.sh go). Fails on any vulnerability
+      that the proxy calls. Runs only in the workflow security-scan.
     docker:
       - image: golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
     resource_class: small

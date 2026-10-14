@@ -322,7 +322,7 @@ configs:
   # Swarm configs cannot change, so the name carries the first 12 hex digits of the SHA-256 of the file: ci/config-names.sh --write
   # renames it after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
   # distributor, and only the distributor.
-  distributor-windows: {name: machine-runner-swarm-distributor-windows-c2d1e8a3baae, file: runner-distributor.ps1}
+  distributor-windows: {name: machine-runner-swarm-distributor-windows-cbb06ee57183, file: runner-distributor.ps1}
 
 volumes:
   runner-bin: {}                            # one per node: the runner, Git and the token proxy of that node

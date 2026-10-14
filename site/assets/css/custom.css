@@ -178,7 +178,6 @@ body {
 
 /* The icon is black line art on white: in dark mode and in the footer (always dark) it becomes light line art on the page */
 .dark .cci-brand-icon,
-.dark .cci-eyebrow-icon,
 .cci-footer-icon {
   filter: invert(1);
   mix-blend-mode: screen;
@@ -1067,42 +1066,8 @@ body {
   padding-block: 5rem 6rem;
 }
 
-.cci-eyebrow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.625rem;
-  margin: 0;
-  color: var(--cci-heading);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.cci-eyebrow-icon {
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 0.4375rem;
-  box-shadow: 0 0 0 1px var(--cci-border);
-}
-
-.cci-eyebrow .cci-tag {
-  background: var(--cci-midnight);
-  border-color: var(--cci-midnight);
-  color: #fff;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-}
-
-.dark .cci-eyebrow .cci-tag {
-  background: var(--cci-9pm);
-  border-color: var(--cci-9pm);
-}
-
 .cci-mega {
-  margin: 1.25rem 0 0;
+  margin: 0;
   color: var(--cci-heading);
   font-family: var(--cci-font-display);
   font-size: clamp(3rem, 6.4vw, 5.25rem);

@@ -59,7 +59,6 @@ params:
 
   # The landing page (layouts/home.html). The sections below the cards are the Markdown of README.md.
   home:
-    eyebrow: CircleCI Labs
     title: Machine runner swarm
     tagline: CircleCI machine runners on Docker Swarm, in containers or microVMs
     notice: >-

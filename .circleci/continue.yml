@@ -1009,11 +1009,12 @@ jobs:
             yq -o=json '.workflows | has("security-scan") | not' /tmp/compiled.yml | jq -e . > /dev/null \
               || { echo "the security-scan workflow runs without security-scan: true"; exit 1; }
       - run:
-          name: Table tests of the setup gate, the setup workflows (compiled per branch) and the scripts (changed files, deploy marker, preview comment)
+          name: Table tests of the setup gate, the setup workflows (compiled per branch), the scripts and the lists of the security scan
           command: |
             ci/tests/setup-gate.sh
             ci/tests/setup-config.sh /tmp/cli/circleci
             ci/tests/changed-files.sh
+            ci/security-scan.sh lists
             ci/tests/deploy-marker.sh
             ci/tests/preview-comment.sh
       - run:
@@ -1038,8 +1039,8 @@ jobs:
   security-scan-images:
     description: >
       Trivy on every image that the repository pins (ci/security-scan.sh images): the CI jobs, the tests, the stack files.
-      Fails on a CRITICAL finding that has a fix and reports the HIGH ones (a table and a JSON file per image, as artifacts).
-      It pulls each image from its registry
+      Two lists (ci/security-scan-images.txt): an infra image fails on a CRITICAL finding that has a fix, and the job images
+      and CI tools are only reported (a table and a JSON file per image, as artifacts). It pulls each image from its registry
       and builds nothing, so it needs no token. Runs only in the workflow security-scan.
     executor: linux-vm
     environment:

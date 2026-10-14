@@ -58,6 +58,10 @@ services:
       MACHINE_RUNNER_SWARM_JOB_SUDO: "false"
     secrets:
       - {source: linux-hardened-token, target: circleci_runner_config.yaml, uid: "2000", gid: "2000", mode: 0400}
+  runner-distributor:   # global, like the shipped one: the host script must leave it out of the override and out of the container counts
+    image: cimg/base:2026.10
+    command: ["sleep", "3600"]
+    deploy: {mode: global}
   linux-java:
     <<: *runner
     environment:

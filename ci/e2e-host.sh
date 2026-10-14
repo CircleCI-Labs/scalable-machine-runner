@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Job A of the Linux e2e (see docs/ci.md): hosts the runner as a Docker Swarm service.
 #
-#   ci/e2e-host.sh prepare   linux/setup.sh --swarm-init --install: a single-node swarm and the
-#                            host layout under /opt/machine-runner-swarm
+#   ci/e2e-host.sh prepare   linux/setup.sh --swarm-init: a single-node swarm (nothing else: the
+#                            runner-distributor service of the stack installs the runner)
 #   ci/e2e-host.sh run       deploy the shipped stack and host probes b1 and b2 on service
 #                            linux-default (jobs keep sudo), then probe b3 on service
 #                            linux-hardened (no sudo), and print the verdict
@@ -18,9 +18,10 @@
 #   b3   linux-hardened: no sudo, the token and the runner's environment are unreadable
 #
 # The stack is the shipped one (E2E_STACK_FILE) with an override layered on top: the active
-# service runs one replica of a pinned stock image, every other service has none. The runner
-# binary and the entrypoint come from the host through the read-only /opt/machine-runner-swarm mount that the
-# shipped stack declares. Both services carry the same e2e class token; only one is deployed
+# service runs one replica of a pinned stock image, every other runner service has none. The
+# runner-distributor service stays as shipped: it downloads CircleCI's current runner release from
+# CircleCI's real manifest, and the runner and the entrypoint come through the read-only volume and
+# the Swarm config that the shipped stack declares. Both services carry the same e2e class token; only one is deployed
 # at a time, so a probe is always claimed by the service it was written for.
 #
 # Environment
@@ -79,18 +80,17 @@ rel() { echo "${1#"${repo}"/}"; }
 # ---------------------------------------------------------------------------
 prepare() {
   docker version --format 'docker client {{.Client.Version}}, server {{.Server.Version}}'
-  log "sudo $(rel "${setup}") --swarm-init --install"
-  sudo "${setup}" --swarm-init --install
+  log "sudo $(rel "${setup}") --swarm-init"
+  sudo "${setup}" --swarm-init
   docker node ls
-  ls -l /opt/machine-runner-swarm /opt/machine-runner-swarm/current/bin
-  /opt/machine-runner-swarm/current/bin/circleci-runner --version
 }
 
 # ---------------------------------------------------------------------------
 # Stack files
 # ---------------------------------------------------------------------------
-rendered_services() {
-  docker stack config -c "${stack_file}" | awk '/^services:/{s=1;next} /^[^ ]/{s=0} s && /^  [^ ]/{sub(/^  /,"");sub(/:$/,"");print}'
+rendered_services() {  # the runner classes: runner-distributor is a global service of its own
+  docker stack config -c "${stack_file}" | awk '/^services:/{s=1;next} /^[^ ]/{s=0} s && /^  [^ ]/{sub(/^  /,"");sub(/:$/,"");print}' |
+    grep -vx runner-distributor
 }
 rendered_secrets() {
   docker stack config -c "${stack_file}" | awk '/^secrets:/{s=1;next} /^[^ ]/{s=0} s && /^    name:/{print $2}'
@@ -110,6 +110,7 @@ write_override() {
     environment:
       CIRCLECI_RUNNER_IDLE_TIMEOUT: "${idle}"
       CIRCLECI_RUNNER_MAX_RUN_TIME: "${max_run}"
+      MACHINE_RUNNER_SWARM_RUNNER_WAIT: "600"   # the first deployment waits for the distributor: image pull and the runner download
     volumes:
       - type: bind
         source: ${evidence_dir}
@@ -162,7 +163,9 @@ token_rejected() {
   grep -qE '401 \(Unauthorized\)|status code: 401' "${service_log}" 2>/dev/null
 }
 
-event_count() { grep -c "^$1 " "${events_log}" 2>/dev/null || true; }
+# The events of the runner containers: the distributor's own container events (start, and die when the stack is removed) are no runner's.
+runner_events() { grep -v " ${stack}_runner-distributor\$" "${events_log}" 2>/dev/null || true; }
+event_count() { runner_events | grep -c "^$1 " || true; }
 
 # nth_start SERVICE N: ID of the Nth container (1-based) that Swarm started for SERVICE.
 nth_start() {
@@ -278,8 +281,8 @@ host() {
 verify() {
   local ok=1 starts dies ids codes p ev
   starts=$(event_count start); dies=$(event_count die)
-  ids=$(awk '$1 == "start" {print $2}' "${events_log}" | sort -u | wc -l)
-  codes=$(awk '$1 == "die" {print $3}' "${events_log}" | sort -u | tr '\n' ' ')
+  ids=$(runner_events | awk '$1 == "start" {print $2}' | sort -u | wc -l)
+  codes=$(runner_events | awk '$1 == "die" {print $3}' | sort -u | tr '\n' ' ')
   log "containers: started=${starts} exited=${dies} distinct=${ids} exit_codes=[${codes% }]"
   [ "${starts}" -ge 3 ] && [ "${dies}" -ge 3 ] || { log "expected at least 3 containers (b1, b2, b3)"; ok=0; }
   [ "${ids}" -ge 3 ] || { log "expected 3 distinct container IDs"; ok=0; }

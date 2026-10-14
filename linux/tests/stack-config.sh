@@ -33,7 +33,8 @@ for s in "${services[@]}"; do
     continue
   fi
   check "$s" 'user: "0"' '^    user: "0"$'
-  check "$s" 'entrypoint /opt/machine-runner-swarm/bin/circleci-runner-entrypoint' '^      - /opt/machine-runner-swarm/bin/circleci-runner-entrypoint$'
+  check "$s" 'entrypoint /circleci-runner-entrypoint (a Swarm config)' '^      - /circleci-runner-entrypoint$'
+  check "$s" 'the entrypoint config at /circleci-runner-entrypoint, mode 0555' '^        target: /circleci-runner-entrypoint$'
   check "$s" 'init: true' '^    init: true$'
   check "$s" 'stop_grace_period 5h5m' '^    stop_grace_period: 5h5m0s$'
   check "$s" 'restart_policy condition any' '^        condition: any$'
@@ -61,8 +62,13 @@ for s in "${services[@]}"; do
   check "$s" 'secret uid 2000 (the runner)' '^        uid: "2000"$'
   check "$s" 'secret gid 2000' '^        gid: "2000"$'
   check "$s" 'secret mode 0400' '^        mode: 256$'
-  check "$s" 'the read-only /opt/machine-runner-swarm bind' '^        read_only: true$'
-  check "$s" 'the bind source /opt/machine-runner-swarm/current (a link to the installed version)' '^        source: /opt/machine-runner-swarm/current$'
+  check "$s" 'the per-node volume runner-bin at /opt/machine-runner-swarm' '^        source: runner-bin$'
+  check "$s" 'the volume mounted read-only' '^        read_only: true$'
+  # an upgrade changes only the distributor: no version and no hash in a runner service, and no host directory
+  if grep -qE 'MACHINE_RUNNER_SWARM_(RUNNER_VERSION|RUNNER_SHA256|DOWNLOAD_BASE_URL)|source: /opt/machine-runner-swarm' <<< "$block"; then
+    echo "  $s: carries a runner version, hash, mirror or host directory: only runner-distributor may"
+    problems=$((problems + 1))
+  fi
   check "$s" 'its own network' "^      $s: null$"
   if [[ $s != linux-default-ssh ]]; then
     # only the SSH add-on publishes a port or turns the SSH rerun feature on
@@ -119,19 +125,43 @@ if ! diff_out=$(diff <(service_block linux-default | without_ssh) <(service_bloc
 fi
 
 
-# DRAFT distributor.yaml: no host bind, the runner volume is read-only, the entrypoint is a config, and the distributor is global from a pinned stock image
-cfg=$(docker stack config -c "$dir/runners.yaml" -c "$dir/distributor.yaml") || { echo "FAIL: docker stack config rejected: runners.yaml distributor.yaml"; exit 1; }
-for s in linux-default linux-java linux-hardened; do
-  block=$(service_block "$s")
-  check "$s (distributor.yaml)" 'the read-only runner-bin volume' '^        source: runner-bin$'
-  check "$s (distributor.yaml)" 'the config entrypoint' '^      - /circleci-runner-entrypoint$'
-  check "$s (distributor.yaml)" 'the pinned version' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: '
-  if grep -q 'source: /opt/machine-runner-swarm/current' <<< "$block"; then echo "  $s (distributor.yaml): still binds the host directory"; problems=$((problems + 1)); fi
-done
+# runner-distributor: one per node (global), from a stock image pinned by digest, its script a Swarm config, the only writer of runner-bin
 block=$(service_block runner-distributor)
 check runner-distributor 'a global service' '^      mode: global$'
 check runner-distributor 'an image pinned by digest' '^    image: alpine:3@sha256:[0-9a-f]{64}$'
+check runner-distributor 'the script as a config' '^        target: /runner-distributor.sh$'
+check runner-distributor 'a read-only root file system' '^    read_only: true$'
 check runner-distributor 'a writable runner-bin volume' '^        source: runner-bin$'
+check runner-distributor 'every Linux node' '^          - node.platform.os == linux$'
+check runner-distributor 'the version policy, current by default' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: current$'
+check runner-distributor 'the major version it follows' '^      MACHINE_RUNNER_SWARM_RUNNER_MAJOR: "3"$'
+check runner-distributor 'the check interval' '^      MACHINE_RUNNER_SWARM_CHECK_INTERVAL: 24h$'
+check runner-distributor 'the CircleCI download URL' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://circleci-binary-releases.s3.amazonaws.com/circleci-runner$'
+check runner-distributor 'cap_drop ALL' '^      - ALL$'
+if grep -q '^        read_only: true$' <<< "$block"; then
+  echo "  runner-distributor: the runner-bin volume must be writable"
+  problems=$((problems + 1))
+fi
+if grep -q 'docker-build != true' <<< "$block"; then
+  echo "  runner-distributor: must also run on a Docker-build node, whose runner needs the binary"
+  problems=$((problems + 1))
+fi
+# the version policy can be set at deploy time, and the variables reach the distributor only
+cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_CHECK_INTERVAL=1h \
+  MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc docker stack config -c "$dir/runners.yaml")
+block=$(service_block runner-distributor)
+check runner-distributor 'a pinned version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: 3.1.12$'
+check runner-distributor 'the mirror from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://mirror.example.com/circleci-runner$'
+check runner-distributor 'the explicit SHA-256 from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_SHA256: abc$'
+for svc in linux-default linux-java linux-hardened; do
+  if grep -q 'mirror.example.com\|RUNNER_SHA256' <<< "$(service_block "$svc")"; then echo "  $svc: the distributor's settings reached a runner service"; problems=$((problems + 1)); fi
+done
+
+# every Swarm config is named after its content (ci/config-names.sh)
+if ! out=$("$dir/../../ci/config-names.sh" 2>&1); then
+  echo "  $out" | sed 's/^/  /'
+  problems=$((problems + 1))
+fi
 
 echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml services=${#services[@]} problems=$problems"
 if [[ $problems -eq 0 ]]; then

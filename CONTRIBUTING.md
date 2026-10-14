@@ -76,6 +76,7 @@ Each Linux test prints `RESULT` lines and exits 0 when it passes. `run-all.sh` r
 | `placement.sh` | Placement on a manager and a worker, and `docker-build.yaml` |
 | `distributor.sh` | The `runner-distributor` service: runners that wait for it and then exit 80, a node with no install, a joining node, an upgrade under three busy jobs, a rollback without a download, `current` that follows the manifest, the major-version guard, pruning to 3 versions, a tampered binary, a wrong SHA-256, and CircleCI's real manifest. Needs network access |
 | `persistent.sh` | Continuous mode and `persistent.yaml` |
+| `microvm.sh` | The microVM add-on with Kata Containers: the node label, a guest kernel, DNS through the forwarder, a read-only node directory, dockerd in the VM, and the entrypoint guard. Skipped without `/dev/kvm`. Downloads Kata (about 1 GB) unless `SWARM_TEST_KATA_DIR` or `SWARM_TEST_KATA_TARBALL` points at a copy. Not part of `run-all.sh` |
 | `drain.sh` | SIGTERM during a job: the job finishes |
 | `limits.sh` | `init`, `ulimits`, pids, memory, CPU, reservations, and the capability sets take effect |
 | `network.sh` | Network isolation between classes, and between the replicas of a class |

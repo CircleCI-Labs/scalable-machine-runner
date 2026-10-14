@@ -74,6 +74,7 @@ Linux runs on Ubuntu LTS and RHEL 8 or later, on amd64 and arm64. Refer to the [
 | [Resource Classes](docs/resource-classes.md) | Define and size classes, choose replica counts, persistent mode, and the configuration reference |
 | [Images](docs/images.md) | Stock images with the mounted runner, and your own images |
 | [Docker Builds](docs/docker-builds.md) | The opt-in host engine pattern and the alternatives |
+| [Container mode (prototype)](docs/container-mode.md) | `docker:` executor jobs on Swarm with no Kubernetes: the agent, security model, and limits |
 | [Security](docs/security.md) | Threat model, token model, a comparison with the official installs, hardening, and egress |
 | [Operations](docs/operations.md) | Status, running the cluster, runner upgrades and rollbacks, token rotation, node drain, and uninstall |
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms, causes, and fixes |

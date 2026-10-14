@@ -52,7 +52,7 @@ The runner containers poll CircleCI for work. Nothing connects to a runner, so t
 
 ## Add-on stack files and how they merge
 
-Each operating system has one main stack file, `runners.yaml`, that defines the default classes and deploys on its own. The optional classes live in add-on stack files next to it: `persistent.yaml`, `docker-build.yaml`, and `ssh-rerun.yaml` on both systems, and `custom-image.yaml` on Windows. An add-on stack file is not a patch of the main file. It defines services of its own, and each service needs its own resource class and its own `<service>-token` secret.
+Each operating system has one main stack file, `runners.yaml`, that defines the default classes and deploys on its own. The optional classes live in add-on stack files next to it: `persistent.yaml`, `docker-build.yaml`, and `ssh-rerun.yaml` on both systems, and `custom-image.yaml` on Windows. The prototype `container-mode.yaml` adds a service that runs Docker-executor jobs, not a class. Refer to [Container mode](container-mode.md). An add-on stack file is not a patch of the main file. It defines services of its own, and each service needs its own resource class and its own `<service>-token` secret.
 
 `docker stack deploy -c runners.yaml -c persistent.yaml runners` reads the files in the order given and merges them into one stack, as Docker Compose does for several `-f` files. A service, network, secret, or volume that only one file defines is added, and a key that several files set takes the value of the later file. The shipped add-on stack files only add services. YAML anchors work inside one file only, so each add-on stack file repeats the common service settings, and a change to one of them goes into every file that you use.
 

@@ -125,6 +125,10 @@ No. Runners connect outbound over HTTPS, and the shipped classes publish no port
 
 Yes, with a persistent class. It gives up the clean environment, so use it only for trusted projects. Refer to [Persistent mode](resource-classes.md#persistent-mode).
 
+## Can it run Docker executor jobs?
+
+As a prototype, yes. The classes of this repository run jobs with `machine: true`. [Container mode](container-mode.md) adds a Swarm service on each opted-in node, the swarm container agent, that runs jobs with a `docker:` list and its service containers (`localhost` works between them), as container runner does on Kubernetes. It needs no image of its own: the service compiles the agent from Swarm configs on a stock Go image. It is Linux only, it has no SSH reruns and no Docker layer caching, and it has not yet run against the real CircleCI API. A resource class serves one mode, so give container mode its own classes and tokens. For production jobs that need the Docker executor today, use container runner.
+
 ## Can I use Rerun job with SSH?
 
 Yes, with the add-on stack file `ssh-rerun.yaml`. It defines the class `linux-default-ssh` (`windows-default-ssh` on Windows), which sets `CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR`, publishes port 54782 in host mode, and runs at most one replica on each node. A rerun uses the class of the original job, so the job that you debug must run on that class. The Swarm side was proven by hand with a real runner. No CI test logs in over SSH, and the Windows file is untested. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh).
@@ -162,9 +166,9 @@ The jobs run in unprivileged containers on a shared kernel, so some jobs belong 
 | `setup_remote_docker` | No. It belongs to the Docker executor | The docker-build class, or a daemonless builder |
 | Docker commands in a job | Only in the docker-build class, which is root-equivalent on its node | [Docker Builds](docker-builds.md) |
 | A GPU | Not supported or tested. The stack files declare no generic resources | A machine runner on a GPU host |
-| Service containers (`docker:` secondary images) | No. Jobs use `machine: true` | Install the service in the image, or use container runner |
+| Service containers (`docker:` secondary images) | Only in [container mode](container-mode.md), a prototype. Machine classes use `machine: true` | Container mode, install the service in the image, or use container runner |
 | Desktop or UI automation on Windows | No. Windows jobs are headless | A machine runner on a host |
-| A `docker:` executor job | No. Jobs use `machine: true`, and the image of the service is the environment of the job | Container runner |
+| A `docker:` executor job | Only in [container mode](container-mode.md), a prototype, in classes of its own. Machine classes use `machine: true`, and the image of the service is the environment of the job | Container mode, or container runner |
 
 ## Do proxies and custom certificate authorities work?
 

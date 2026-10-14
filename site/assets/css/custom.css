@@ -1,7 +1,7 @@
 /*
  * The CircleCI look of the docs site (docs/ci.md, "Docs site"). Hextra loads this file after its own CSS, so plain
  * rules here override the theme. The values come from the CircleCI brand guidelines: the colors, Inter for text and
- * Space Grotesk for the mega title only, Lucide icons, and the bundled logo and jelly pixels, unchanged.
+ * Space Grotesk for the mega title only, IBM Plex Mono for code, Lucide icons, and the bundled logo and jelly pixels, unchanged.
  * The structure follows circleci.com/docs: a header with the logo and a product tag, a left navigation of
  * labelled sections, blue links, and dark rounded code blocks.
  */
@@ -39,8 +39,8 @@
 
   --cci-font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --cci-font-display: "Space Grotesk", var(--cci-font);
-  /* The brand allows Inter and Space Grotesk only, and neither is monospaced: code uses the monospace of the system. */
-  --cci-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  /* Neither font of the brand is monospaced: code is set in IBM Plex Mono, as on circleci.com/docs. */
+  --cci-font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
   /* Hextra */
   --default-font-family: var(--cci-font);
@@ -1330,7 +1330,12 @@ body {
   }
 
   .cci-terminal pre {
-    font-size: 0.6875rem;
+    padding-inline: 1rem;
+    font-size: 0.65rem;
+  }
+
+  .cci-t-image {
+    display: none;
   }
 
   .content h1 {

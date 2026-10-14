@@ -32,7 +32,7 @@
 [CmdletBinding()]
 param(
     [string] $Image,
-    [string] $SwarmRoot = 'C:\machine-runner-swarm',
+    [string] $RunnerVolume = 'runners_runner-bin',
     [switch] $Online,
     [ValidateSet('all', 'docker', 'swarm')][string] $Mode = 'all',
     [int] $JobSeconds = 40,
@@ -114,7 +114,7 @@ try {
         if ($Online) {
             # --- stop-real-runner: the real runner, a bogus token, nothing to drain -------------------------
             $name = "swarm-stop-real-$PID"
-            $mounts = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot
+            $mounts = Get-SwarmStockMountArgument -Volume $RunnerVolume
             $stackEnv = Get-SwarmStackEnvironment
             $run = @('run', '--detach', '--name', $name) + $iso + $mounts + (ConvertTo-SwarmEnvArgument -Environment $stackEnv) + @(
                 '--env', 'CIRCLECI_RUNNER_NAME=swarm-stop-real', '--env', 'CIRCLECI_RUNNER_API_AUTH_TOKEN=swarm-stop-not-a-real-token',

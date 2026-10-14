@@ -109,10 +109,11 @@ Describe 'Get-SwarmStackEnvironment and the stock mounts' {
         $a | Should -Be @('--env', 'A=1', '--env', 'B=2')
     }
 
-    It 'mounts the current junction at C:\machine-runner-swarm and its Git where the task agent expects it, read-only' {
-        $m = Get-SwarmStockMountArgument -SwarmRoot 'D:\machine-runner-swarm'
-        $m | Should -Contain 'type=bind,source=D:\machine-runner-swarm\current,target=C:\machine-runner-swarm,readonly'
-        $m | Should -Contain 'type=bind,source=D:\machine-runner-swarm\current\git,target=C:\Program Files\Git,readonly'
+    It 'mounts the links current and git\current of the runner-bin volume at C:\machine-runner-swarm and where the task agent expects Git, read-only' {
+        $m = Get-SwarmStockMountArgument -Volume 'v1'
+        $m | Should -Contain 'type=volume,source=v1,target=C:\machine-runner-swarm,readonly,volume-subpath=current'
+        $m | Should -Contain 'type=volume,source=v1,target=C:\Program Files\Git,readonly,volume-subpath=git\current'
+        (Get-SwarmStockMountArgument)[1] | Should -Match 'source=runners_runner-bin,'
     }
 }
 
@@ -127,7 +128,7 @@ Describe 'Windows-only test scripts' {
 
     It 'has a syntax-clean <Name>' -TestCases @(
         @{ Name = 'Test-Injection.ps1' }, @{ Name = 'Test-Ephemerality.ps1' }, @{ Name = 'Test-Exit80.ps1' },
-        @{ Name = 'Test-Placement.ps1' }, @{ Name = 'Test-StopHandling.ps1' }, @{ Name = 'Test-Persistent.ps1' }, @{ Name = 'Test-Upgrade.ps1' }
+        @{ Name = 'Test-Placement.ps1' }, @{ Name = 'Test-StopHandling.ps1' }, @{ Name = 'Test-Persistent.ps1' }, @{ Name = 'Test-Distributor.ps1' }, @{ Name = 'Test-Install.ps1' }
     ) {
         param($Name)
         $errors = $null
@@ -149,7 +150,7 @@ Describe 'Windows-only test scripts' {
 
     It 'prints the RESULT and CHECK lines the CI expectations promise' {
         foreach ($pair in @(@('Test-Injection.ps1', 'RESULT injection'), @('Test-Ephemerality.ps1', 'Measure-SwarmFakeJobLine'), @('SwarmTestHelpers.psm1', 'RESULT mode='), @('Test-Exit80.ps1', 'RESULT exit80'),
-                @('Test-Placement.ps1', 'RESULT placement'), @('Test-StopHandling.ps1', 'RESULT stop'), @('Test-Persistent.ps1', 'RESULT persistent'), @('Test-Upgrade.ps1', 'RESULT upgrade'))) {
+                @('Test-Placement.ps1', 'RESULT placement'), @('Test-StopHandling.ps1', 'RESULT stop'), @('Test-Persistent.ps1', 'RESULT persistent'), @('Test-Distributor.ps1', 'RESULT distributor'), @('Test-Install.ps1', 'RESULT install'))) {
             (Get-Content -LiteralPath (Join-Path $PSScriptRoot $pair[0]) -Raw) | Should -Match ([regex]::Escape($pair[1]))
         }
     }

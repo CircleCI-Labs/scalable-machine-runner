@@ -226,16 +226,63 @@ function ConvertTo-SwarmEnvArgument {
     return $list
 }
 
+function Get-SwarmEncodedCommandArgument {
+    <#
+    .SYNOPSIS
+        "-EncodedCommand", "<base64>" for powershell.exe: a script with quotes and line breaks reaches a native command
+        unchanged, which Windows PowerShell 5.1 does not guarantee for a plain argument.
+    #>
+    param([Parameter(Mandatory = $true)][string] $Script)
+    return @('-EncodedCommand', [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($Script)))
+}
+
 function Get-SwarmStockMountArgument {
     <#
     .SYNOPSIS
-        The two read-only mounts of a stock-image service as docker run arguments: SwarmRoot\current (a junction to the
-        installed version, as in the stack files) at C:\machine-runner-swarm, and SwarmRoot\current\git at C:\Program Files\Git
-        (the path the task agent hard-codes for tar.exe).
+        The two read-only mounts of a stock-image service as docker run arguments, as in the stack files: the volume
+        runner-bin of the node (filled by the distributor) with the subpath current at C:\machine-runner-swarm, and with the
+        subpath git\current at C:\Program Files\Git (the path the task agent hard-codes for tar.exe). Docker resolves the
+        two links when it creates the container.
     #>
-    param([string] $SwarmRoot = 'C:\machine-runner-swarm')
-    return @('--mount', "type=bind,source=$SwarmRoot\current,target=C:\machine-runner-swarm,readonly",
-        '--mount', "type=bind,source=$SwarmRoot\current\git,target=C:\Program Files\Git,readonly")
+    param([string] $Volume = 'runners_runner-bin')
+    return @('--mount', "type=volume,source=$Volume,target=C:\machine-runner-swarm,readonly,volume-subpath=current",
+        '--mount', "type=volume,source=$Volume,target=C:\Program Files\Git,readonly,volume-subpath=git\current")
+}
+
+function Install-SwarmDistributor {
+    <#
+    .SYNOPSIS
+        Deploys the shipped windows\stack\runners.yaml with no runner replicas, so that its distributor service installs the
+        runner and portable Git into the volume <Stack>_runner-bin, and waits until it has flipped both links. Returns
+        @{ Ok; Detail; Log }. The Swarm secret of the class is a made-up one, created here when it is missing.
+    #>
+    param(
+        [string] $Stack = 'runners',
+        [string] $StackFile = (Join-Path $PSScriptRoot '..\stack\runners.yaml'),
+        [int] $TimeoutSeconds = 1500,
+        [string] $DockerCommand = 'docker'
+    )
+    $secret = 'windows-default-token'
+    if ((Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('secret', 'inspect', $secret)).ExitCode -ne 0) {
+        $file = Join-Path ([IO.Path]::GetTempPath()) "swarm-secret-$PID.yaml"
+        [IO.File]::WriteAllText($file, "api:`n  auth_token: swarm-test-not-a-real-token`n")
+        $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('secret', 'create', $secret, $file)
+        Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+        if ($r.ExitCode -ne 0) { return @{ Ok = $false; Detail = "docker secret create failed: $($r.Output -join ' ')"; Log = '' } }
+    }
+    $override = Join-Path ([IO.Path]::GetTempPath()) "swarm-distributor-override-$PID.yaml"
+    [IO.File]::WriteAllText($override, "services:`n  windows-default:`n    deploy:`n      replicas: 0`n")
+    $r = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('stack', 'deploy', '--resolve-image', 'never', '-c', $StackFile, '-c', $override, $Stack)
+    Remove-Item -LiteralPath $override -Force -ErrorAction SilentlyContinue
+    if ($r.ExitCode -ne 0) { return @{ Ok = $false; Detail = "docker stack deploy failed: $($r.Output -join ' ')"; Log = '' } }
+    $service = "${Stack}_runner-distributor-windows"
+    $log = ''
+    $ok = Wait-SwarmCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 10 -Condition {
+        $script:distLog = ((Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('service', 'logs', '--raw', $service)).Output -join "`n")
+        ($script:distLog -match '\[ ok \] current -> versions') -and ($script:distLog -match '\[ ok \] git\\current -> git')
+    }
+    $log = $script:distLog
+    return @{ Ok = $ok; Detail = "the distributor did not install the runner and Git within ${TimeoutSeconds}s"; Log = $log }
 }
 
 function Initialize-SwarmFakeRunner {
@@ -244,11 +291,18 @@ function Initialize-SwarmFakeRunner {
         Compiles fixtures\FakeRunner.cs with the csc.exe that ships with .NET Framework and returns the path of
         FakeRunner.exe in OutputDirectory. The directory is made readable for containers.
     #>
-    param([Parameter(Mandatory = $true)][string] $OutputDirectory, [Parameter(Mandatory = $true)][string] $SourcePath)
+    param([Parameter(Mandatory = $true)][string] $OutputDirectory, [Parameter(Mandatory = $true)][string] $SourcePath,
+        [string] $Version, [string] $ExeName = 'FakeRunner.exe')
     New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+    if ($Version) {
+        # A fake release: the binary reports this version (the marker @VERSION@ of the source).
+        $patched = Join-Path ([IO.Path]::GetTempPath()) "FakeRunner-$PID-$([guid]::NewGuid().ToString('N')).cs"
+        [IO.File]::WriteAllText($patched, ([IO.File]::ReadAllText($SourcePath)).Replace('@VERSION@', $Version))
+        $SourcePath = $patched
+    }
     $csc = Join-Path $env:windir 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     if (-not (Test-Path -LiteralPath $csc)) { throw "csc.exe not found at $csc (it ships with .NET Framework)" }
-    $exe = Join-Path $OutputDirectory 'FakeRunner.exe'
+    $exe = Join-Path $OutputDirectory $ExeName
     $saved = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     $output = @(& $csc /nologo "/out:$exe" $SourcePath 2>&1 | ForEach-Object { "$_" })
@@ -276,4 +330,4 @@ function Measure-SwarmFakeJobLine {
 
 Export-ModuleMember -Function Invoke-SwarmDocker, Write-SwarmCheck, Get-SwarmCheckCount, Clear-SwarmCheckCount, Get-SwarmHostBuild, Get-SwarmWindowsTag,
 Get-SwarmImageBuild, Test-SwarmProcessIsolation, ConvertFrom-SwarmServiceTaskLine, Get-SwarmServiceTask, Wait-SwarmCondition, Get-SwarmAdvertiseAddress,
-Initialize-SwarmCluster, Get-SwarmNodeId, Grant-SwarmAuthenticatedUserRead, Initialize-SwarmFakeRunner, Get-SwarmStackEnvironment, ConvertTo-SwarmEnvArgument, Get-SwarmStockMountArgument, Measure-SwarmFakeJobLine
+Initialize-SwarmCluster, Get-SwarmNodeId, Grant-SwarmAuthenticatedUserRead, Initialize-SwarmFakeRunner, Get-SwarmStackEnvironment, ConvertTo-SwarmEnvArgument, Get-SwarmStockMountArgument, Get-SwarmEncodedCommandArgument, Install-SwarmDistributor, Measure-SwarmFakeJobLine

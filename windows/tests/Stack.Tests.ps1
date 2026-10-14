@@ -1,4 +1,4 @@
-# Pester 5+ checks of windows/stack/*.yaml: the invariants of the no-entrypoint design. Plain text checks, so they
+# Pester 5+ checks of windows/stack/*.yaml: the invariants of the no-entrypoint design and of the runner distributor. Plain text checks, so they
 # run without Docker or a YAML module; "docker stack config" does the schema check in CI.
 
 BeforeAll {
@@ -12,9 +12,9 @@ BeforeAll {
         # One block per service: from "  <name>:" under services: to the next service or the top-level key after them.
         $start = $text.IndexOf("`nservices:")
         $end = $text.Length
-        foreach ($next in "`nvolumes:", "`nsecrets:") { $i = $text.IndexOf($next, $start); if ($i -gt 0 -and $i -lt $end) { $end = $i + 1 } }
+        foreach ($next in "`nvolumes:", "`nsecrets:", "`nconfigs:") { $i = $text.IndexOf($next, $start); if ($i -gt 0 -and $i -lt $end) { $end = $i + 1 } }
         $services = $text.Substring($start, $end - $start)
-        foreach ($m in [regex]::Matches($services, '(?ms)^  (windows-[a-z-]+):\r?\n(.*?)(?=^  windows-[a-z-]+:|\z)')) {
+        foreach ($m in [regex]::Matches($services, '(?ms)^  (windows-[a-z-]+):\r?\n(.*?)(?=^  [a-z][a-z-]+:|\z)')) {
             $script:blocks[$m.Groups[1].Value] = $m.Groups[2].Value
             $script:fileOf[$m.Groups[1].Value] = $name
         }
@@ -45,7 +45,7 @@ Describe 'the stack files' {
             }
             foreach ($v in $used) { $declared | Should -Contain $v -Because "$name uses volume $v" }
         }
-        $script:files['persistent.yaml'] | Should -Match '(?m)^volumes:\r?\n  windows-persistent-cache: \{\}'
+        $script:files['persistent.yaml'] | Should -Match '(?m)^volumes:\r?\n(  .*\r?\n)*?  windows-persistent-cache: \{\}'
     }
 
     It 'declare every secret they use, as external, in the same file' {
@@ -56,9 +56,9 @@ Describe 'the stack files' {
         }
     }
 
-    It 'have no entrypoint script anywhere' {
+    It 'have no entrypoint script in a runner service: the runner is the main process' {
         $script:allText | Should -Not -Match 'circleci-runner-entrypoint'
-        $script:allText | Should -Not -Match 'powershell\.exe'
+        foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Not -Match 'powershell\.exe' }
     }
 
     It 'run circleci-runner.exe directly with --config on the secret, from the stock anchor in each file' {
@@ -68,13 +68,37 @@ Describe 'the stack files' {
         foreach ($s in $script:stockServices) { $script:blocks[$s] | Should -Match '<<: \[\*runner, \*stock\]' }
     }
 
-    It 'mount the junction current of the installed version read-only, Git at the path the task agent hard-codes' -TestCases @(
+    It 'mount the volume runner-bin read-only twice, through links that Docker resolves when it creates the container: current at C:\machine-runner-swarm and Git at the path the task agent hard-codes' -TestCases @(
         @{ Service = 'windows-default' }, @{ Service = 'windows-custom' }, @{ Service = 'windows-persistent' }, @{ Service = 'windows-docker-build' }, @{ Service = 'windows-default-ssh' }
     ) {
         param($Service)
         $script:blocks[$Service] | Should -Match '- \*runner-mount\r?\n      - \*git-mount'
-        $script:files[$script:fileOf[$Service]] | Should -Match "(?m)^x-runner-mount: &runner-mount.*\r?\n  type: bind\r?\n  source: 'C:\\machine-runner-swarm\\current'"
-        $script:files[$script:fileOf[$Service]] | Should -Match "(?m)^x-git-mount: &git-mount.*\r?\n  type: bind\r?\n  source: 'C:\\machine-runner-swarm\\current\\git'\r?\n  target: 'C:\\Program Files\\Git'\r?\n  read_only: true"
+        $text = $script:files[$script:fileOf[$Service]]
+        $text | Should -Match "(?m)^x-runner-mount: &runner-mount.*\r?\n  type: volume\r?\n  source: runner-bin.*\r?\n  target: 'C:\\machine-runner-swarm'.*\r?\n  read_only: true\r?\n  volume:\r?\n    subpath: current\b"
+        $text | Should -Match "(?m)^x-git-mount: &git-mount.*\r?\n  type: volume\r?\n  source: runner-bin.*\r?\n  target: 'C:\\Program Files\\Git'.*\r?\n  read_only: true\r?\n  volume:\r?\n    subpath: 'git\\current'"
+        $text | Should -Match '(?m)^volumes:\r?\n(  .*\r?\n)*?  runner-bin: \{\}' -Because 'every file also deploys alone'
+    }
+
+    It 'carry no runner version, hash or mirror in a runner service: an upgrade changes the distributor only, so no runner restarts' {
+        foreach ($s in $script:blocks.Keys) {
+            $script:blocks[$s] | Should -Not -Match 'MACHINE_RUNNER_SWARM_(RUNNER_VERSION|RUNNER_SHA256|DOWNLOAD_BASE_URL|TOOLS_BASE_URL|CHECK_INTERVAL)'
+        }
+    }
+
+    It 'run the distributor as a global service of runners.yaml: stock Server Core, its script a Swarm config named after its content, the volume read-write' {
+        $text = $script:files['runners.yaml']
+        $text | Should -Match '(?ms)^  runner-distributor-windows:\r?\n.*?image: mcr\.microsoft\.com/windows/servercore:ltsc2022.*\r?\n'
+        $text | Should -Match '(?ms)^  runner-distributor-windows:.*?isolation: process'
+        $text | Should -Match '(?ms)^  runner-distributor-windows:.*?mode: global'
+        $text | Should -Match '(?ms)^  runner-distributor-windows:.*?node\.platform\.os == windows'
+        $text | Should -Match '(?ms)^  runner-distributor-windows:.*?node\.labels\.machine-runner-swarm\.windows-ltsc2022 == true'
+        $text | Should -Match '(?ms)^  runner-distributor-windows:.*?- type: volume\r?\n        source: runner-bin\r?\n        target: ''C:\\runner-bin''.*\r?\n(?!        read_only)'
+        $text | Should -Match '(?m)^  distributor-windows: \{name: machine-runner-swarm-distributor-windows-[0-9a-f]{12}, file: runner-distributor\.ps1\}'
+        foreach ($v in 'MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-current}', 'MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}', 'MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}') {
+            $text | Should -Match ([regex]::Escape($v))
+        }
+        # no other file defines a second distributor
+        foreach ($name in 'custom-image.yaml', 'persistent.yaml', 'docker-build.yaml', 'ssh-rerun.yaml') { $script:files[$name] | Should -Not -Match '(?m)^  runner-distributor' -Because 'the distributor is part of the base stack file' }
     }
 
     It 'spell out PATH for stock services: Windows first, then Git cmd, usr\bin and ucrt64\bin' {

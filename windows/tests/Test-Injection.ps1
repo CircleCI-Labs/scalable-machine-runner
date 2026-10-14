@@ -5,8 +5,8 @@
     host, Docker in Windows-container mode. Needs no runner token.
 
 .DESCRIPTION
-    The containers get exactly what windows\stack\runners.yaml gives a stock service: C:\machine-runner-swarm and C:\machine-runner-swarm\git
-    mounted read-only (Git at C:\Program Files\Git), and the environment of its x-runner-env and
+    The containers get exactly what windows\stack\runners.yaml gives a stock service: the links current and git\current of the
+    volume runner-bin mounted read-only, at C:\machine-runner-swarm and at C:\Program Files\Git, and the environment of its x-runner-env and
     x-stock-env anchors, PATH included. Prints "CHECK <name> PASS|FAIL <detail>" lines and ends with a
     RESULT line; exits 0 only when every check passed.
 
@@ -33,18 +33,18 @@
                          its task agent (symlink privilege, egress, PATH), gets 401s and exits 0 at the idle
                          timeout. Contacts runner.circleci.com and circleci-binary-releases.s3.amazonaws.com.
 
-.PARAMETER SwarmRoot
-    The staged host directory. Create it with:  .\windows\Setup.ps1 -StageOnly
+.PARAMETER RunnerVolume
+    The volume that the distributor of the stack filled. Create it with:  .\windows\tests\Test-Install.ps1
 
 .EXAMPLE
-    .\windows\Setup.ps1 -StageOnly
+    .\windows\tests\Test-Install.ps1
     .\windows\tests\Test-Injection.ps1 -Online
 
 #>
 [CmdletBinding()]
 param(
     [string] $Image,
-    [string] $SwarmRoot = 'C:\machine-runner-swarm',
+    [string] $RunnerVolume = 'runners_runner-bin',
     [switch] $Online,
     [int] $OnlineTimeoutSeconds = 300,
     [ValidateSet('process', 'hyperv', 'default')][string] $Isolation = 'process',
@@ -64,7 +64,7 @@ if ($Isolation -ne 'default') { $iso = @("--isolation=$Isolation") }
 $stackEnv = Get-SwarmStackEnvironment
 $stockPath = $stackEnv['PATH']
 $envArgs = ConvertTo-SwarmEnvArgument -Environment $stackEnv
-$mountArgs = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot
+$mountArgs = Get-SwarmStockMountArgument -Volume $RunnerVolume
 $psHost = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass')
 $runner = 'C:\machine-runner-swarm\bin\circleci-runner.exe'
 $dummyToken = 'swarm-injection-not-a-real-token-0000'

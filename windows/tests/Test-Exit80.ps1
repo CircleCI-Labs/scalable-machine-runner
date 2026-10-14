@@ -25,7 +25,7 @@
 [CmdletBinding()]
 param(
     [string] $Image,
-    [string] $SwarmRoot = 'C:\machine-runner-swarm',
+    [string] $RunnerVolume = 'runners_runner-bin',
     [int] $DelaySeconds = 10,
     [int] $ObserveSeconds = 60,
     [ValidateSet('process', 'hyperv', 'default')][string] $Isolation = 'process',
@@ -45,7 +45,7 @@ function Invoke-Docker {
 
 $iso = @()
 if ($Isolation -ne 'default') { $iso = @("--isolation=$Isolation") }
-$mounts = Get-SwarmStockMountArgument -SwarmRoot $SwarmRoot
+$mounts = Get-SwarmStockMountArgument -Volume $RunnerVolume
 $runner = 'C:\machine-runner-swarm\bin\circleci-runner.exe'
 $tok = 'swarm-exit80-not-a-real-token-0000'
 

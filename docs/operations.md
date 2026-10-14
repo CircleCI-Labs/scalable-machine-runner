@@ -108,7 +108,7 @@ The proxy answers `GET /healthz` with 200 when every class has a usable token fi
 | `claim from <ip> (tasks.<service>): upstream status 204` | A runner polled and there was no task. Normal, about every 5 seconds for each idle runner |
 | `claim from <ip> (tasks.<service>): upstream status 200` | A claim returned a task, and the runner at that address cannot claim again |
 | `released <ip> (tasks.<service>)` | The container is gone, and a new container on that address can claim |
-| `claim from <ip> refused: not a runner of any class` | A container that is not a runner of a configured class. Look for a class that you added without adding it to the proxy, or for a container that does not belong on a class network |
+| `claim from <ip> refused: not a runner of any class (tasks.<service> lists [...], ...)` | A container that is not a runner of a configured class, or a runner that DNS does not list yet. The line names what DNS lists for every class, so compare the address with it. Look for a class that you added without adding it to the proxy, or for a container that does not belong on a class network |
 | `claim from <ip> refused: this runner has already claimed a task` | A second claim from one container. After a proxy restart every runner that was idle gets this until Swarm replaces it. Refer to [Restart the proxy](#restart-the-proxy) |
 | `claim from <ip> (tasks.<service>): upstream status 401` | CircleCI rejects the class token. The token was deleted, or the secret holds another class's token. Refer to [The runner log shows 401](troubleshooting.md#the-runner-log-shows-401) |
 | `upstream error: ...` | The node of the proxy cannot reach `runner.circleci.com`. The runners get 502 |

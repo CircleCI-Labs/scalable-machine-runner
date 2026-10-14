@@ -31,6 +31,7 @@ The shipped file uses these images:
 | `setpriv` or `su` | Starts the runner as `circleci-runner` |
 | `useradd` or `adduser` | Creates `circleci-runner`, and the job user when the image has none |
 | `sed`, `grep`, `stat`, `install`, `getent`, `id`, `cut`, `tr`, `chmod`, `env`, `sha256sum`, `readlink`, `sleep` | Used by the entrypoint. BusyBox and coreutils both provide them |
+| `wget` or `curl`, `tar`, `awk`, `mktemp`, `mv`, `chown` | Only for a [microVM class](microvm.md#the-runner-in-a-vm), whose entrypoint downloads the runner into the container. The `cimg` images have them |
 
 The `cimg` images have everything. Alpine has only the BusyBox `su`, and UBI minimal has neither `sudo` nor `setpriv`. The tests run the entrypoint in `cimg/base` 2026.10, `cimg/openjdk` 21.0, Alpine 3 (with sudo and with `setpriv`), and UBI 9 minimal. Add the packages in a derived image:
 

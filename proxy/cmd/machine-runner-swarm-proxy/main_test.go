@@ -212,17 +212,17 @@ func TestFailsClosed(t *testing.T) {
 	e.check(e.claim(runnerA1), 403, "no runners at all")
 }
 
-func TestRestartLatchesEveryRunnerPresent(t *testing.T) {
+func TestStartWithoutAStateDirectoryLatchesEveryRunnerPresent(t *testing.T) {
 	e := newEnv(t, runnerA1, runnerA2)
-	if _, err := e.p.members(context.Background(), true); err != nil {
+	if _, err := e.p.restore(context.Background(), noStateAllow); err != nil {
 		t.Fatal(err)
 	}
 	e.check(e.claim(runnerA1), 403, "runner of class a present at start")
 	e.check(e.claim(runnerB1), 403, "runner of class b present at start")
 	e.dns[dnsA] = []string{runnerA1}
-	e.p.members(context.Background(), false) // A2 left and is released
+	e.p.members(context.Background()) // A2 left and is released
 	e.dns[dnsA] = []string{runnerA1, runnerA2}
-	e.p.members(context.Background(), false) // a new container for A2
+	e.p.members(context.Background()) // a new container for A2
 	e.check(e.claim(runnerA2), 200, "runner A2 was released when it left")
 	e.check(e.claim(runnerA1), 403, "runner A1 never left")
 	if e.calls.Load() != 1 {
@@ -330,4 +330,150 @@ func TestParseClasses(t *testing.T) {
 			t.Errorf("%q must be refused", bad)
 		}
 	}
+}
+
+// stateEnv is an env whose proxy keeps its state in dir, and a way to start "another process" on that directory.
+func (e *env) withState(dir string) {
+	st, err := openStore(dir)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.p.store = st
+}
+
+// restart is what a restarted proxy does: a new process with the same classes and the same directory, whose latches start empty.
+func (e *env) restart(noState string) string {
+	for _, c := range e.p.classes {
+		c.latched = map[string]bool{}
+		c.busy = map[string]bool{}
+	}
+	what, err := e.p.restore(context.Background(), noState)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return what
+}
+
+func TestAFirstStartAllowsEveryoneAndARestartRefusesOnlyWhoClaimed(t *testing.T) {
+	e := newEnv(t, runnerA1, runnerA2)
+	e.withState(t.TempDir())
+	if what := e.restart(noStateAllow); !strings.Contains(what, "first start") {
+		t.Errorf("a new directory is a first start, got: %s", what)
+	}
+	e.check(e.claim(runnerA1), 200, "a runner that was there before the proxy")
+	e.check(e.claim(runnerA1), 403, "and only one claim")
+	// the proxy restarts: A1 claimed, A2 and B1 did not
+	if what := e.restart(noStateAllow); !strings.Contains(what, "state restored: 1 runner") {
+		t.Errorf("want one runner restored, got: %s", what)
+	}
+	e.check(e.claim(runnerA1), 403, "the runner that claimed stays refused after the restart")
+	e.check(e.claim(runnerA2), 200, "a runner that has not claimed may claim after the restart")
+	e.check(e.claim(runnerB1), 200, "so may a runner of the other class")
+	// and a second restart knows about all three
+	e.restart(noStateAllow)
+	for _, ip := range []string{runnerA1, runnerA2, runnerB1} {
+		e.check(e.claim(ip), 403, "claimed before the second restart: "+ip)
+	}
+}
+
+func TestTheStateIsWrittenBeforeTheRunnerGetsItsAnswer(t *testing.T) {
+	e := newEnv(t, runnerA1)
+	dir := t.TempDir()
+	e.withState(dir)
+	e.restart(noStateAllow)
+	var seen string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer up.Close()
+	e.p.upstream, _ = url.Parse(up.URL)
+	r := httptest.NewRequest("POST", claimPath, nil)
+	r.RemoteAddr = runnerA1 + ":1"
+	rec := &stateAtWrite{ResponseRecorder: httptest.NewRecorder(), read: func() { b, _ := os.ReadFile(filepath.Join(dir, stateFile)); seen = string(b) }}
+	e.p.ServeHTTP(rec, r)
+	if !strings.Contains(seen, runnerA1) {
+		t.Errorf("the state did not hold the runner when the answer was written: %q", seen)
+	}
+}
+
+// stateAtWrite reads the state file at the moment that the proxy writes the status line of its answer.
+type stateAtWrite struct {
+	*httptest.ResponseRecorder
+	read func()
+	once sync.Once
+}
+
+func (s *stateAtWrite) WriteHeader(code int) { s.once.Do(s.read); s.ResponseRecorder.WriteHeader(code) }
+
+func TestReleasedRunnersLeaveTheState(t *testing.T) {
+	e := newEnv(t, runnerA1, runnerA2)
+	dir := t.TempDir()
+	e.withState(dir)
+	e.restart(noStateAllow)
+	e.check(e.claim(runnerA1), 200, "claim")
+	e.dns[dnsA] = []string{runnerA2} // A1's container is gone
+	e.p.members(context.Background())
+	b, _ := os.ReadFile(filepath.Join(dir, stateFile))
+	if strings.Contains(string(b), runnerA1) {
+		t.Errorf("a runner that left is still in the state: %s", b)
+	}
+	e.dns[dnsA] = []string{runnerA1, runnerA2} // a new container takes the address
+	e.restart(noStateAllow)
+	e.check(e.claim(runnerA1), 200, "the new container on the same address may claim")
+}
+
+func TestLostStateFailsSafe(t *testing.T) {
+	for name, damage := range map[string]func(dir string){
+		"state file removed": func(dir string) { os.Remove(filepath.Join(dir, stateFile)) },
+		"state file corrupt": func(dir string) { os.WriteFile(filepath.Join(dir, stateFile), []byte("{not json"), 0o600) },
+		"state of a newer version": func(dir string) {
+			os.WriteFile(filepath.Join(dir, stateFile), []byte(`{"version":2,"latched":{}}`), 0o600)
+		},
+		"state file empty": func(dir string) { os.WriteFile(filepath.Join(dir, stateFile), nil, 0o600) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, runnerA1, runnerA2)
+			dir := t.TempDir()
+			e.withState(dir)
+			e.restart(noStateAllow)
+			e.check(e.claim(runnerA1), 200, "claim")
+			damage(dir)
+			if what := e.restart(noStateAllow); !strings.Contains(what, "state lost") {
+				t.Errorf("want a lost state, got: %s", what)
+			}
+			for _, ip := range []string{runnerA1, runnerA2, runnerB1} {
+				e.check(e.claim(ip), 403, "every runner present is latched: "+ip)
+			}
+		})
+	}
+}
+
+func TestNoStateLatchIsTheFailSafeStartOfAnUnusedDirectory(t *testing.T) {
+	e := newEnv(t, runnerA1, runnerA2)
+	e.withState(t.TempDir())
+	if what := e.restart(noStateLatch); !strings.Contains(what, "-no-state latch") {
+		t.Errorf("got: %s", what)
+	}
+	e.check(e.claim(runnerA1), 403, "latched by -no-state latch")
+	e.check(e.claim(runnerB1), 403, "latched by -no-state latch")
+}
+
+func TestStateDirectoryMustBeWritable(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(f, nil, 0o600)
+	if _, err := openStore(filepath.Join(f, "sub")); err == nil {
+		t.Error("a state directory under a file must be refused")
+	}
+	if st, err := openStore(""); st != nil || err != nil {
+		t.Error("an empty directory means no state")
+	}
+}
+
+func TestAStateThatCannotBeWrittenMakesTheProxyUnhealthy(t *testing.T) {
+	e := newEnv(t, runnerA1)
+	dir := t.TempDir()
+	e.withState(dir)
+	e.restart(noStateAllow)
+	e.check(e.do("10.9.9.9", "GET", healthPath, ""), 200, "healthy")
+	os.RemoveAll(dir) // the volume is gone
+	e.claim(runnerA1)
+	e.check(e.do("10.9.9.9", "GET", healthPath, ""), 503, "the state cannot be written")
 }

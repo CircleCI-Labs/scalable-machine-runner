@@ -9,8 +9,15 @@
 // A claim is allowed only from an IP that is currently in the DNS answer of a class, and it gets that class's token.
 //
 // One claim per runner container: after a claim that returns a task, that IP is latched and further claims from it
-// get 403 until the IP leaves the DNS answer (the container is gone). A restarted proxy does not know who has
-// claimed, so it latches every IP present at start. Single-task mode only: a continuous runner claims many times.
+// get 403 until the IP leaves the DNS answer (the container is gone). Single-task mode only: a continuous runner claims
+// many times.
+//
+// A restarted proxy must know who has claimed. With -state-dir it keeps the latched IPs in a small file of a volume,
+// written before the claim's answer goes back to the runner, and a restart with that state refuses only the IPs that
+// really claimed. Without a state file the proxy cannot know, so it asks the directory: a directory that was never
+// used is a first start and allows every runner (they cannot have claimed through this proxy); a directory with a
+// marker but no usable state has lost it, and the proxy fails safe and latches every IP present, like a proxy without
+// -state-dir does. See state.go.
 package main
 
 import (
@@ -68,7 +75,10 @@ type proxy struct {
 	classes  []*class
 	lookup   func(ctx context.Context, host string) ([]string, error)
 
-	mu sync.Mutex // guards the latched and busy maps of every class
+	store    *store // nil: no persistence, a restart latches every runner present
+	stateErr error  // the last failure to write the state, which makes the proxy unhealthy
+
+	mu sync.Mutex // guards the latched and busy maps of every class, and the state file
 }
 
 func norm(s string) string {
@@ -94,10 +104,9 @@ func (c *class) token() (string, error) {
 	return s, nil
 }
 
-// members resolves the runner IPs of every class. When latch is set it latches them all; otherwise it releases the
-// latch of every IP that has left. An unknown name (no running task) is an empty set; any other DNS failure changes
-// nothing.
-func (p *proxy) members(ctx context.Context, latch bool) (map[*class]map[string]bool, error) {
+// resolve returns the runner IPs of every class. An unknown name (no running task) is an empty set; any other DNS failure is an error
+// and changes nothing.
+func (p *proxy) resolve(ctx context.Context) (map[*class]map[string]bool, error) {
 	sets := map[*class]map[string]bool{}
 	for _, c := range p.classes {
 		addrs, err := p.lookup(ctx, c.dns)
@@ -111,22 +120,92 @@ func (p *proxy) members(ctx context.Context, latch bool) (map[*class]map[string]
 		}
 		sets[c] = set
 	}
+	return sets, nil
+}
+
+// members resolves the runner IPs of every class and releases the latch of every IP that has left.
+func (p *proxy) members(ctx context.Context) (map[*class]map[string]bool, error) {
+	sets, err := p.resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	changed := false
 	for c, set := range sets {
 		for ip := range c.latched {
 			if !set[ip] {
 				delete(c.latched, ip)
+				changed = true
 				log.Printf("released %s (%s)", ip, c.dns)
 			}
 		}
-		if latch {
-			for ip := range set {
-				c.latched[ip] = true
-			}
-		}
+	}
+	if changed {
+		p.persist()
 	}
 	return sets, nil
+}
+
+// restore sets the latches at start: from the state file when there is a usable one (the IPs that claimed and are still there), else
+// by the rules in the package comment. It returns what it did, for the log.
+func (p *proxy) restore(ctx context.Context, noState string) (string, error) {
+	sets, err := p.resolve(ctx)
+	if err != nil {
+		return "", err
+	}
+	kind, saved, err := p.store.load()
+	if err != nil {
+		return "", err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	latchAll := func() int {
+		n := 0
+		for c, set := range sets {
+			for ip := range set {
+				c.latched[ip] = true
+				n++
+			}
+		}
+		return n
+	}
+	var what string
+	switch {
+	case kind == stateOK:
+		n := 0
+		for c, set := range sets {
+			for _, ip := range saved[c.dns] {
+				if set[ip] {
+					c.latched[ip] = true
+					n++
+				}
+			}
+		}
+		what = fmt.Sprintf("state restored: %d runner(s) have claimed and stay refused; the others may claim", n)
+	case kind == stateNone && noState == noStateAllow:
+		what = "no state: a first start, so no runner has claimed through this proxy and every runner present may claim"
+	case kind == stateNone:
+		what = fmt.Sprintf("no state and -no-state latch: latching all %d runner(s) present", latchAll())
+	case kind == stateLost:
+		what = fmt.Sprintf("state lost: failing safe, latching all %d runner(s) present", latchAll())
+	default: // no store: nothing persists, and a restart cannot know who claimed
+		what = fmt.Sprintf("no state directory: latching all %d runner(s) present", latchAll())
+	}
+	if err := p.store.save(p.classes); err != nil {
+		return "", err
+	}
+	return what, nil
+}
+
+// persist writes the latched IPs to the state directory, if there is one. The caller holds p.mu.
+func (p *proxy) persist() {
+	if err := p.store.save(p.classes); err != nil {
+		p.stateErr = err
+		log.Printf("state: cannot write it: %v", err)
+		return
+	}
+	p.stateErr = nil
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +219,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ap, _ := netip.ParseAddrPort(r.RemoteAddr)
 	ip := ap.Addr().Unmap().String()
-	sets, err := p.members(r.Context(), false)
+	sets, err := p.members(r.Context())
 	if err != nil {
 		log.Printf("claim from %s refused: cannot resolve the runners: %v", ip, err)
 		http.Error(w, "cannot resolve the runners", http.StatusServiceUnavailable)
@@ -185,6 +264,13 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // health answers 200 when every class has a usable token file. It never says which class or why.
 func (p *proxy) health(w http.ResponseWriter) {
+	p.mu.Lock()
+	stateErr := p.stateErr
+	p.mu.Unlock()
+	if stateErr != nil {
+		http.Error(w, "unhealthy", http.StatusServiceUnavailable)
+		return
+	}
 	for _, c := range p.classes {
 		if _, err := c.token(); err != nil {
 			log.Printf("health: %s: %v", c.dns, err)
@@ -213,6 +299,7 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, tok string, c *c
 				if resp.StatusCode/100 == 2 && resp.StatusCode != http.StatusNoContent { // 204: no task yet
 					p.mu.Lock()
 					c.latched[ip] = true
+					p.persist() // before the runner gets its task: a restart must know that it has claimed
 					p.mu.Unlock()
 				}
 			}
@@ -262,11 +349,20 @@ func parseClasses(flagValues, env []string) ([]*class, error) {
 	return classes, nil
 }
 
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
 func main() {
 	var cf classFlags
 	flag.Var(&cf, "class", "SERVICE=TOKEN-FILE: the runner service of one resource class (tasks.<service> is resolved) and the file with its token, bare or a runner config with auth_token (repeatable; also "+classEnvPrefix+"* variables)")
 	listen, upstream := flag.String("listen", ":8080", "address to listen on"), flag.String("upstream", "https://runner.circleci.com", "the runner API")
 	poll := flag.Duration("poll", time.Second, "how often to look for runners that have left")
+	stateDir := flag.String("state-dir", "", "a directory of a volume that keeps the latched runner addresses across restarts (empty: none, and a restart latches every runner present)")
+	noState := flag.String("no-state", envOr("MACHINE_RUNNER_SWARM_PROXY_NO_STATE", noStateAllow), "a start with a state directory that was never used: allow (a first start: no runner has claimed) or latch (every runner present counts as having claimed). Also MACHINE_RUNNER_SWARM_PROXY_NO_STATE")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -275,13 +371,17 @@ func main() {
 	}
 	u, err := url.Parse(*upstream)
 	classes, cerr := parseClasses(cf, os.Environ())
-	if err != nil || u.Host == "" || cerr != nil { // usage
+	if err != nil || u.Host == "" || cerr != nil || (*noState != noStateAllow && *noState != noStateLatch) { // usage
 		if cerr != nil {
 			log.Print(cerr)
 		}
-		log.Fatal("usage: machine-runner-swarm-proxy -class <service>=<token-file> [-class ...] [-upstream URL] [-listen ADDR]")
+		log.Fatal("usage: machine-runner-swarm-proxy -class <service>=<token-file> [-class ...] [-upstream URL] [-listen ADDR] [-state-dir DIR [-no-state allow|latch]]")
 	}
-	p := &proxy{upstream: u, classes: classes,
+	st, err := openStore(*stateDir)
+	if err != nil {
+		log.Fatalf("state directory: %v", err) // fail closed: a proxy that cannot keep its state does not start
+	}
+	p := &proxy{upstream: u, classes: classes, store: st,
 		lookup: func(ctx context.Context, host string) ([]string, error) {
 			return net.DefaultResolver.LookupHost(ctx, host)
 		}}
@@ -292,14 +392,22 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
-	// fail closed: a restarted proxy has forgotten who claimed, so every runner present now counts as having claimed
-	for _, err := p.members(ctx, true); err != nil && ctx.Err() == nil; _, err = p.members(ctx, true) {
+	// a restarted proxy must know who has claimed (state.go): from its state, or else it fails safe
+	for {
+		what, err := p.restore(ctx, *noState)
+		if err == nil {
+			log.Print(what)
+			break
+		}
+		if ctx.Err() != nil {
+			return
+		}
 		log.Printf("waiting for DNS: %v", err)
 		time.Sleep(time.Second)
 	}
 	go func() {
 		for range time.Tick(*poll) {
-			p.members(ctx, false)
+			p.members(ctx)
 		}
 	}()
 	srv := &http.Server{Addr: *listen, Handler: p, ReadHeaderTimeout: 10 * time.Second}

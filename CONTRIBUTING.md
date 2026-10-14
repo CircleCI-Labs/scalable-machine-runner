@@ -116,7 +116,9 @@ docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.18.1 '**/*.md
 
 ### Pinned versions
 
-This repository does not use Renovate. Update pinned versions by hand, and change the version and its checksum together. The runner version that the stack files install by default is pinned, in three places that must stay equal (`linux/stack/runners.yaml`, `linux/stack/microvm.yaml` and `windows/stack/runners.yaml`): the newest version that CI tests, bumped by each release ([how](docs/releasing.md#bump-the-runner-version)). The `alpine:3` image of the distributor is pinned by digest in `linux/stack/runners.yaml`. The pinned Git and 7-Zip versions and their SHA-256 values are in `windows/stack/runner-distributor.ps1`, and a change of the script needs `ci/config-names.sh --write`. Pin images by tag and digest.
+[Renovate](https://docs.renovatebot.com/) opens a pull request every Monday for the pinned versions: the images and their digests, the tools that CI downloads, the Go toolchain and the docs theme. The configuration is [`renovate.json`](renovate.json), and [Pinned versions](docs/ci.md#pinned-versions) lists what it covers and what stays by hand. A pull request with the label `checksum` changes a version that is pinned with a SHA-256 value: Renovate cannot compute the value, so replace it in the same branch before you merge.
+
+Pin images by tag and digest, and a new download by its version and checksum together, with a `# renovate:` comment above the version (see the page above). The runner version that the stack files install by default is pinned, in three places that must stay equal (`linux/stack/runners.yaml`, `linux/stack/microvm.yaml` and `windows/stack/runners.yaml`): the newest version that CI tests, bumped by each release ([how](docs/releasing.md#bump-the-runner-version)). The `alpine:3` image of the distributor is pinned by digest in `linux/stack/runners.yaml`. The pinned Git and 7-Zip versions and their SHA-256 values are in `windows/stack/runner-distributor.ps1`, and a change of the script needs `ci/config-names.sh --write`. Pin images by tag and digest.
 
 ## Releases
 

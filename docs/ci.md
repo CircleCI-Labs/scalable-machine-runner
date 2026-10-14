@@ -441,11 +441,52 @@ When the repository is renamed to `machine-runner-swarm`, the Pages address chan
 
 ## Pinned versions
 
-Every tool image is pinned by tag and digest in `.circleci/continue.yml`. There is no Renovate. To bump a version:
+Every tool image is pinned by tag and digest, and every download by version and SHA-256 value. [Renovate](https://docs.renovatebot.com/), the GitHub App of the organization, keeps them current. [`renovate.json`](../renovate.json) is its whole configuration: the repository needs no workflow or token for it, and no GitHub Actions workflow is involved.
+
+- **When.** Renovate opens pull requests on Monday before 06:00 UTC, at most six at a time. A major version waits for approval on the Dependency Dashboard (the issue that Renovate keeps).
+- **Groups.** One pull request for each group: `CI images`, `stack images`, `CI tools`, `Go toolchain`, `Windows distributor tools`, `lychee` (the image and the binary move together) and `docs site theme`.
+- **Commit types.** A pull request that changes what users run (`stack images`, `Go toolchain` for the proxy binaries, `Windows distributor tools`) is a `fix(deps)` commit, so the release job makes a release for it. The CI-only groups are `ci(deps)` and the theme is `docs(deps)`: they make no release ([Releasing](releasing.md#versions)).
+- **Digests.** Renovate pins every image that carries a digest, refreshes the digest of a tag, and moves the tag and the digest together. `cimg/base` and the e2e sweeper image `circleci/runner-agent` get a new digest but never a new tag: the tag is named in the stack files, the tests and the docs, or moves with the runner build, so a person changes it.
+
+| Pin | Where | How Renovate finds it |
+|---|---|---|
+| Images with a digest | `.circleci/*.yml`, `linux/stack/*.yaml`, `windows/stack/*.yaml`, `ci/`, the tests, the docs | One regex manager for `name:tag@sha256:...` in any file |
+| Hugo, lychee, the CircleCI CLI | `docs-site` command and `lint-circleci` in `.circleci/continue.yml` | A `# renovate:` comment above the version variable |
+| git-cliff, cosign, gh, Go | `ci/release.sh` | The same comment |
+| yamllint | `lint-yaml` | A regex for `yamllint==X` (PyPI) |
+| Kata Containers | `KATA_VERSION` in `linux/tests/microvm.sh` | A regex (GitHub releases) |
+| PortableGit, 7-Zip | `ReleaseTag` and `SevenZipVersion` in `windows/stack/runner-distributor.ps1` | A regex each (GitHub releases) |
+| Node.js of the Windows example image | `NODE_VERSION` in `windows/images/example/Dockerfile`, kept on the 24 line | A regex (Node.js releases) |
+| The Hextra theme | `site/go.mod`, `site/go.sum` | The `gomod` manager |
+| The proxy module | `proxy/go.mod` | The `gomod` manager. It has no dependency today. The `go` directive is the oldest Go that can build it, so Renovate leaves it alone |
+
+To pin a new tool, put its version in one variable and add the comment `# renovate: datasource=github-releases depName=<owner>/<repo> extractVersion=^v(?<version>.*)$` on the line above it. The comment is the whole configuration.
+
+### A pull request that needs a checksum
+
+Renovate cannot compute a SHA-256 value. For a tool that is pinned with one (Hugo, lychee, the CircleCI CLI, git-cliff, cosign, gh, Go, Kata, PortableGit, 7-Zip, Node.js), the pull request changes the version only, carries the label `checksum` and a note in its description, and its CI fails on the checksum. To finish it:
+
+1. Take the new value from the checksums file of the release (the table in [Pinned tools](releasing.md#pinned-tools) names the file), or download the asset and run `sha256sum` on it.
+2. Replace the old value next to the version, in the same branch, and push.
+3. For PortableGit, also set `Version` (`X.Y.Z.N` for the tag `vX.Y.Z.windows.N`) and run `ci/config-names.sh --write`: the distributor is a Swarm config.
+4. Update the version in the prose that names it (this table, [Releasing](releasing.md#pinned-tools), `docs/microvm.md` for Kata).
+
+### Pins that stay by hand
+
+Renovate does not touch these. Change the version and its checksum together, and run the check of the job that uses it.
+
+- Images without a digest in the stack files (`coredns/coredns`, `alpine:3.24` of the token proxy, the `cimg` classes) and the Windows `servercore` tags: the tag is a choice for users, and Windows tags must match the host.
+- PSScriptAnalyzer and Pester (`lint-powershell`, `windows-swarm`, `windows/tests/Invoke-UnitTests.ps1`).
+- The Mermaid script of the site (`params.mermaid.base` in `site/hugo.yaml`): it must match the version that the `lint-docs-mermaid` image bundles.
+- The runner build of the e2e sweeper: the image tag in `ci/e2e-host.sh` and the `circleci-runner.exe` URL and SHA-256 in `ci/E2E-Host.ps1` move together.
+
+To bump one of them by hand:
 
 1. Resolve the new digest with `docker buildx imagetools inspect <image>:<tag>`.
 2. Update the tag and digest together.
 3. Run `circleci config validate`.
+
+The versions in use:
 
 | What | Version | Where |
 |---|---|---|

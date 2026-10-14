@@ -154,16 +154,17 @@ Rerunning a pipeline from before a later release does not release again, because
 
 ## Pinned tools
 
-The job installs its tools in `ci/release.sh install-tools`. Each download is checked against a SHA-256 value in the script, and the job image is pinned by digest.
+The job installs its tools in `ci/release.sh install-tools`. Each download is checked against a SHA-256 value in the script, and the job image is pinned by digest. Each tool has its version and its SHA-256 value in two variables of the function, and a `# renovate:` comment above the version.
 
 | Tool | Version | Source of the SHA-256 value |
 |---|---|---|
 | git-cliff | 2.14.2 | The `.sha512` file of the release, and a local `sha256sum` |
 | cosign | 3.1.3 | `cosign_checksums.txt` of the release |
 | gh | 2.102.0 | `gh_2.102.0_checksums.txt` of the release |
+| Go | 1.27.2 | The download page of go.dev, next to the archive |
 | `cimg/base` | 2026.10 | The digest in `.circleci/continue.yml` |
 
-To update a tool, change its version, URL, and SHA-256 value together in `install_tools`, and then run the steps in [Try it locally](#try-it-locally). To update the image, follow [Pinned versions](ci.md#pinned-versions).
+[Renovate](ci.md#pinned-versions) opens a pull request for a new version and changes the version only. The pull request has the label `checksum` and fails on the checksum until you replace the SHA-256 value in the same branch. To update a tool by hand, change its version and its SHA-256 value together in `install_tools`, and then run the steps in [Try it locally](#try-it-locally). To update the image, follow [Pinned versions](ci.md#pinned-versions). A Renovate pull request for the Go toolchain also moves the `golang` and `cimg/go` images, so the proxy binaries of the release use the same Go as `proxy-test`.
 
 ## Try it locally
 

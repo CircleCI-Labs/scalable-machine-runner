@@ -1,0 +1,173 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Renovate for scalable-machine-runner (docs/ci.md, 'Pinned versions'). The Renovate GitHub App of the organization runs it. Every pin of the repository has a manager below: image digests, tool versions, PortableGit, Kata, Node.js and the Go modules.",
+  "extends": ["config:best-practices"],
+  "ignorePresets": [":ignoreModulesAndTests"],
+  "ignorePaths": ["site/content/**", "site/public/**", "site/public-preview/**", "site/resources/**"],
+  "enabledManagers": ["custom.regex", "gomod"],
+  "timezone": "UTC",
+  "schedule": ["before 6am on monday"],
+  "pinDigests": true,
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 6,
+  "rebaseWhen": "conflicted",
+  "semanticCommits": "enabled",
+  "semanticCommitType": "ci",
+  "semanticCommitScope": "deps",
+  "dependencyDashboard": true,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Every image reference that carries a digest, in any file: name[:tag]@sha256:<digest> (.circleci/*.yml, the stack files, ci/ and the tests, the docs)",
+      "managerFilePatterns": ["/\\.(ya?ml|sh|ps1|md|html)$/"],
+      "matchStrings": [
+        "(?<depName>[a-z0-9][a-z0-9._/-]*[a-z0-9])(?::(?<currentValue>[A-Za-z0-9][A-Za-z0-9._-]*))?@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "A version after a '# renovate: datasource=... depName=... [extractVersion=...]' comment: the tools of .circleci/continue.yml (Hugo, lychee, the CircleCI CLI) and of ci/*.sh (git-cliff, cosign, gh, Go, govulncheck)",
+      "managerFilePatterns": ["/^\\.circleci/.+\\.ya?ml$/", "/^ci/[^/]+\\.sh$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n\\s*(?:local |export )?[A-Za-z0-9_]+=(?<currentValue>[^\\s\"']+)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "yamllint, installed with pip in the lint-yaml job",
+      "managerFilePatterns": ["/^\\.circleci/continue\\.yml$/"],
+      "matchStrings": ["yamllint==(?<currentValue>[0-9][0-9.]*)"],
+      "depNameTemplate": "yamllint",
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "Kata Containers, downloaded by linux/tests/microvm.sh with its SHA-256 value",
+      "managerFilePatterns": ["/^linux/tests/microvm\\.sh$/"],
+      "matchStrings": ["KATA_VERSION=(?<currentValue>[0-9][0-9.]*)"],
+      "depNameTemplate": "kata-containers/kata-containers",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "PortableGit, pinned in the Windows runner-distributor (ReleaseTag; Version and Sha256 sit next to it)",
+      "managerFilePatterns": ["/^windows/stack/runner-distributor\\.ps1$/"],
+      "matchStrings": ["ReleaseTag\\s*=\\s*'(?<currentValue>v[0-9.]+\\.windows\\.[0-9]+)'"],
+      "depNameTemplate": "git-for-windows/git",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\.windows\\.(?<build>\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "7-Zip (7zr.exe), pinned in the Windows runner-distributor with its SHA-256 value",
+      "managerFilePatterns": ["/^windows/stack/runner-distributor\\.ps1$/"],
+      "matchStrings": ["SevenZipVersion\\s*=\\s*'(?<currentValue>[0-9][0-9.]*)'"],
+      "depNameTemplate": "ip7z/7zip",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "Node.js of the Windows example image, pinned with its SHA-256 value",
+      "managerFilePatterns": ["/^windows/images/example/Dockerfile$/"],
+      "matchStrings": ["ARG NODE_VERSION=(?<currentValue>[0-9][0-9.]*)"],
+      "depNameTemplate": "node",
+      "datasourceTemplate": "node-version"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Images that carry a digest in a stack file are what users run: a new digest is a fix and makes a release.",
+      "matchDatasources": ["docker"],
+      "matchFileNames": ["linux/stack/**", "windows/stack/**"],
+      "groupName": "stack images",
+      "semanticCommitType": "fix"
+    },
+    {
+      "description": "Images of the CI jobs, the e2e and the tests.",
+      "matchDatasources": ["docker"],
+      "matchFileNames": [".circleci/**", "ci/**", "linux/tests/**", "windows/tests/**"],
+      "groupName": "CI images"
+    },
+    {
+      "description": "The tools that the CI jobs download. Most come with a SHA-256 value (see the checksum rule below).",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["github-releases", "pypi", "node-version", "go"],
+      "matchDepNames": ["!git-for-windows/git", "!ip7z/7zip"],
+      "groupName": "CI tools"
+    },
+    {
+      "description": "The Windows distributor downloads PortableGit and 7zr.exe on every node: shipped, so a fix.",
+      "matchDepNames": ["git-for-windows/git", "ip7z/7zip"],
+      "groupName": "Windows distributor tools",
+      "semanticCommitType": "fix"
+    },
+    {
+      "description": "One Go version for the proxy build (golang image of ci/build-proxy.sh and proxy-test, the Go tarball of the release job) and the docs site (cimg/go). The proxy binaries are shipped, so a fix.",
+      "matchDepNames": ["golang", "cimg/go", "go"],
+      "groupName": "Go toolchain",
+      "semanticCommitType": "fix"
+    },
+    {
+      "description": "The lychee image and the lychee binary of the docs site move together.",
+      "matchDepNames": ["lycheeverse/lychee"],
+      "groupName": "lychee"
+    },
+    {
+      "description": "The Hextra theme of the docs site (site/go.mod, site/go.sum).",
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["site/**"],
+      "groupName": "docs site theme",
+      "semanticCommitType": "docs"
+    },
+    {
+      "description": "The go directive of a go.mod is the oldest Go that can build the module: change it by hand.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang"],
+      "enabled": false
+    },
+    {
+      "description": "cimg/base is the stock image of the stack: its tag (2026.10) is named in the stack files, the tests and the docs. Renovate refreshes the digest of the tag; a new tag is a deliberate change of every file that names it.",
+      "matchDepNames": ["cimg/base"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "enabled": false
+    },
+    {
+      "description": "The tag of the e2e sweeper image names the runner build (3.1.12-...). It moves with the runner binary of ci/E2E-Host.ps1, by hand.",
+      "matchDepNames": ["circleci/runner-agent"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "enabled": false
+    },
+    {
+      "description": "The Windows example image stays on Node.js 24 (an LTS line). A new line is a decision.",
+      "matchDepNames": ["node"],
+      "allowedVersions": "/^24\\./"
+    },
+    {
+      "description": "A major version needs a decision: Renovate waits for the approval on the Dependency Dashboard.",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "These downloads are pinned with a SHA-256 value that Renovate cannot compute. The pull request changes the version only, so its CI fails on the checksum until a person replaces the value. The label and the note flag the pull request.",
+      "matchDepNames": [
+        "gohugoio/hugo",
+        "lycheeverse/lychee",
+        "CircleCI-Public/circleci-cli",
+        "orhun/git-cliff",
+        "sigstore/cosign",
+        "cli/cli",
+        "go",
+        "kata-containers/kata-containers",
+        "git-for-windows/git",
+        "ip7z/7zip",
+        "node"
+      ],
+      "matchDatasources": ["github-releases", "golang-version", "node-version"],
+      "addLabels": ["checksum"],
+      "prBodyNotes": [
+        "**The SHA-256 value must change too.** Renovate updates the version only and cannot compute the checksum. Download the new asset, take its checksum from the release page (or compute it), replace the value next to the version, and push to this branch. Where is it: docs/releasing.md ('Pinned tools') and docs/ci.md ('Pinned versions'). For PortableGit also set `Version` (X.Y.Z.N for the tag vX.Y.Z.windows.N), then run `ci/config-names.sh --write`."
+      ]
+    }
+  ]
+}

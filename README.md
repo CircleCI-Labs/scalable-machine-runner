@@ -67,7 +67,7 @@ Linux runs on Ubuntu LTS and RHEL 8 or later, on amd64 and arm64. Refer to the [
 | Page | Contents |
 |---|---|
 | [Quickstart on Linux](docs/quickstart-linux.md), [on Windows Server](docs/quickstart-windows.md) | A first job in a dozen commands |
-| [Concepts](docs/concepts.md) | Services as resource classes, add-on stack files, the job lifecycle, clean environments, and a glossary |
+| [Concepts](docs/concepts.md) | Services as resource classes, the token proxy, add-on stack files, the job lifecycle, clean environments, and a glossary |
 | [Install on Linux](docs/install-linux.md) | Ubuntu and RHEL, every step by hand, with the optional `setup.sh` and how to verify a release |
 | [Install on Windows Server](docs/install-windows.md) | Server 2022 and 2025, every step by hand, with the optional `Setup.ps1` |
 | [Multi-Node Clusters](docs/multi-node.md) | Linux, Windows, and Arm nodes, labels, network zones, ports, and quorum |

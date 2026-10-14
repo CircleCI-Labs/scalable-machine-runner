@@ -44,7 +44,7 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
    Copy-Item -Recurse windows\stack deploy
    ```
 
-5. Run the helper. It creates the Swarm, labels the node with the image tags it can run, asks for the token with hidden input, creates the secret `windows-default-token`, and deploys your copy. Use the IPv4 address of the host. This is the whole install: the service `runner-distributor-windows` downloads and verifies CircleCI's current runner and the pinned portable Git on its own.
+5. Run the helper. It creates the Swarm, labels the node with the image tags it can run and as the node of the token proxy, asks for the token with hidden input, creates the secrets `windows-default-token` (the token proxy holds it) and `runner-placeholder-token` (what the runners read), and deploys your copy. Use the IPv4 address of the host. This is the whole install: the service `runner-distributor-windows` downloads and verifies CircleCI's current runner, the pinned portable Git and the token proxy of this release on its own.
 
    ```powershell
    .\windows\Setup.ps1 -InitSwarm -AdvertiseAddr <host IPv4 address> -Class windows-default -StackFile .\deploy\runners.yaml -Deploy

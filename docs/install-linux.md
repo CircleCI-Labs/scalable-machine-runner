@@ -51,7 +51,8 @@ Each [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/r
 |---|---|
 | `machine-runner-swarm-<version>.tar.gz` | The bundle for Linux: the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, without the tests |
 | `machine-runner-swarm-<version>.zip` | The same bundle for Windows |
-| `SHA256SUMS` | The SHA-256 checksum of both bundles |
+| `machine-runner-swarm-proxy_linux_amd64`, `_linux_arm64`, `_windows_amd64` | The static token proxy binary for each platform. Refer to [The token proxy](concepts.md#the-token-proxy): the distributor of the stack installs it, so you only download it for an air-gapped mirror |
+| `SHA256SUMS` | The SHA-256 checksum of both bundles and of the proxy binaries |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of `SHA256SUMS` |
 
 The bundle has a top-level `VERSION` file with the release number and a `CHANGELOG.md` with the notes of every release.
@@ -159,22 +160,23 @@ On a single node, start Swarm so that it listens on the loopback address only. N
 ```console
 $ docker swarm init --advertise-addr 127.0.0.1 --listen-addr 127.0.0.1:2377
 $ docker swarm update --task-history-limit 2
+$ docker node update --label-add machine-runner-swarm.proxy=true "$(docker info --format '{{.Swarm.NodeID}}')"
 ```
 
-The second command keeps fewer stopped containers on the node. Each finished job leaves a stopped container until Swarm prunes its task, and every stopped container keeps its writable layer on disk.
+The second command keeps fewer stopped containers on the node. The third labels the node that runs the token proxy, which keeps its state there (`setup.sh --swarm-init` does all three). Without the label the proxy stays pending and no runner can claim. Each finished job leaves a stopped container until Swarm prunes its task, and every stopped container keeps its writable layer on disk.
 
 A node that listens on the loopback address cannot accept other nodes. For several nodes, initialize Swarm with a routable address instead. Refer to [Multi-Node Clusters](multi-node.md#create-the-swarm). A node that joins needs nothing else, because the distributor service starts on it by itself.
 
 ## 4. Create the secrets
 
-Create one secret for each service in the stack file. The secret is the config file of the runner and holds only the token:
+Create one secret for each service in the stack file. The secret is a runner config file and holds only the token:
 
 ```yaml
 api:
   auth_token: <token>
 ```
 
-The stack mounts the secret at `/run/secrets/circleci_runner_config.yaml`, owned by the runner user (uid 2000) with mode `0400`. The runner reads it with `--config`. Every other setting is a `CIRCLECI_RUNNER_*` environment variable in the stack file.
+The token proxy mounts these secrets at `/run/secrets/<service>-token`, owned by uid 65534 with mode `0400`, and the runners never see them. The runners read one more secret, `runner-placeholder-token`, with a made-up token: create it once, with any value, in the same format. The stack mounts it at `/run/secrets/circleci_runner_config.yaml`, owned by the runner user (uid 2000) with mode `0400`, and the runner reads it with `--config`. Only the persistent class mounts its own token in the runner. Every other setting is a `CIRCLECI_RUNNER_*` environment variable in the stack file.
 
 Create the secrets with a hidden prompt, so that the token does not reach your shell history or the process list. This loop uses only POSIX features, so it works in bash, zsh, and dash. Do not replace it with `read -rsp`: that form is bash only, and zsh reads `-p` as a coprocess and fails, which leaves `TOKEN` empty and creates a secret without a token. The loop stops at an empty token.
 
@@ -186,9 +188,10 @@ for class in linux-default linux-java linux-hardened; do
   printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create "$class-token" -
 done
 unset TOKEN
+printf 'api:\n  auth_token: machine-runner-swarm-placeholder\n' | docker secret create runner-placeholder-token -
 ```
 
-Run every `docker` command in these steps with `sudo`, or as a user in the `docker` group. Without either, `docker` cannot reach the daemon. The setup helper below does the same in one command: `sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened`.
+Run every `docker` command in these steps with `sudo`, or as a user in the `docker` group. Without either, `docker` cannot reach the daemon. The setup helper below does the same in one command: `sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened`, and then `printf %s machine-runner-swarm-placeholder | sudo linux/setup.sh --secret runner-placeholder` for the placeholder.
 
 The secret name is the service name plus `-token`. `docker stack deploy` fails with `secret not found` when a service references a secret that does not exist. Create every secret that the file references, or delete the services you do not need from your copy of the file. Each optional class in step 5 needs its own secret.
 

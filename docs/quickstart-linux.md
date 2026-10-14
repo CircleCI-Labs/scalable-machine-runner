@@ -48,16 +48,18 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
      sudo linux/setup.sh --check                             # on every node
      sudo docker swarm init --advertise-addr <manager IP address>   # on the manager
      sudo docker swarm update --task-history-limit 2         # on the manager
+     sudo docker node update --label-add machine-runner-swarm.proxy=true <manager>   # the node of the token proxy
      sudo docker swarm join-token worker                     # prints the join command: run it on each worker
      sudo docker node ls                                     # on the manager: every node is Ready
      ```
 
      Run steps 4 to 6 on the manager. Refer to [Multi-Node Clusters](multi-node.md) for labels, zones, and quorum.
 
-4. Create one Swarm secret for each token. The helper asks for each token with hidden input and never prints it.
+4. Create one Swarm secret for each token. The helper asks for each token with hidden input and never prints it. The tokens go to the token proxy only. Then create the placeholder that the runners read instead of a token: any value works.
 
    ```bash
    sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened
+   printf %s machine-runner-swarm-placeholder | sudo linux/setup.sh --secret runner-placeholder
    ```
 
 5. Copy the stack directory, and deploy your copy. For a first run, change nothing in it. You review it later, and from here on you deploy your copy and never the shipped files. The directory holds the stack files and the two scripts that they ship as Swarm configs, which the stack files name next to themselves.

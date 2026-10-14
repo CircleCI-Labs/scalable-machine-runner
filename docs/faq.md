@@ -131,7 +131,13 @@ Yes, with the add-on stack file `ssh-rerun.yaml`. It defines the class `linux-de
 
 ## Can a job read the runner token?
 
-In the default Linux class, a job that uses sudo can. In the hardened class, it cannot. On Windows, a job can, and Swarm also stores the secret in clear text on the container disk, so use BitLocker and one token for each class and host. Refer to [Token model on each OS](security.md#token-model-on-each-os) and to the [comparison with the official installs](security.md#compared-with-the-official-runner-installs). A holder of a token can run a rogue runner on that class and claim its jobs, so rotate tokens ([how](operations.md#rotate-a-runner-token)).
+Not in a single-task class, on Linux or on Windows, with or without sudo: the runner container holds only a made-up placeholder, and the [token proxy](security.md#the-token-proxy) holds the class token. In a persistent class the container holds the token: a job that uses sudo can read it on Linux, and every job can on Windows. Swarm also stores a Windows secret in clear text on the container disk, so use BitLocker and one token for each class and host. Refer to [Token model on each OS](security.md#token-model-on-each-os) and to the [comparison with the official installs](security.md#compared-with-the-official-runner-installs). A holder of a token can run a rogue runner on that class and claim its jobs, so rotate tokens ([how](operations.md#rotate-a-runner-token)).
+
+## What is the token proxy, and what happens when it is down?
+
+It is the service `token-proxy` in the Linux `runners.yaml` (`token-proxy-windows` in the Windows one). It holds the resource class tokens, so that the runner containers and their jobs never do. The runners hold a made-up placeholder and send their API calls to the proxy, which adds the real token to the task claim of a runner that Swarm lists in the DNS set of its class, once for each container. Refer to [Concepts](concepts.md#the-token-proxy) and [Security](security.md#the-token-proxy).
+
+When it is down, no runner can claim, and the jobs wait in CircleCI. Idle runners fail their claims and try again. They send nothing to CircleCI on their own, because they hold no token. Swarm restarts a failed proxy after 5 seconds. A job that already runs keeps its container, but its API calls, such as step output, go through the proxy too, so keep outages to a restart. Refer to [Monitor the token proxy](operations.md#monitor-the-token-proxy), including what a restart does to idle runners. The persistent classes do not use the proxy.
 
 ## Why does a Windows job end when I update or stop a service?
 
@@ -170,8 +176,8 @@ The jobs run in unprivileged containers on a shared kernel, so some jobs belong 
 
 The stack sets nothing for them, and this repository does not test them.
 
-- **Proxy.** Set `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` under `environment` of the service. The runner is a Go program that reads them, and jobs inherit them. Test a checkout through the proxy before you roll out a class. Refer to [Egress hosts](security.md#egress-hosts).
-- **Certificate authority.** Add your CA to a custom image and run `update-ca-certificates`, or mount a CA bundle read-only and point `SSL_CERT_FILE` at it. Windows images need the CA in the image too. Refer to [Images](images.md).
+- **Proxy.** Set `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` under `environment` of the service. The runner is a Go program that reads them, and jobs inherit them. Test a checkout through the proxy before you roll out a class. Refer to [Egress hosts](security.md#egress-hosts). On Linux, also set `HTTPS_PROXY` under `environment` of the `token-proxy` service, because it makes the call to `runner.circleci.com` for the runners, and add `NO_PROXY: token-proxy` to the runners, so that their calls to it stay on the overlay network.
+- **Certificate authority.** Add your CA to a custom image and run `update-ca-certificates`, or mount a CA bundle read-only and point `SSL_CERT_FILE` at it. Windows images need the CA in the image too. On Linux, the token proxy needs the CA too when a proxy or your CircleCI server uses it: mount the bundle into `token-proxy` and set `SSL_CERT_FILE` there. Refer to [Images](images.md).
 
 ## Does it work on hosts without internet access?
 

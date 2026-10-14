@@ -18,7 +18,7 @@ This page is for maintainers. A CircleCI job makes every release of this reposit
 1. The pipeline has one workflow, `ci`. With those parameters it runs all lint jobs, the Linux jobs, the Windows Server 2022 and 2025 jobs, and the e2e jobs on Linux and Windows. Expression filters on the parameters (`filters: pipeline.parameters.release` on the release job, and similar ones on the Windows 2025 and e2e jobs) switch the jobs in and out, so no job runs twice.
 1. The `release` job requires every other job of the workflow. If one job fails, nothing is released. Fix the problem, then use **Rerun workflow from failed**. The release job runs once everything has passed.
 1. The `release` job runs in the serial group `<project slug>/release`, so two quick merges cannot race for the same version. A newer pipeline whose release job waits in the group makes the release job of an older pipeline skip. The newer one releases both changes.
-1. `ci/release.sh` checks that every Swarm config of the stack files is named after the content of its file (`ci/config-names.sh`), and stops when a name is stale. Then it finds the next version, makes the notes, builds the bundles, signs `SHA256SUMS`, verifies the signature, and creates the GitHub release. The release creates the tag at the commit of the pipeline.
+1. `ci/release.sh` checks that every Swarm config of the stack files is named after the content of its file (`ci/config-names.sh`), and stops when a name is stale. Then it finds the next version, makes the notes, pins the token proxy version in the stack files, builds the bundles and the proxy binaries, signs `SHA256SUMS`, verifies the signature, and creates the GitHub release. The release creates the tag at the commit of the pipeline.
 
 Pipelines of other branches never release, and neither do tag pipelines.
 
@@ -59,8 +59,13 @@ git-cliff writes the notes of the new version for the body of the GitHub release
 |---|---|
 | `machine-runner-swarm-<version>.tar.gz` | `README.md`, `LICENSE`, `SECURITY.md`, `VERSION`, the generated `CHANGELOG.md`, `docs/`, `examples/`, `linux/` and `windows/` |
 | `machine-runner-swarm-<version>.zip` | The same files, for Windows users |
-| `SHA256SUMS` | The SHA-256 checksum of both bundles |
+| `machine-runner-swarm-proxy_linux_amd64`, `_linux_arm64`, `_windows_amd64` | The static token proxy binaries, built by `ci/build-proxy.sh` with the release version. The runner distributors of the stack download them from the release and verify them against `SHA256SUMS` |
+| `SHA256SUMS` | The SHA-256 checksum of both bundles and of the three proxy binaries |
 | `SHA256SUMS.sigstore.json` | The cosign bundle: signature, certificate, and transparency log entry |
+
+### The token proxy in a release
+
+The stack files in the repository carry `MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}` in the settings of the distributor (`linux/stack/runners.yaml` and `windows/stack/runners.yaml`). `ci/release.sh` builds the proxy binaries with `ci/build-proxy.sh` and the version of the release, and puts the stack files of the bundle into the archive with `unreleased` replaced by that version. The distributors of a bundle therefore download `machine-runner-swarm-proxy_<os>_<arch>` and `SHA256SUMS` from the release `v<version>` of this repository, which is the release that the bundle came from. A checkout of the repository has no release to download: tests and CI serve the binary of the checkout from a local mirror (`publish_proxy` in `linux/tests/lib.sh`, and the e2e host).
 
 The bundles come from `git archive`, so only tracked files ship. They leave out `linux/tests/`, `windows/tests/`, `docs/ci.md`, `docs/releasing.md`, `ci/`, and `.circleci/`: the pages about this repository's own pipeline and release are for maintainers.
 
@@ -150,7 +155,7 @@ To update a tool, change its version, URL, and SHA-256 value together in `instal
 Everything except publishing and signing runs on a workstation. Install the three tools, or run the script in the job image:
 
 ```bash
-ci/release.sh install-tools          # git-cliff, cosign, gh into ~/.local/bin
+ci/release.sh install-tools          # git-cliff, cosign, gh into ~/.local/bin, and Go into ~/.local/go
 RELEASE_SKIP_SIGN=1 ci/release.sh    # the files are in /tmp/release; nothing is signed or published
 ```
 

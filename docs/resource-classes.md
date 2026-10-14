@@ -19,7 +19,7 @@ To add a class:
    ```
 
 2. Copy an existing service in your stack file and change the values in the table below.
-3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#4-create-the-secrets) or [Create the secrets on Windows](install-windows.md#4-create-the-secrets).
+3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#4-create-the-secrets) or [Create the secrets on Windows](install-windows.md#4-create-the-secrets). On Linux, a single-task class also needs three lines in the `token-proxy` service, as in the example below: its network, its secret, and one variable.
 4. Deploy the stack again, with the same set of `-c` files as before. Swarm creates the new service and leaves unchanged services alone.
 
    ```console
@@ -33,8 +33,9 @@ Each service needs its own values for these keys:
 | Service name | `linux-python` |
 | `hostname` and `CIRCLECI_RUNNER_NAME` (Linux) | `"{{.Node.Hostname}}-linux-python-{{.Task.Slot}}"` |
 | `CIRCLECI_RUNNER_NAME` (Windows) | `"{{.Node.Hostname}}-windows-<class>-{{.Task.Slot}}"`. The Windows files set no `hostname` |
-| `secrets.source` | `linux-python-token`, declared under the top-level `secrets:` with `external: true` |
-| `networks` (Linux) | `[linux-python]`, declared under the top-level `networks:` with `driver: overlay` |
+| `secrets.source` (Windows, and Linux persistent classes) | `linux-python-token`, declared under the top-level `secrets:` with `external: true` |
+| `secrets.source` (Linux, single-task) | `runner-placeholder-token` (as the anchor `*runner` has it). The class token `linux-python-token` goes to the `token-proxy` service |
+| `networks` (Linux) | `[linux-python]`, declared under the top-level `networks:` with `driver: overlay`, and the same network under `token-proxy` |
 
 The runner name must be unique across all runners of your organization. It has at most 64 characters and contains only letters, numbers, `.`, `(`, `)`, `_`, `-`, and spaces. A long hostname plus a long class name can exceed the limit, and the runner then exits with code 80.
 
@@ -50,14 +51,8 @@ services:
       <<: *env
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-python-{{.Task.Slot}}"
       MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
-    secrets:
-      - source: linux-python-token
-        target: circleci_runner_config.yaml
-        uid: "2000"
-        gid: "2000"
-        mode: 0400
     networks: [linux-python]
-    cap_drop: [NET_RAW, MKNOD]
+    cap_drop: [NET_RAW, MKNOD]   # keep NET_RAW dropped: the proxy tells runners apart by their source address
     deploy:
       replicas: 2
       restart_policy: *restart
@@ -67,6 +62,13 @@ services:
         reservations: {cpus: "2", memory: 4G}
       placement: *placement
 
+  token-proxy:   # add the class to the proxy of runners.yaml: a variable, a network, and the class token
+    environment:
+      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_PYTHON: linux-python=/run/secrets/linux-python-token
+    networks: [linux-python]
+    secrets:
+      - {source: linux-python-token, target: linux-python-token, uid: "65534", gid: "65534", mode: 0400}
+
 networks:
   linux-python: {driver: overlay}
 
@@ -74,9 +76,11 @@ secrets:
   linux-python-token: {external: true}
 ```
 
+The runner service inherits the placeholder secret and the proxy URL from `*runner` and `*env`. If you write the example in an add-on stack file of your own, copy those two settings, and deploy it together with `runners.yaml`. Restart the proxy after you add a class, so that it picks the class up: `docker service update --force runners_token-proxy`, then replace the idle runners as in [Restart the proxy](operations.md#restart-the-proxy). A class that the proxy does not serve gets 403 on every claim, and the proxy log says `not a runner of any class`.
+
 Use `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` with the capability settings of `linux-hardened` for a hardened class. Refer to [Concepts](concepts.md#users-and-the-runner-token-on-linux).
 
-The anchor `*runner` brings the four keys that a Linux class needs for the runner: `user: "0"`, `entrypoint: ["/circleci-runner-entrypoint"]`, the config `entrypoint`, and the volume `runner-bin` mounted read-only. A service in another stack file, or one written without the anchor, repeats them:
+The anchor `*runner` brings the keys that a Linux class needs for the runner: `user: "0"`, `entrypoint: ["/circleci-runner-entrypoint"]`, the config `entrypoint`, the placeholder secret `runner-placeholder-token` (the token proxy holds the class token), and the volume `runner-bin` mounted read-only. A service in another stack file, or one written without the anchor, repeats them:
 
 ```yaml
 services:
@@ -85,8 +89,15 @@ services:
     entrypoint: ["/circleci-runner-entrypoint"]
     configs:
       - {source: entrypoint, target: /circleci-runner-entrypoint, mode: 0555}
+    secrets:
+      - {source: runner-placeholder-token, target: circleci_runner_config.yaml, uid: "2000", gid: "2000", mode: 0400}
+    environment:
+      CIRCLECI_RUNNER_API_URL: http://token-proxy:8080
     volumes:
       - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}
+
+secrets:
+  runner-placeholder-token: {external: true}
 
 configs:
   entrypoint: {name: machine-runner-swarm-entrypoint-<12 hex digits>, file: <path to circleci-runner-entrypoint>}
@@ -97,7 +108,7 @@ volumes:
 
 The name of the config carries the first 12 hex digits of the SHA-256 of the file, because a Swarm config cannot change. Refer to [Upgrade to a new release of this repository](operations.md#upgrade-to-a-new-release-of-this-repository). The shipped add-on files repeat the top-level `configs:` and `volumes:`, so each of them also loads alone.
 
-On Windows, copy a service such as `windows-default`, with its two mounts of the volume `runner-bin` (`subpath: current` and `subpath: 'git\current'`) and the top-level `volumes: runner-bin`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks.
+On Windows, copy a service such as `windows-default`, with its two mounts of the volume `runner-bin` (`subpath: current` and `subpath: 'git\current'`) and the top-level `volumes: runner-bin`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks. A single-task Windows class also needs the same lines in `token-proxy-windows` as the Linux example shows (its variable `MACHINE_RUNNER_SWARM_PROXY_CLASS_<NAME>` with the file `C:\ProgramData\Docker\secrets\<service>-token`, and its secret with that target; there are no networks), and reads the placeholder secret `runner-placeholder-token`.
 
 ## Size the limits
 
@@ -149,12 +160,15 @@ To limit the risk:
 - Keep production contexts away from the class.
 - Put cleanup steps at the start of its jobs. The runner does not clean the working directory on Linux.
 - Recycle the runner on a schedule.
+- On Linux, know that this class is weaker than the single-task classes: it does not use the token proxy, so the runner holds the real token. Refer to [The persistent class](security.md#the-persistent-class).
 
 ### Linux
 
 The file `linux/stack/persistent.yaml` defines `linux-persistent`. It sets `CIRCLECI_RUNNER_MODE: continuous` and sets no idle timeout. It mounts the named volume `persistent-home` at `/home/circleci`. Swarm copies the image content of that directory into the new volume on first use.
 
 A volume lives on one node, so the service pins itself with the constraint `node.hostname == CHANGE-ME`. Edit that value before you deploy.
+
+The service keeps its class token in its own container and does not claim through the token proxy, because a continuous runner claims after every job and the proxy allows one claim for each container. A job that uses sudo can therefore read the token. Set `MACHINE_RUNNER_SWARM_JOB_SUDO` to `"false"` in your copy if its jobs can do without sudo.
 
 The service sets `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` to `"false"`. The runner user cannot remove files that the job user created, so the runner does not clean the working directory, and each job must clean up what an earlier job left. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
 
@@ -203,7 +217,7 @@ Before you use it:
 - **SSH key.** A user adds a public key in their CircleCI user settings. Without a key, the **Enable SSH** step does not appear.
 - **Concurrency.** A rerun with SSH holds the runner for up to 2 hours after a user connects, or 10 minutes if nobody does. The job counts against the concurrency limit of your organization, and the replica takes no other job. With one replica for each node, a forgotten session blocks the node, so size the class for it.
 - **Cancel.** Cancel the rerun in the web app or with the CLI when you finish. The container then exits, and Swarm starts a new one.
-- **Security.** The SSH user gets the privileges of the job user, and can reach what the job reached. Anyone who can start a job on the class can rerun it with SSH, and only the user who reruns gets their keys added. In `linux-default-ssh` the job user keeps sudo, as in `linux-default`, so the SSH user can read the runner token. Set `MACHINE_RUNNER_SWARM_JOB_SUDO` to `"false"` to prevent this. Keep the class for named projects, and keep deploy contexts away from SSH reruns. Refer to [CircleCI-side controls](security.md#circleci-side-controls).
+- **Security.** The SSH user gets the privileges of the job user, and can reach what the job reached. Anyone who can start a job on the class can rerun it with SSH, and only the user who reruns gets their keys added. In `linux-default-ssh` the job user keeps sudo, as in `linux-default`, so the SSH user is root in the container, but it holds only the placeholder, because the class claims through the token proxy. Set `MACHINE_RUNNER_SWARM_JOB_SUDO` to `"false"` to take root away. Keep the class for named projects, and keep deploy contexts away from SSH reruns. Refer to [CircleCI-side controls](security.md#circleci-side-controls).
 
 On Windows, the SSH user must name the shell: `ssh -p 54782 <host> -- powershell.exe`. Open the port in Windows Defender Firewall as well. The Windows file is not tested.
 
@@ -284,15 +298,15 @@ The log driver is `json-file` with rotation. The `local` driver also works on Wi
 
 ### The secret
 
-| | Linux | Windows |
-|---|---|---|
-| Name | `<service>-token` | `<service>-token` |
-| Target | `circleci_runner_config.yaml` | `circleci_runner_config.yaml` |
-| Path in the container | `/run/secrets/circleci_runner_config.yaml` | `C:\ProgramData\Docker\secrets\circleci_runner_config.yaml` |
-| Owner and mode | uid 2000, gid 2000, `0400` | Not supported. Administrators and `SYSTEM` only |
-| Content | `api:` and `auth_token: <token>` | The same |
+| | Linux, token proxy | Linux, runner (persistent class) and the placeholder | Windows |
+|---|---|---|---|
+| Name | `<service>-token` | `<service>-token`, and `runner-placeholder-token` for every proxied class | `<service>-token` |
+| Target | `<service>-token` | `circleci_runner_config.yaml` | `circleci_runner_config.yaml` |
+| Path in the container | `/run/secrets/<service>-token`, in the proxy | `/run/secrets/circleci_runner_config.yaml` | `C:\ProgramData\Docker\secrets\circleci_runner_config.yaml` |
+| Owner and mode | uid 65534, gid 65534, `0400` | uid 2000, gid 2000, `0400` | Not supported. Administrators and `SYSTEM` only |
+| Content | `api:` and `auth_token: <token>` | The same. The placeholder holds a made-up token | The same |
 
-The runner does not look for a config file on its own. The entrypoint arguments pass `--config <path>`, and environment variables override the values in the file.
+The proxy accepts the file in this format or a bare token. The runner does not look for a config file on its own. The entrypoint arguments pass `--config <path>`, and environment variables override the values in the file.
 
 ### Exit codes
 

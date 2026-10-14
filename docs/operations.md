@@ -91,6 +91,67 @@ $ curl -s -H "Circle-Token: $CIRCLECI_API_TOKEN" \
 | Runner distributor | `docker service ps runners_runner-distributor`, and its log | Fewer running tasks than Linux nodes, or log lines with `cannot download` or `SHA-256 mismatch`. A line with `not adopting it` says that `current` is not a version that the distributor follows |
 | Disk | `docker system df` and the free space of the Docker data directory | Above 80 percent. Refer to [Free disk space](#free-disk-space) |
 
+### Monitor the token proxy
+
+Every claim of a single-task class goes through the service `token-proxy` (on Windows `token-proxy-windows`, with `docker service ps runners_token-proxy-windows`, the same log lines, and the health check `curl.exe` against `/healthz`). It runs as one replica, and the runners cannot claim without it. Refer to [The token proxy](concepts.md#the-token-proxy). Check it with:
+
+```console
+$ docker service ps runners_token-proxy
+$ docker service logs --tail 30 runners_token-proxy
+```
+
+The proxy answers `GET /healthz` with 200 when every class has a usable token file. Swarm runs the check every 10 seconds, shows `healthy` in `docker ps` on the node, and restarts the task after 3 failures. The log has one line for each event, and never a token:
+
+| Log line | Meaning |
+|---|---|
+| `listening on :8080, upstream <host>, classes tasks.linux-default,...` | The proxy started, with the classes it serves. A class that is missing here is a class whose runners get 403 |
+| `claim from <ip> (tasks.<service>): upstream status 204` | A runner polled and there was no task. Normal, about every 5 seconds for each idle runner |
+| `claim from <ip> (tasks.<service>): upstream status 200` | A claim returned a task, and the runner at that address cannot claim again |
+| `released <ip> (tasks.<service>)` | The container is gone, and a new container on that address can claim |
+| `claim from <ip> refused: not a runner of any class` | A container that is not a runner of a configured class. Look for a class that you added without adding it to the proxy, or for a container that does not belong on a class network |
+| `claim from <ip> refused: this runner has already claimed a task` | A second claim from one container. After a proxy restart every runner that was idle gets this until Swarm replaces it. Refer to [Restart the proxy](#restart-the-proxy) |
+| `claim from <ip> (tasks.<service>): upstream status 401` | CircleCI rejects the class token. The token was deleted, or the secret holds another class's token. Refer to [The runner log shows 401](troubleshooting.md#the-runner-log-shows-401) |
+| `upstream error: ...` | The node of the proxy cannot reach `runner.circleci.com`. The runners get 502 |
+| `cannot resolve the runners`, or `token file` | Swarm DNS or a class secret is unavailable. The runners get 503 |
+
+**If the proxy is down.** Runners cannot claim, so CircleCI keeps the jobs queued. Idle runners keep polling and fail, and they do not go around the proxy, because they hold only the placeholder. A runner that is running a job keeps its container: the runner and the task agent call the API through the proxy too, because the runner hands its own API URL to the agent, and those calls fail while the proxy is down. `linux/tests/proxy.sh` measures this with the real runner: a proxy that restarts while jobs run does not end them, and a proxy that is down when the jobs end, and for a while after, only delays the report: the runner sends the end of the job (step end and cleanup) once the proxy is back, and exits 0. The end-to-end test on CircleCI restarts the proxy in the middle of a real job on a real agent as well (the probe `b2`). Swarm restarts a failed proxy task after 5 seconds, and a restart takes a few seconds, so an outage of that length is harmless. Do not leave the proxy down for long while jobs run: how long the real task agent keeps retrying is not documented.
+
+#### Restart the proxy
+
+A restart is safe at any time. The proxy keeps the addresses of the runners that have claimed in the volume `proxy-state` and refuses only those after the restart. A runner that has not claimed, idle or just started, may claim afterwards, so no restart, deploy, or node reboot locks a runner out. The start line of the log says what the proxy found:
+
+| Log line at start | State |
+|---|---|
+| `state restored: N runner(s) have claimed and stay refused` | The normal case: the state was read, and N runners present have claimed |
+| `no state: a first start, so no runner has claimed through this proxy and every runner present may claim` | `proxy-state` was empty: the first start of the stack |
+| `state lost: failing safe, latching all N runner(s) present` | The marker is there but the state file is not (damaged or removed): every runner present is refused until Swarm replaces it, which is at its idle timeout (1 hour in the shipped files) or when you replace it |
+
+Replace the idle runners of a class at once with:
+
+```console
+$ docker service update --force --update-parallelism 0 runners_linux-default
+```
+
+A busy replica finishes its job before Swarm replaces it. Restart the proxy for a rotation, for a new binary, or for a change of its settings:
+
+```console
+$ docker service update --force runners_token-proxy
+```
+
+The proxy runs the binary that the distributor installed behind `proxy/current` in `runner-bin` when Swarm creates its container. A new `MACHINE_RUNNER_SWARM_PROXY_VERSION` therefore reaches it at its next restart, and a binary that differs from its record stops the start (`does not match its SHA-256 record`).
+
+#### Move the proxy to another node
+
+The proxy is pinned to the node with the label `machine-runner-swarm.proxy=true`, because that node keeps its state. A new node has an empty volume, which the proxy cannot tell from a first start, so tell it first: runners that are busy then are not allowed to claim again.
+
+```console
+$ docker service update --env-add MACHINE_RUNNER_SWARM_PROXY_NO_STATE=latch runners_token-proxy
+$ docker node update --label-rm machine-runner-swarm.proxy <old node>
+$ docker node update --label-add machine-runner-swarm.proxy=true <new node>
+```
+
+The proxy starts on the new node, treats every runner present as having claimed, and refuses them until Swarm replaces them: use the command of the previous section. Then set the variable back with `docker service update --env-add MACHINE_RUNNER_SWARM_PROXY_NO_STATE=allow runners_token-proxy`, or remove it from your copy of the stack file. If the node of the proxy dies, the service stays pending until you label another node, and no runner can claim in the meantime.
+
 ### Capacity and concurrency
 
 The replicas of a class are the jobs it runs at the same time, and the sum over all classes is the capacity of the cluster. A job with `parallelism: n` is `n` tasks, so it needs `n` replicas at once.
@@ -194,6 +255,9 @@ The settings are variables of `docker stack deploy`. They apply to the distribut
 | `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often the distributor looks again. A number of seconds, or a number with `s`, `m`, `h`, or `d` |
 | `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `https://circleci-binary-releases.s3.amazonaws.com/circleci-runner` | Where `manifest.json` and the tarballs are. Set it for a [mirror](#run-the-downloads-from-a-mirror) |
 | `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | Empty | A comma-separated list of the SHA-256 values of the tarballs that may be installed, for every architecture of your nodes. It replaces the value of the manifest. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) |
+| `MACHINE_RUNNER_SWARM_PROXY_VERSION` | The release that you downloaded (a checkout: `unreleased`) | The release `v<version>` of this repository whose `machine-runner-swarm-proxy_linux_<arch>` the distributor installs, next to the runner. `ci/release.sh` writes the version of the release into the default of the stack files in the bundle, so a release needs no setting. In a checkout the default is `unreleased` and no proxy is installed, so the `token-proxy` service waits: set a version, or use the bundle of a release |
+| `MACHINE_RUNNER_SWARM_PROXY_BASE_URL` | `https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download` | Where `v<version>/machine-runner-swarm-proxy_linux_<arch>` and `v<version>/SHA256SUMS` are. Set it for a mirror of the release files |
+| `MACHINE_RUNNER_SWARM_PROXY_SHA256` | Empty | A comma-separated list of the SHA-256 values of the proxy binaries that may be installed (amd64 and arm64). The binary must equal its line in `SHA256SUMS` and, with this list, one of the values |
 
 A command that sets a variable must reach `docker stack deploy`. A host with `sudo` drops the environment, so pass the variable with `env`, or run the command as a user in the `docker` group. Set the same variables on every later deploy, because a deploy without them sets the defaults again.
 
@@ -315,6 +379,7 @@ The settings are the variables of [the Linux table](#settings-of-the-distributor
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | `current` (default) follows the manifest of CircleCI within `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` (default `3`) and looks again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` (default `24h`). A version such as `3.1.12` pins it |
 | `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | A comma-separated list of the SHA-256 values of the `circleci-runner_windows_amd64.tar.gz` tarballs that may be installed. It replaces the value of the manifest |
 | `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | A mirror: `manifest.json` and `<version>/circleci-runner_windows_amd64.tar.gz` below this URL |
+| `MACHINE_RUNNER_SWARM_PROXY_VERSION`, `_PROXY_BASE_URL`, `_PROXY_SHA256` | The token proxy, as in [the Linux table](#settings-of-the-distributor): the release `v<version>` of this repository whose `machine-runner-swarm-proxy_windows_amd64` and `SHA256SUMS` the distributor installs (`proxy\versions\<version>`, behind the link `proxy\current`, the last 2 versions kept). `ci/release.sh` pins the default in the bundle |
 | `MACHINE_RUNNER_SWARM_TOOLS_BASE_URL` | A directory URL that holds `PortableGit-<version>-64-bit.7z.exe` and `7zr.exe`, the two downloads that the script pins by SHA-256. Without it they come from GitHub |
 
 In PowerShell, set the variables in the environment of the shell that runs the deploy:
@@ -361,7 +426,7 @@ In a clone of this repository, `ci/config-names.sh --write` renames the configs 
 
 ## Rotate a runner token
 
-Swarm secrets are immutable. To rotate a token, create a second secret and swap it into the service. The rolling update replaces one replica at a time, and busy runners finish their job first. The update is serial per replica: the shipped stack files set `update_config.parallelism: 1`, and a busy replica is replaced only after its job ends, which takes up to the grace period of 5 hours and 5 minutes. A service with N replicas can therefore take up to N times that long to finish the swap. To shorten it, raise `update_config.parallelism` in the stack file, or pass `--update-parallelism <number>` to `docker service update` for one update (`0` replaces every replica at once).
+Swarm secrets are immutable. To rotate a token, create a second secret and swap it into the service that holds it. On Linux, that is the `token-proxy` service for a single-task class: one replica, so the swap takes seconds, and the runners are not touched. For a persistent class and on Windows it is the service of the class itself. The rolling update replaces one replica at a time, and busy runners finish their job first. The update is serial per replica: the shipped stack files set `update_config.parallelism: 1`, and a busy replica is replaced only after its job ends, which takes up to the grace period of 5 hours and 5 minutes. A service with N replicas can therefore take up to N times that long to finish the swap. To shorten it, raise `update_config.parallelism` in the stack file, or pass `--update-parallelism <number>` to `docker service update` for one update (`0` replaces every replica at once).
 
 1. Create a new token in CircleCI. Keep the old token until the swap is complete.
 
@@ -377,31 +442,44 @@ Swarm secrets are immutable. To rotate a token, create a second secret and swap 
    unset TOKEN
    ```
 
-3. Swap the secrets in the service. On Linux:
+3. Swap the secrets in the service. On Linux, for a single-task class, swap it in the proxy. Keep the `target`, so that the variable of the proxy stays valid:
 
    ```console
    $ docker service update \
        --secret-rm linux-default-token \
-       --secret-add source=linux-default-token-v2,target=circleci_runner_config.yaml,uid=2000,gid=2000,mode=0400 \
-       runners_linux-default
+       --secret-add source=linux-default-token-v2,target=linux-default-token,uid=65534,gid=65534,mode=0400 \
+       runners_token-proxy
    ```
 
-   On Windows, secrets have no `uid`, `gid`, or `mode`:
+   The proxy restarts, and the idle runners of every class get 403 until Swarm replaces them. Replace them at once with `docker service update --force --update-parallelism 0 runners_<service>` for each class, or wait for their idle timeout. Refer to [Restart the proxy](#restart-the-proxy).
+
+   On Linux, for a persistent class, swap it in the service itself:
+
+   ```console
+   $ docker service update \
+       --secret-rm linux-persistent-token \
+       --secret-add source=linux-persistent-token-v2,target=circleci_runner_config.yaml,uid=2000,gid=2000,mode=0400 \
+       runners_linux-persistent
+   ```
+
+   On Windows, a single-task class is swapped in the proxy as well (secrets have no `uid`, `gid`, or `mode`, and the target is the file of the class in the proxy):
 
    ```powershell
    docker service update `
      --secret-rm windows-default-token `
-     --secret-add source=windows-default-token-v2,target=circleci_runner_config.yaml `
-     runners_windows-default
+     --secret-add source=windows-default-token-v2,target=windows-default-token `
+     runners_token-proxy-windows
    ```
+
+   On Windows, for the persistent class, swap it in the service itself, with the target `circleci_runner_config.yaml`.
 
 4. Wait until the update completes. The state is `completed`:
 
    ```console
-   $ docker service inspect --format '{{.UpdateStatus.State}}' runners_linux-default
+   $ docker service inspect --format '{{.UpdateStatus.State}}' runners_token-proxy
    ```
 
-5. Record the new name in your stack file: change `source:` and the entry under the top-level `secrets:`. A later `docker stack deploy` from the old file then does not revert the swap.
+5. Record the new name in your stack file: change `source:` and the entry under the top-level `secrets:` (for the proxy, the `source:` of the class under `token-proxy`). A later `docker stack deploy` from the old file then does not revert the swap.
 6. Revoke the old token in CircleCI, and remove the old secret.
 
    ```console
@@ -412,7 +490,7 @@ Swarm secrets are immutable. To rotate a token, create a second secret and swap 
 
 ### If a token leaked
 
-Do not swap first. Until the old token is deleted in CircleCI, it stays valid for anyone who holds it, and the swap above can take up to N times 5 hours and 5 minutes for N replicas, because it replaces one replica at a time and each busy replica finishes its job first. Delete the token as soon as its replacement exists:
+Do not swap first. Until the old token is deleted in CircleCI, it stays valid for anyone who holds it. For a class that holds its token in its runners (a persistent class, or Windows), the swap above can take up to N times 5 hours and 5 minutes for N replicas, because it replaces one replica at a time and each busy replica finishes its job first. For a single-task class on Linux the swap is in the proxy and takes seconds, but the leak itself means that someone reached the proxy's node or the secret, so read the end of this section. Delete the token as soon as its replacement exists:
 
 1. Create the new token, and the secret with the new token. Use the steps 1 and 2 above. Nothing uses the new secret yet.
 2. Delete the old token at once.
@@ -422,8 +500,8 @@ Do not swap first. Until the old token is deleted in CircleCI, it stays valid fo
    $ circleci runner token delete <token ID>
    ```
 
-   CircleCI stops accepting the old token for new claims, so nobody can start a runner on the class with it. Jobs that already run continue until they end. Idle runners that still hold the old secret fail with 401 and restart every 10 seconds until the swap replaces them, so the class claims no new jobs until step 3 completes.
-3. Swap the secrets, and replace every replica at once so that the class recovers soon:
+   CircleCI stops accepting the old token for new claims, so nobody can start a runner on the class with it. Jobs that already run continue until they end. A proxy that still holds the old secret, or idle runners of a persistent class or Windows that still hold it, fail with 401 until the swap, so the class claims no new jobs until step 3 completes.
+3. Swap the secrets. For a single-task class on Linux, swap it in the proxy with the command of step 3 above, and replace the idle runners (`docker service update --force --update-parallelism 0 runners_<service>`). For the other classes, replace every replica at once so that the class recovers soon:
 
    ```console
    $ docker service update --update-parallelism 0 \
@@ -434,6 +512,8 @@ Do not swap first. Until the old token is deleted in CircleCI, it stays valid fo
 
    Each replica still finishes the job that it runs before Swarm replaces it. On Windows, drop `uid`, `gid`, and `mode`, and expect the update to end a running job after about 5 seconds: rerun those jobs. Refer to [Stop a busy Windows container](#stop-a-busy-windows-container).
 4. Do steps 4 and 5 above (wait for the update, record the new name in your stack file), and remove the old secret with `docker secret rm linux-default-token`. Then look for what the leaked token did: the runner inventory in CircleCI for names you do not know, and the jobs that ran on the class.
+
+A leaked token of a single-task class on Linux did not come from a job in a runner container, because those hold no token. Look at who can read Swarm secrets (the `docker` group on a manager), at the node that runs the proxy, and at the backups of the managers. Rotate the tokens of every class whose secret that path reached, because the proxy holds all of them.
 
 ## Drain a node for patching
 
@@ -535,11 +615,11 @@ On a node that runs a docker-build class, jobs also leave images, volumes, and b
 2. Remove the secrets, and the volumes of persistent classes.
 
    ```console
-   $ docker secret rm linux-default-token linux-java-token linux-hardened-token
-   $ docker volume rm runners_persistent-home
+   $ docker secret rm linux-default-token linux-java-token linux-hardened-token runner-placeholder-token
+   $ docker volume rm runners_persistent-home runners_proxy-state
    ```
 
-   The volume of the Windows persistent class is `runners_windows-persistent-cache`.
+   The volume of the Windows persistent class is `runners_windows-persistent-cache`, and the Windows proxy keeps its state in `runners_proxy-state` too.
 
    The volume `runners_runner-bin` holds the runner (and Git on Windows) and stays on every node after `docker stack rm`. Remove it on every node, on Windows after the last container of the stack is gone:
 

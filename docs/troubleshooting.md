@@ -59,7 +59,7 @@ The restart delay is a pause between starts, not a back-off. Swarm creates the r
 
 `docker stack deploy` fails with `secret not found: linux-java-token`.
 
-**Cause.** A service references an external secret that does not exist. Every service in the file needs its `<service>-token` secret.
+**Cause.** A service references an external secret that does not exist. Every service in the file needs its `<service>-token` secret, and on Linux every runner service also needs `runner-placeholder-token`.
 
 **Fix.** Create the secret, or delete the service from your copy of the stack file together with its entries under `secrets:` and `networks:`. On Windows, `runners.yaml` needs only `windows-default-token`, and each add-on stack file (`custom-image.yaml`, `persistent.yaml`, `docker-build.yaml`, `ssh-rerun.yaml`) needs its own `<service>-token` secret when you deploy it.
 
@@ -71,8 +71,19 @@ The log contains `401 (Unauthorized)`, and the runner never claims a job.
 
 **Fix.**
 
-- Check that the secret `<service>-token` holds the token of the resource class with the same name as the service. A swapped token does not fail loudly. The runner serves the class of its token, so jobs of the intended class stay queued.
+- Check that the secret `<service>-token` holds the token of the resource class with the same name as the service. A swapped token does not fail loudly. The runner serves the class of its token, so jobs of the intended class stay queued. On Linux, the token is in the proxy, so look in the log of `runners_token-proxy` for `upstream status 401`, and check that its variable for the class names the right secret.
 - Create a new token and rotate it. Refer to [Rotate a runner token](operations.md#rotate-a-runner-token).
+
+### The runner log shows 403 and the proxy log says refused
+
+The runner log contains `403 (Forbidden)` for the claim, and the log of `runners_token-proxy` says `claim from <ip> refused`.
+
+**Cause.** The proxy answers a claim only from an address that Swarm DNS lists now for `tasks.<service>` of a class that it serves, and only once for each container. The reason is in the log line.
+
+**Fix.**
+
+- `not a runner of any class`: the class is not in the proxy (a new class needs its variable, network, and secret under `token-proxy`; refer to [Define a class](resource-classes.md#define-a-class)), the proxy is not on the network of the class, or the claim comes from a container that is not a runner.
+- `this runner has already claimed a task`: the proxy restarted while the runner was idle. The runner retries every 5 seconds until it is replaced, at its idle timeout. Replace it now with `docker service update --force --update-parallelism 0 runners_<service>`. Refer to [Restart the proxy](operations.md#restart-the-proxy).
 
 ### The runner log shows x509 certificate errors
 

@@ -143,6 +143,14 @@ docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <node 
 docker node update --label-add machine-runner-swarm.windows-ltsc2025=true <node name>   # Server 2025 only
 ```
 
+The token proxy needs a label too: it runs on the node with `machine-runner-swarm.proxy=true`, which keeps its state there (`setup helper`: `-InitSwarm` sets it on the node that it creates). Choose a node that runs no jobs when you can:
+
+```powershell
+docker node update --label-add machine-runner-swarm.proxy=true <node name>
+```
+
+Without the label the proxy stays pending and no runner can claim.
+
 The optional classes need one more label each. Add it to the nodes that run them:
 
 | Class | Label |
@@ -152,14 +160,14 @@ The optional classes need one more label each. Add it to the nodes that run them
 
 ## 4. Create the secrets
 
-Create one secret for each service you deploy, including each optional class. The secret is the config file of the runner and holds only the token:
+Create one secret for each service you deploy, including each optional class except the persistent one. The secret is a runner config file and holds only the token. The token proxy mounts these secrets, and the runners never see them:
 
 ```yaml
 api:
   auth_token: <token>
 ```
 
-Swarm mounts the secret at `C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`. The runner reads it with `--config`. Every other setting is a `CIRCLECI_RUNNER_*` environment variable in the stack file.
+The runners read one more secret, `runner-placeholder-token`, with a made-up token: create it once, with any value, in the same format (the setup helper does it). Swarm mounts it at `C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`, and the runner reads it with `--config`. Only the persistent class mounts its own token there. Every other setting is a `CIRCLECI_RUNNER_*` environment variable in the stack file.
 
 The following commands ask for the token with hidden input, write the file without a byte order mark, create the secret, and delete the file.
 
@@ -171,6 +179,9 @@ try { $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } final
 $file = Join-Path $env:TEMP 'circleci-runner-config.yaml'
 [IO.File]::WriteAllText($file, "api:`n  auth_token: $token`n", (New-Object Text.UTF8Encoding($false)))
 docker secret create "$class-token" $file
+Remove-Item -LiteralPath $file -Force
+[IO.File]::WriteAllText($file, "api:`n  auth_token: machine-runner-swarm-placeholder`n", (New-Object Text.UTF8Encoding($false)))
+docker secret create runner-placeholder-token $file
 Remove-Item -LiteralPath $file -Force
 ```
 
@@ -195,7 +206,7 @@ The directory holds the stack files and `runner-distributor.ps1`, the script tha
 | `windows-docker-build` | `docker-build.yaml` | Builds Windows images with the host engine. Refer to [Docker Builds](docker-builds.md) |
 | `windows-default-ssh` | `ssh-rerun.yaml` | Supports Rerun job with SSH and publishes port 54782. Untested on Windows. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh) |
 
-- `runners.yaml` needs only the secret `windows-default-token`. Each add-on stack file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
+- `runners.yaml` needs the secrets `windows-default-token` and `runner-placeholder-token`. Each add-on stack file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
 - The distributor settings are variables of `docker stack deploy` and need no edit: the runner version `current` (CircleCI's current release of major version 3, checked every 24 hours), a pin, a mirror and an explicit SHA-256. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 - A Server 2025 node runs the shipped `ltsc2022` services. For a class on the `ltsc2025` image, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-ltsc2025 == true`.
 
@@ -274,6 +285,7 @@ The helper does not add the labels of the optional classes.
 |---|---|
 | `-InitSwarm -AdvertiseAddr <ip>` | Creates a Swarm when none exists. The address is required, and the helper waits until the node is a manager |
 | `-Class <name>,<name>` | Asks for each token with hidden input and creates the secret `<name>-token`. An existing secret stays unchanged |
+| (placeholder) | With `-Class` or `-Deploy` it also creates the secret `runner-placeholder-token` with a made-up token, which every runner reads. `-InitSwarm` labels the node `machine-runner-swarm.proxy=true`, the node of the token proxy |
 | `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, `runners.yaml` first) and `-StackName` (default `runners`). Without `-StackFile` it deploys the shipped `windows\stack\runners.yaml` as it is, which suits a first run. Once you keep copies as in step 5, pass them. The helper prints the files that it deploys |
 
 The helper labels the node from the host build: `machine-runner-swarm.windows-ltsc2022=true` on Server 2022, and both `windows-ltsc2022=true` and `windows-ltsc2025=true` on Server 2025. It supports Server 2022 and 2025 only. Server 2019 is untested and gets no label. The distributor reads its settings from the environment of `-Deploy`.

@@ -20,8 +20,9 @@ This repository is part of CircleCI Labs. CircleCI support does not cover it. Fi
 
 ## What this stack does with your credentials
 
-- The resource class token is stored as a Swarm secret and mounted into the container as a file, which is a minimal runner config file. The stack never puts the token in an environment variable or in a stack file.
-- On Linux, a job in the default class has passwordless sudo, so a job that uses sudo can read the token. The hardened class removes sudo, and the token is then unreadable from jobs.
+- The resource class token is stored as a Swarm secret, a minimal runner config file. The stack never puts the token in an environment variable or in a stack file.
+- On Linux, the single-task classes do not hold their token: the `token-proxy` service holds it and adds it to the task claims of the runners of that class, once for each container. The runner containers hold a made-up placeholder, so a job cannot read the class token, with or without sudo. A job that escapes its container onto the node of the proxy could read the tokens.
+- On Linux, the persistent class keeps its token as a file in its container, because a continuous runner claims many times. A job in it that uses sudo can read the token. Keep that class for trusted projects.
 - On Windows, jobs run as the same account as the runner, so a job can read the token file. Swarm also stores the secret in clear text on the disk of the container until the container stops, unlike Linux, which keeps it in memory. Enable BitLocker, and treat every Windows resource class as a trust boundary.
 - A job that can reach the Docker engine has root on that node. Docker builds are opt-in and limited to worker nodes labeled `machine-runner-swarm.docker-build=true`, and every other service of the stack files stays off those nodes (`node.labels.machine-runner-swarm.docker-build != true`).
 

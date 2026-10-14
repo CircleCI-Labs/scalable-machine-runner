@@ -971,7 +971,7 @@ jobs:
             # jobs. A job that nothing else requires and that the lock does not list is missing,
             # unless it is one of the optional jobs named here.
             yq -o=json '.workflows.ci.jobs' /tmp/compiled.yml | jq -r '
-              ["linux-mixed-arch", "linux-microvm"] as $optional
+              ["linux-mixed-arch"] as $optional
               | map(if type == "string" then {key: ., value: {}} else to_entries[0] end) as $jobs
               | ($jobs | map(select(.key == "release"))[0].value.requires[0]) as $gate
               | ($jobs | map(select(.key == $gate))[0].value.requires) as $required
@@ -1159,7 +1159,8 @@ workflows:
       - linux-image-example
       - linux-setup
       - linux-arm64
-      # Optional: it is NOT in the `requires` of the release until KVM on the Android image is proven in CI.
+      # Required by the release: KVM on the Android image has passed in CI in every pipeline since the first one that could run it
+      # (full-suite, which a release pipeline switches on).
       - linux-microvm:
           filters: pipeline.parameters.full-suite
       # Optional: it is NOT in the `requires` of the release (the release check of lint-circleci lists it as optional).
@@ -1213,6 +1214,7 @@ workflows:
             - linux-image-example
             - linux-setup
             - linux-arm64
+            - linux-microvm
             - windows-swarm-ltsc2022
             - windows-swarm-ltsc2025
             - e2e-linux

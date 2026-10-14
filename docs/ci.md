@@ -102,7 +102,7 @@ flowchart TD
 | `e2e-linux` | `e2e-linux-host`, `e2e-linux-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`; probes: `cci-labs/scalable-machine-runner-e2e-linux` | Real runner e2e (below) |
 | `e2e-linux-arm64` | `e2e-linux-arm64-host`, `e2e-linux-arm64-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`, `arm.medium`; probes: the same class | The same e2e with the arm64 runner. It uses the class and the token of `e2e-linux` and runs after it in the same serial group. Every probe records `uname -m`, and the host requires it to equal its own `aarch64` |
 | `e2e-windows` | `e2e-windows-2022-host` and `-b1`, `-b2`, `-b3`; then the same for 2025 | host: `windows-server-2022-gui:current` / `windows-server-2025-gui:current`; probes: `cci-labs/scalable-machine-runner-e2e-windows` | Real runner e2e (below) |
-| `release` | `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release` | The release (below). It requires every job above except the optional `linux-mixed-arch` and `linux-microvm` |
+| `release` | `release` | `cimg/base:2026.10`, context `scalable-machine-runner-release` | The release (below). It requires every job above except the optional `linux-mixed-arch` |
 | `main` only, workflow `docs-site` | `docs-site-publish` | `cimg/go:1.27.2`, small, context `scalable-machine-runner-docs`, `serial-group` | The same build, then `site/publish.sh` pushes the site to the `gh-pages` branch. The release does not wait for it ([below](#docs-site)) |
 
 **Executor images.** These were checked against the CircleCI docs on 2026-10-12:
@@ -184,7 +184,7 @@ The decision therefore has to happen before the e2e jobs are compiled into the w
 
 `linux-microvm` runs `linux/tests/microvm.sh` on the Android machine image, because it is the only CircleCI machine image with nested virtualization. The job loads `vhost_vsock` and `vhost_net`, installs `zstd`, and runs the script with `SWARM_TEST_REQUIRE_KVM=1`, so a missing `/dev/kvm` fails the job instead of skipping the test. The script downloads the pinned Kata release and checks its SHA-256, starts a runc manager and a Kata worker in Docker-in-Docker containers, and deploys the real `runners.yaml` and `microvm.yaml` with the real entrypoint, the real runner against a fake API, and a fake runner. Refer to [MicroVM jobs](microvm.md#what-is-tested) for the checks.
 
-The job is new and has not run on CircleCI yet. It is in the `release` requirements like every job of the workflow, so the first pipeline of `main` shows whether the Android image has `/dev/kvm`, `/dev/vhost-vsock`, and a Docker that runs privileged containers. Run the same script locally on any host with KVM; it skips without `/dev/kvm`.
+The job passes on CircleCI: the Android image has `/dev/kvm`, `/dev/vhost-vsock`, and a Docker that runs privileged containers, and the job was green in each of the first three pipelines that ran it, so it is in the `release` requirements like every job of the workflow. Run the same script locally on any host with KVM; it skips without `/dev/kvm`.
 
 ## Windows jobs
 

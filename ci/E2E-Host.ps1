@@ -195,14 +195,26 @@ function Invoke-Prepare {
     Invoke-Docker node ls | ForEach-Object { Write-Host $_ }
     Invoke-Docker node inspect self --format '{{json .Spec.Labels}}' | ForEach-Object { Write-Host "node labels: $_" }
     # The distributor installs the runner and Git from CircleCI's real manifest (docs/install-windows.md), with a made-up token in
-    # a made-up secret that the run replaces.
+    # a made-up secret that the run replaces. The same stack text as the run deploys, so the distributor is not touched again.
     Import-Module (Join-Path $repo 'windows\tests\SwarmTestHelpers.psm1') -Force
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    Write-RenderedStack
     Write-E2ELog 'deploying the stack with no runner replicas: the distributor installs the runner and Git'
-    $d = Install-SwarmDistributor -Stack $Stack -StackFile $StackFile -TimeoutSeconds 1500
+    $d = Install-SwarmDistributor -Stack $Stack -StackFile $renderedStack -TimeoutSeconds 1500
     Write-Host $d.Log
     if (-not $d.Ok) { Exit-WithFailure $d.Detail }
     Invoke-StackRemoval
     $null = Invoke-Docker secret rm "$Service-token"
+}
+
+function Write-RenderedStack {
+    # The stack as shipped, with the host's Windows build in the image tags and the placement constraint. (Not the output of
+    # `docker stack config`, which rewrites the file.) The copy sits in the log directory, and Docker reads the script of the
+    # Swarm config relative to the stack file, so the copy names it by its full path.
+    $distScript = Join-Path (Split-Path -Parent $StackFile) 'runner-distributor.ps1'
+    if (-not (Test-Path -LiteralPath $distScript)) { throw "$distScript is missing" }
+    (Get-Content -LiteralPath $StackFile) -replace 'ltsc2022', $tag -replace 'file: runner-distributor\.ps1', "file: '$distScript'" |
+        Set-Content -LiteralPath $renderedStack -Encoding ASCII
 }
 
 function Write-Override {
@@ -318,9 +330,7 @@ function Invoke-Run {
         -RedirectStandardOutput $eventsLog -RedirectStandardError (Join-Path $logDir 'events.err') `
         -ArgumentList "events --filter type=container --filter `"label=com.docker.swarm.service.name=$fullService`" --filter event=start --filter event=die --format `"{{json .}}`""
 
-    # The stack as shipped, with the host's Windows build in the image tags and the placement constraint.
-    # (Not the output of `docker stack config`, which rewrites the file.)
-    (Get-Content -LiteralPath $StackFile) -replace 'ltsc2022', $tag | Set-Content -LiteralPath $renderedStack -Encoding ASCII
+    Write-RenderedStack
     Write-Override
     Write-E2ELog "deploying $fullService from $($StackFile.Replace($repo + '\', '')) + override: idle_timeout=$runnerIdle max_run_time=$runnerMaxRun"
     Invoke-Docker stack deploy --detach=true --resolve-image never -c $renderedStack -c $override $Stack | ForEach-Object { Write-Host $_ }

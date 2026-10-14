@@ -51,7 +51,7 @@ flowchart TB
   r1 & r2 & r3 & r4 & r5 --> api
 ```
 
-Nothing is built. On Linux, the global service `runner-distributor` keeps the runner in a volume on every node, and the stack mounts it into stock images such as `cimg/base`, so `docker stack deploy` is the whole install. On Windows, the stack mounts the runner from the host into Windows Server Core. Refer to [Concepts](docs/concepts.md) for the model, the job lifecycle, and what a clean environment covers.
+Nothing is built. On Linux, the global service `runner-distributor` keeps the runner in a volume on every node, and the stack mounts it into stock images such as `cimg/base`, so `docker stack deploy` is the whole install. On Windows, the global service `runner-distributor-windows` does the same for the runner and portable Git, which the stack mounts into stock Windows Server Core. Refer to [Concepts](docs/concepts.md) for the model, the job lifecycle, and what a clean environment covers.
 
 ## Quickstart
 

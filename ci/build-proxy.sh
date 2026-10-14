@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
-# Build the token proxy (proxy/) as static binaries: the same flags for the proxy-test job, the release and the tests.
+# Build the token proxy (proxy/) as static binaries: the proxy-test job, which checks that every platform builds and hands the windows/amd64
+# binary to the Windows image (proxy/Dockerfile.windows, ci/Build-ProxyImage.ps1). The Linux image builds the proxy itself, in its Dockerfile,
+# with the same flags.
 #
 #   ci/build-proxy.sh OUT_DIR [VERSION [TARGET...]]
-#   ci/build-proxy.sh --assets
+#   ci/build-proxy.sh --list
 #
-# TARGET is GOOS/GOARCH (default: every platform of CircleCI's runner manifest, which is every platform of the release: linux amd64, arm64,
-# ppc64le and s390x, and windows amd64 and arm64). Each build is written to OUT_DIR/machine-runner-swarm-proxy_<os>_<arch>, the file name
-# of the release asset, and VERSION (default dev) is what the proxy reports in its User-Agent tag. --assets prints those file names, one
-# for each default target: the list that ci/release.sh uploads. It uses the Go on PATH, and without one a pinned golang container.
+# TARGET is GOOS/GOARCH (default: every platform of CircleCI's runner manifest: linux amd64, arm64, ppc64le and s390x, and windows amd64 and
+# arm64). Each build is written to OUT_DIR/machine-runner-swarm-proxy_<os>_<arch>, and VERSION (default dev) is what the proxy reports
+# (-version, and the User-Agent tag of its calls). --list prints those file names, one for each default target. It uses the Go on PATH, and
+# without one a pinned golang container.
 set -euo pipefail
 
 default_targets=(linux/amd64 linux/arm64 linux/ppc64le linux/s390x windows/amd64 windows/arm64)
-if [[ ${1:-} == --assets ]]; then
+if [[ ${1:-} == --list ]]; then
   for t in "${default_targets[@]}"; do echo "machine-runner-swarm-proxy_${t%/*}_${t#*/}"; done
   exit 0
 fi
 
-out=${1:?usage: ci/build-proxy.sh OUT_DIR [VERSION [TARGET...]] | --assets}
+out=${1:?usage: ci/build-proxy.sh OUT_DIR [VERSION [TARGET...]] | --list}
 version=${2:-dev}
 shift $(($# < 2 ? $# : 2))
 targets=("$@")

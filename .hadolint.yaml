@@ -1,5 +1,5 @@
 # hadolint configuration for every Dockerfile in this repository.
-# CI runs: hadolint --config .hadolint.yaml <each Dockerfile under linux/ and windows/>
+# CI runs: hadolint --config .hadolint.yaml <each Dockerfile under linux/, windows/ and proxy/>
 #
 # Policy:
 # - Warnings fail the build; info/style findings are reported only.
@@ -13,7 +13,8 @@ failure-threshold: warning
 trustedRegistries:
   - docker.io                    # circleci/runner-agent, cimg/*
   - registry.access.redhat.com   # ubi9
-  - mcr.microsoft.com            # windows/servercore, powershell
+  - mcr.microsoft.com            # windows/servercore, windows/nanoserver, powershell
+  - gcr.io                       # distroless static, the base of the token proxy image (proxy/Dockerfile)
 
 # No global ignores. hadolint already skips the POSIX shell rules (DL4006,
 # shellcheck) for a Windows Dockerfile that sets SHELL ["powershell", ...].

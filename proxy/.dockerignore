@@ -1,0 +1,5 @@
+# The build context of proxy/Dockerfile is the source of the proxy and nothing else.
+*
+!go.mod
+!cmd/
+cmd/machine-runner-swarm-proxy/machine-runner-swarm-proxy

@@ -1,0 +1,32 @@
+# escape=`
+# The token proxy as a container image for Windows: the Windows part of ccilabs/machine-runner-swarm-proxy (docs/install-windows.md,
+# "The token proxy image"). Nano Server, with one static binary.
+#
+#   go build, or ci/build-proxy.sh, makes machine-runner-swarm-proxy_windows_amd64. Put that file in an empty directory as
+#   machine-runner-swarm-proxy.exe, and from a Windows host whose build matches the image (process isolation):
+#
+#     docker build -f proxy/Dockerfile.windows -t machine-runner-swarm-proxy:dev <that directory>
+#     docker build -f proxy/Dockerfile.windows --build-arg BASE=mcr.microsoft.com/windows/nanoserver:ltsc2025 -t ... <that directory>
+#
+# ci/Build-ProxyImage.ps1 does this for CI, with the base images pinned by digest, for ltsc2022 and ltsc2025. The published tags hold
+# both images in one manifest list, next to the Linux ones, so Docker picks the one of the node. There is no windows/arm64 image: CI
+# has no Windows on Arm to build and test it on (docs/install-windows.md says what to do on such a host).
+#
+# The image runs as ContainerAdministrator, the default of Server Core: Windows has no uid mapping for a named volume, and the user
+# of Nano Server (ContainerUser) cannot write to it, so the state of the proxy (the latched runners) needs the administrator.
+ARG BASE=mcr.microsoft.com/windows/nanoserver:ltsc2022
+FROM ${BASE}
+ARG VERSION=dev
+ARG REVISION=
+LABEL org.opencontainers.image.title="machine-runner-swarm-proxy" `
+      org.opencontainers.image.description="The runner token proxy of machine-runner-swarm: it holds the CircleCI resource class tokens, so that runner containers do not" `
+      org.opencontainers.image.source="https://github.com/CircleCI-Labs/scalable-machine-runner" `
+      org.opencontainers.image.licenses="MIT" `
+      org.opencontainers.image.version="${VERSION}" `
+      org.opencontainers.image.revision="${REVISION}"
+COPY machine-runner-swarm-proxy.exe C:/machine-runner-swarm-proxy.exe
+USER ContainerAdministrator
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 CMD ["C:\\machine-runner-swarm-proxy.exe", "-healthcheck"]
+ENTRYPOINT ["C:\\machine-runner-swarm-proxy.exe"]
+CMD ["-state-dir", "C:\\state"]

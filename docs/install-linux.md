@@ -229,6 +229,7 @@ The optional classes are separate add-on stack files. Add each with another `-c`
 | File | Service | Purpose |
 |---|---|---|
 | `linux/stack/docker-build.yaml` (in `deploy/` after the copy) | `linux-docker-build` | Builds images with the host Docker engine. Needs a labeled worker node. Refer to [Docker Builds](docker-builds.md) |
+| `linux/stack/microvm.yaml` (in `deploy/` after the copy) | `linux-microvm`, `linux-microvm-docker`, and the DNS forwarder `microvm-dns` | Runs each job in a Kata Containers microVM. Needs KVM and a node setup. Refer to [MicroVM jobs](microvm.md) |
 | `linux/stack/persistent.yaml` (in `deploy/` after the copy) | `linux-persistent` | A long-lived runner with a named volume. Needs the node name edited in the file. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
 | `linux/stack/ssh-rerun.yaml` (in `deploy/` after the copy) | `linux-default-ssh` | A class that supports Rerun job with SSH. Publishes port 54782 on the node. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh) |
 

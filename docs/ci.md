@@ -32,6 +32,7 @@ This section is the short answer for users and reviewers. The pipeline sections 
 | Limits and network | `pids`, `ulimits`, capabilities, and reservations that leave replicas pending. Classes cannot reach each other, and replicas of one class can | `limits.sh` and `network.sh` |
 | Bad configuration | The runner and the entrypoint exit 80 and do not loop hot | `exit80.sh` and `Test-Exit80.ps1` |
 | Entrypoint | The unit tests on `cimg`, Alpine and UBI, including the wait for the runner, the check against its SHA-256 record, and the version that a container resolves once | `bats` in the Linux suite |
+| MicroVM add-on | `microvm.yaml` merged with the main file. Jobs run in a Kata VM with their own kernel, DNS works through the forwarder, a read-only node directory stops a write from the VM, dockerd builds inside the VM, and the entrypoint exits 80 on runc | `linux/tests/microvm.sh`: skipped without `/dev/kvm`, run by the job `linux-microvm` on the Android machine image ([below](#linux-microvm)) |
 | Workspaces and caches | A real workspace and cache round trip on Windows, including the Git `tar` | `ci/E2E-Storage.ps1` in the Windows e2e |
 | Documentation | Markdown rules, relative links and anchors, and every Mermaid diagram | `lint-markdown`, `lint-docs-links`, `lint-docs-mermaid` |
 
@@ -49,6 +50,7 @@ This section is the short answer for users and reviewers. The pipeline sections 
 | A drain that lasts hours | The `stop_grace_period` of 5h5m is a setting, and no test waits for it |
 | The persistent class with a real task agent | Linux and Windows run a fake or an idle runner |
 | The docker-build add-on stack file with a real job | The Windows named pipe is never used by a test |
+| Real jobs in a microVM, Kata on arm64 or on AMD CPUs, and clouds other than AWS | `microvm.sh` runs the real runner against a fake API on nested KVM on AWS (Intel). Checkout, caches and artifacts over virtiofs are not exercised |
 | Real jobs on arm64 | The e2e group `e2e-linux-arm64` runs the same three probes on a real arm64 runner, which the distributor installed on an Arm VM. `linux-arm64` is the smoke test before it: the install by the distributor and the start of the stack |
 | A mirror over `https` with a private certificate authority, and a download through a proxy | The distributor test serves its mirror over plain HTTP, and `linux-setup` downloads from the real bucket over `https` |
 | RHEL and SELinux | The steps follow Docker's documentation |
@@ -91,6 +93,7 @@ flowchart TD
 | every pipeline | `linux-swarm` | `ubuntu-2604:current`, xlarge (two test nodes share the VM) | `linux/tests/run-all.sh`: stack validation (with the config names), the setup helper, ephemerality with a negative control, exit 80, token readability, real runner tasks through the step-down (`task.sh`), placement, persistent mode, draining, network isolation, limits, the runner distributor (a node with no install, a joining node, an upgrade under load, a rollback, `current` following the manifest, the major-version guard, pruning, a tampered binary, a wrong SHA-256, and CircleCI's real manifest) and the entrypoint unit tests. The distributor downloads from a local HTTP mirror of the harness. Everything runs in a single-node and a two-node Swarm inside privileged `docker:dind` containers: the CI VM's own engine never becomes a Swarm node for these |
 | every pipeline | `linux-image-example` | `ubuntu-2604:current` | Builds `linux/images/example`, checks that the tools it adds run, then Trivy (below) |
 | every pipeline | `linux-setup` | `ubuntu-2604:current` | `ci/linux-smoke.sh`: `linux/setup.sh` and the shipped stack end to end on a fresh VM with no real token, with the distributor installing the runner (below) |
+| `full-suite` | `linux-microvm` | `android:current`, `large.gen2` (the only CircleCI image with `/dev/kvm`) | `linux/tests/microvm.sh` with `SWARM_TEST_REQUIRE_KVM=1`: the microVM add-on on two Docker-in-Docker nodes with Kata. It downloads Kata 4.2.0 (about 1 GB, SHA-256 verified). [Details](#linux-microvm) |
 | every pipeline | `linux-arm64` | `ubuntu-2604:current`, `arm.medium` | The same script on an Arm VM: the arm64 runner installed by the distributor runs unmodified in a stock `cimg/base` through the volume, and the shipped stack starts |
 | every pipeline | `windows-swarm-ltsc2022` | `windows-server-2022-gui:current`, windows.medium | The stock-image path on Windows (below) |
 | `full-suite` | `windows-swarm-ltsc2025` | `windows-server-2025-gui:current` | The same on Server 2025 |
@@ -125,6 +128,7 @@ These were measured on 2026-10-12 and shaped the scripts. Check them first when 
 | `docker stop` and `docker service update` end a stock Server Core container about 5 seconds after the shutdown event (HCS waits only `WaitToKillServiceTimeout`; exit code `3221225786`, `0xC000013A`), whatever it is running | Every Windows service runs the stock image, and no image is built. `Test-StopHandling.ps1` measures the rule (an informational `NOTE control` line: the job is killed after a stop), and the e2e no longer stops a busy container. A job that finishes ends its container cleanly, which is what the e2e checks. The DIY image that lifts the limit is in [Stop a busy Windows container](operations.md#stop-a-busy-windows-container) and is not tested here |
 | Pulling `mcr.microsoft.com/windows/servercore:ltsc2022` (about 2.2 GB compressed) onto a fresh Windows VM takes about 10 minutes | Every Windows job pays it, in a step of its own with `no_output_timeout: 30m`; it is most of the cost (below) |
 | A Windows host runs images of its own release and older ones: a 2025 host also runs `ltsc2022` images, a 2022 host cannot run `ltsc2025` images (`0xc0370101`), and nested virtualisation is not available, so only process isolation works | The Windows jobs pick the image tag from the host's build number (20348: `ltsc2022`, 26100: `ltsc2025`) |
+| The Android machine image (`android:current`) supports nested virtualization (documented), and no other CircleCI image does: the Windows hosts and the other Linux images have no `/dev/kvm` and no Hyper-V isolation | Only `linux-microvm` runs on it. A `microvm.sh` that finds no `/dev/kvm` skips locally and fails there (`SWARM_TEST_REQUIRE_KVM=1`) |
 | A CircleCI step shell starts with SIGHUP ignored | Nothing here relies on SIGHUP |
 
 ## When things run, and the setup gate
@@ -172,6 +176,12 @@ The decision therefore has to happen before the e2e jobs are compiled into the w
 - The SBOM (CycloneDX) and the HIGH/CRITICAL reports of the image are artifacts: `reports/sbom-example.cdx.json`, `reports/trivy-example.{json,txt}`.
 - The gate fails on a fixable CRITICAL finding that the image **adds on top of `cimg/base`** (the same scan of the base image is subtracted). The base is upstream: it bundles Docker, Compose and yq with their own findings, and those stay visible in the reports. What this repository owns is what it puts on top, the example's packages. The runner is not in the image.
 - Exceptions go in `.trivyignore`, one CVE per line, with a reason, an owner and an `exp:` date. Trivy stops honouring an entry after that date. An exception is only for findings that this repository cannot fix.
+
+### linux-microvm
+
+`linux-microvm` runs `linux/tests/microvm.sh` on the Android machine image, because it is the only CircleCI machine image with nested virtualization. The job loads `vhost_vsock` and `vhost_net`, installs `zstd`, and runs the script with `SWARM_TEST_REQUIRE_KVM=1`, so a missing `/dev/kvm` fails the job instead of skipping the test. The script downloads the pinned Kata release and checks its SHA-256, starts a runc manager and a Kata worker in Docker-in-Docker containers, and deploys the real `runners.yaml` and `microvm.yaml` with the real entrypoint, the real runner against a fake API, and a fake runner. Refer to [MicroVM jobs](microvm.md#what-is-tested) for the checks.
+
+The job is new and has not run on CircleCI yet. It is in the `release` requirements like every job of the workflow, so the first pipeline of `main` shows whether the Android image has `/dev/kvm`, `/dev/vhost-vsock`, and a Docker that runs privileged containers. Run the same script locally on any host with KVM; it skips without `/dev/kvm`.
 
 ## Windows jobs
 

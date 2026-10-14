@@ -24,7 +24,7 @@ The [FAQ](docs/faq.md#why-swarm-and-not-container-runner-or-another-runner) has 
 
 ## How it works
 
-One stack file for each operating system defines one service for each resource class, and add-on stack files add the persistent and docker-build classes, and on Windows a class with your own image. The replicas of a service are runner containers that poll `runner.circleci.com` for jobs over outbound HTTPS. The runner is in single-task mode, so a container claims one job and exits, and Swarm creates a new container. Nodes carry labels, and services carry constraints, so you decide where each class runs.
+One stack file for each operating system defines one service for each resource class, and add-on stack files add the persistent, docker-build, and microVM classes, and on Windows a class with your own image. The replicas of a service are runner containers that poll `runner.circleci.com` for jobs over outbound HTTPS. The runner is in single-task mode, so a container claims one job and exits, and Swarm creates a new container. Nodes carry labels, and services carry constraints, so you decide where each class runs.
 
 ```mermaid
 flowchart TB
@@ -74,6 +74,7 @@ Linux runs on Ubuntu LTS and RHEL 8 or later, on amd64 and arm64. Refer to the [
 | [Resource Classes](docs/resource-classes.md) | Define and size classes, choose replica counts, persistent mode, and the configuration reference |
 | [Images](docs/images.md) | Stock images with the mounted runner, and your own images |
 | [Docker Builds](docs/docker-builds.md) | The opt-in host engine pattern and the alternatives |
+| [MicroVM jobs](docs/microvm.md) | The opt-in add-on that runs each job in a Kata Containers microVM, with Docker inside the VM, and the Windows counterpart |
 | [Security](docs/security.md) | Threat model, token model, a comparison with the official installs, hardening, and egress |
 | [Operations](docs/operations.md) | Status, running the cluster, runner upgrades and rollbacks, token rotation, node drain, and uninstall |
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms, causes, and fixes |

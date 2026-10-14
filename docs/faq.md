@@ -163,8 +163,8 @@ The jobs run in unprivileged containers on a shared kernel, so some jobs belong 
 
 | Job needs | Here | Use instead |
 |---|---|---|
-| A privileged container, `/dev/kvm`, or other host devices | No. Swarm ignores `privileged` and `devices` | The machine runner orchestrator, or a machine runner on a host |
-| Docker-in-Docker | No, because it needs a privileged container | The opt-in [docker-build class](docker-builds.md), or a daemonless builder |
+| A privileged container, `/dev/kvm`, or other host devices | No. Swarm ignores `privileged` and `devices`. The [microVM add-on](microvm.md) gives a job its own kernel, not host devices | The machine runner orchestrator, or a machine runner on a host |
+| Docker-in-Docker | No, because it needs a privileged container | The opt-in [docker-build class](docker-builds.md), a daemonless builder, or a daemon inside the VM of the [microVM add-on](microvm.md#run-docker-inside-the-vm) |
 | `setup_remote_docker` | No. It belongs to the Docker executor | The docker-build class, or a daemonless builder |
 | Docker commands in a job | Only in the docker-build class, which is root-equivalent on its node | [Docker Builds](docker-builds.md) |
 | A GPU | Not supported or tested. The stack files declare no generic resources | A machine runner on a GPU host |

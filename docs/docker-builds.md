@@ -8,7 +8,7 @@ page-description: Build container images from jobs with an opt-in service that m
 
 By default, jobs on these runners cannot reach a Docker engine. Access to a Docker daemon is equivalent to root access to the machine, so this repository makes Docker builds opt-in, one dedicated class at a time.
 
-This page describes pattern A, which is built and tested, and patterns B and C, which are documented alternatives.
+This page describes pattern A, which is built and tested, and patterns B and C, which are documented alternatives. Pattern D, a Docker daemon in the microVM of the job, is part of the [MicroVM add-on](microvm.md) and needs nodes with KVM.
 
 ## Choose a pattern
 
@@ -17,6 +17,7 @@ This page describes pattern A, which is built and tested, and patterns B and C, 
 | A: host engine socket | The full Docker API of the node | Yes | Built, with a stack file and an example | Linux, and Windows images on Windows |
 | B: rootless BuildKit on the host | Only a build API, through the socket of one BuildKit daemon | No, but the daemon runs on the host | Documented, not built | Linux |
 | C: daemonless builder in the job | Nothing from the host | No | Documented, not built | Linux |
+| D: Docker daemon inside a microVM | Its own daemon, in the VM of the job | No, but the job has `SYS_ADMIN` inside a VM | Built and tested with a fake API, in the [microVM add-on](microvm.md#run-docker-inside-the-vm) | Linux with KVM |
 
 CircleCI lists Docker layer caching among the features that self-hosted runners do not support. Pattern A reuses the layer cache of the host engine, which every job on that node shares.
 

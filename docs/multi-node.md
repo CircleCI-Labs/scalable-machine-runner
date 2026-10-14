@@ -159,6 +159,7 @@ Set a label with `docker node update --label-add <key>=<value> <node name>`. Rem
 | `machine-runner-swarm.zone` | The name of a network zone | Services that must run in one zone. A commented example sits in the Linux placement block |
 | `machine-runner-swarm.docker-build` | `true` | The docker-build services (pattern A). Refer to [Docker Builds](docker-builds.md) |
 | `machine-runner-swarm.proxy` | `true` | The node of the token proxy, which keeps its state there (`proxy-state`) and holds every class token, so choose a node that runs no jobs when you can. `setup.sh --swarm-init` sets it on a single node; on a cluster set it on one node before you deploy, or the proxy stays pending. Refer to [Move the proxy to another node](operations.md#move-the-proxy-to-another-node) |
+| `machine-runner-swarm.microvm` | `true` | The microVM services, on nodes whose Docker daemon runs every container in a Kata microVM. Every other service stays off these nodes. Refer to [MicroVM jobs](microvm.md) |
 | `machine-runner-swarm.class.<service>` | `true` | Pins a service to the labeled nodes. `windows-persistent` uses `machine-runner-swarm.class.windows-persistent`. `linux-persistent` pins itself with `node.hostname` instead |
 
 Constraints on labels use the form `node.labels.<key> == <value>`. For example, `node.labels.machine-runner-swarm.docker-build == true`.

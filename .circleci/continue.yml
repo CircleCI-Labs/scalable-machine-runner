@@ -447,6 +447,31 @@ jobs:
           path: /tmp/reports
           destination: reports
 
+  linux-mixed-arch:
+    description: >
+      OPTIONAL for the release (not in its requires). A Swarm of both architectures on one VM (linux/tests/mixed-arch.sh): an amd64
+      manager and an arm64 worker emulated by QEMU, with the real stack file and the real distributor. Each node gets the runner of its
+      own architecture (ELF header, tarball SHA-256 of that architecture), a class constrained by node.platform.arch stays on its
+      architecture, and the arm64 runner prints its version. The script registers the qemu-aarch64 binfmt handler in the VM when it is
+      missing. Here a skip is a failure. Make it a requirement of the release once it has been green for a while.
+    executor: linux-vm-xlarge
+    steps:
+      - checkout
+      - run:
+          name: uname and Docker
+          command: |
+            uname -m
+            docker version --format 'docker client {{.Client.Version}}, server {{.Server.Version}} ({{.Server.Arch}})'
+      - run:
+          name: Mixed-architecture cluster (linux/tests/mixed-arch.sh)
+          no_output_timeout: 20m
+          command: |
+            mkdir -p /tmp/reports
+            SWARM_TEST_REQUIRE_EMULATION=1 linux/tests/mixed-arch.sh 2>&1 | tee /tmp/reports/mixed-arch.txt
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+
   # ---------------------------------------------------------------------------
   # Windows: Swarm on the machine images (process isolation: the image build must match the host)
   # ---------------------------------------------------------------------------
@@ -895,13 +920,15 @@ jobs:
           name: The release job requires every other job (docs/releasing.md)
           command: |
             # In the compiled workflow the release waits for one lock job, which requires the real
-            # jobs. A job that nothing else requires and that the lock does not list is missing.
+            # jobs. A job that nothing else requires and that the lock does not list is missing,
+            # unless it is one of the optional jobs named here.
             yq -o=json '.workflows.ci.jobs' /tmp/compiled.yml | jq -r '
-              map(if type == "string" then {key: ., value: {}} else to_entries[0] end) as $jobs
+              ["linux-mixed-arch"] as $optional
+              | map(if type == "string" then {key: ., value: {}} else to_entries[0] end) as $jobs
               | ($jobs | map(select(.key == "release"))[0].value.requires[0]) as $gate
               | ($jobs | map(select(.key == $gate))[0].value.requires) as $required
               | ($jobs | map(select(.key != "release" and .key != $gate) | .value.requires // []) | add) as $needed
-              | [$jobs[].key | select(IN($needed[]) | not) | select(IN("release", $gate) or startswith("serial-end-") | not)] - $required
+              | [$jobs[].key | select(IN($needed[]) | not) | select(IN("release", $gate) or startswith("serial-end-") or IN($optional[]) | not)] - $required
               | if length > 0 then "release does not require: " + join(", ") | halt_error(1) else empty end'
             echo "every job of the ci workflow is a requirement of the release"
 
@@ -1051,6 +1078,8 @@ workflows:
       - linux-arm64
       - linux-microvm:
           filters: pipeline.parameters.full-suite
+      # Optional: it is NOT in the `requires` of the release (the release check of lint-circleci lists it as optional).
+      - linux-mixed-arch
       - windows-swarm:
           name: windows-swarm-ltsc2022
           os: windows-2022

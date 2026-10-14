@@ -274,8 +274,6 @@ services:
       # One variable for each class, because stack files merge variables but replace an entrypoint: an add-on stack file adds its class
       # with a variable of its own. The value is <service>=<token file>; the proxy resolves tasks.<service>.
       MACHINE_RUNNER_SWARM_PROXY_CLASS_WINDOWS_DEFAULT: 'windows-default=C:\ProgramData\Docker\secrets\windows-default-token'
-      # What a start with an empty proxy-state means: allow (a first start) or latch (every runner present counts as having claimed).
-      MACHINE_RUNNER_SWARM_PROXY_NO_STATE: ${MACHINE_RUNNER_SWARM_PROXY_NO_STATE:-allow}
     secrets:
       - source: windows-default-token
         target: windows-default-token

@@ -384,7 +384,7 @@ verify() {
   # The token proxy: every claim went through it, and it was restarted while b2 held its job, which passed.
   if [ "${use_proxy}" = true ]; then
     if [ -s "${log_dir}/bounced" ]; then bounced=yes; else log "the token proxy was not restarted during b2"; ok=0; fi
-    grep -q 'state restored: 1 runner' "${log_dir}/proxy.log" || { log "the restarted token proxy did not restore the runner that had claimed"; ok=0; }
+    grep -q 'state restored; .*tasks\.[a-z-]*: 1 runner(s) have claimed' "${log_dir}/proxy.log" || { log "the restarted token proxy did not restore the runner that had claimed"; ok=0; }
   fi
 
   # Hardened: no sudo, so no way to the token.

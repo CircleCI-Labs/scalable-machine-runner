@@ -14,18 +14,22 @@
 //
 // A restarted proxy must know who has claimed. With -state-dir it keeps the latched IPs in a small file of a volume,
 // written before the claim's answer goes back to the runner, and a restart with that state refuses only the IPs that
-// really claimed. Without a state file the proxy cannot know, so it asks the directory: a directory that was never
-// used is a first start and allows every runner (they cannot have claimed through this proxy); a directory with a
-// marker but no usable state has lost it, and the proxy fails safe and latches every IP present, like a proxy without
-// -state-dir does. See state.go.
+// really claimed. A class with no state (a proxy that never ran, a state that was lost, no -state-dir, a class that is new
+// to the state) cannot know, so the proxy asks CircleCI: GET /api/v3/runner/scale with the token of that class says how
+// many tasks of the class are running. With none running, no runner present can be holding a task, and the runners
+// present may claim. With some running, or when the call fails, the proxy fails safe and latches every IP present of
+// that class. See state.go.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -43,6 +47,7 @@ import (
 
 const (
 	claimPath  = "/api/v3/runner/claim"
+	scalePath  = "/api/v3/runner/scale"
 	healthPath = "/healthz"
 	// classEnvPrefix: every environment variable with this prefix holds one -class value. Stack files merge
 	// environment variables by name but replace a command, so an add-on stack file adds its class this way.
@@ -75,8 +80,11 @@ type proxy struct {
 	classes  []*class
 	lookup   func(ctx context.Context, host string) ([]string, error)
 
-	store    *store // nil: no persistence, a restart latches every runner present
+	store    *store // nil: no persistence: a restart asks CircleCI (scale) which runners may claim
 	stateErr error  // the last failure to write the state, which makes the proxy unhealthy
+
+	scaleTries int           // attempts of the scale call at start (at least 1)
+	scaleWait  time.Duration // between the attempts
 
 	mu sync.Mutex // guards the latched and busy maps of every class, and the state file
 }
@@ -162,9 +170,102 @@ func (p *proxy) members(ctx context.Context) (map[*class]map[string]bool, error)
 	return sets, nil
 }
 
-// restore sets the latches at start: from the state file when there is a usable one (the IPs that claimed and are still there), else
-// by the rules in the package comment. It returns what it did, for the log.
-func (p *proxy) restore(ctx context.Context, noState string) (string, error) {
+// What GET /api/v3/runner/scale says about a class: data.attributes holds the counts of the tasks of that class. The names are
+// matched by what they say, not spelled out: an attribute that has "running" and "task" in its name is a running count, one with
+// "unclaimed" or "queued" and "task" is the tasks that wait (for the log). A running count that is not a whole number, or not
+// there, is a failure, and with several the largest counts, so that a doubt never allows a claim.
+func isRunningCount(name string) bool {
+	n := strings.ToLower(name)
+	return strings.Contains(n, "running") && strings.Contains(n, "task")
+}
+
+func isWaitingCount(name string) bool {
+	n := strings.ToLower(name)
+	return (strings.Contains(n, "unclaimed") || strings.Contains(n, "queued")) && strings.Contains(n, "task")
+}
+
+// scale asks CircleCI how many tasks of class c are running and how many wait, with the token of that class. It tries scaleTries
+// times, scaleWait apart, because a proxy that starts together with its network may not reach the API at once.
+func (p *proxy) scale(ctx context.Context, c *class) (running, unclaimed int, err error) {
+	tok, err := c.token()
+	if err != nil {
+		return 0, 0, err
+	}
+	for try := 1; ; try++ {
+		running, unclaimed, err = p.scaleOnce(ctx, tok)
+		if err == nil || try >= max(p.scaleTries, 1) || ctx.Err() != nil {
+			return running, unclaimed, err
+		}
+		select {
+		case <-ctx.Done():
+			return 0, 0, ctx.Err()
+		case <-time.After(p.scaleWait):
+		}
+	}
+}
+
+func (p *proxy) scaleOnce(ctx context.Context, tok string) (running, unclaimed int, err error) {
+	u := *p.upstream
+	u.Path = strings.TrimRight(u.Path, "/") + scalePath
+	u.RawQuery = ""
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "machine-runner-swarm-proxy/"+version)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, fmt.Errorf("%s answered %d", scalePath, resp.StatusCode)
+	}
+	var doc struct {
+		Data struct {
+			Attributes map[string]json.RawMessage `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&doc); err != nil {
+		return 0, 0, fmt.Errorf("%s: cannot read the answer: %w", scalePath, err)
+	}
+	count := func(raw json.RawMessage) (int, bool) {
+		var v *float64 // a null is not a count: it would read as 0 and allow every runner
+		if json.Unmarshal(raw, &v) != nil || v == nil || *v < 0 || *v != math.Trunc(*v) || *v >= 1<<31 {
+			return 0, false
+		}
+		return int(*v), true
+	}
+	found := false
+	for name, raw := range doc.Data.Attributes {
+		switch {
+		case isRunningCount(name):
+			n, ok := count(raw)
+			if !ok {
+				return 0, 0, fmt.Errorf("%s: data.attributes.%s is not a count", scalePath, name)
+			}
+			running, found = max(running, n), true
+		case isWaitingCount(name):
+			if n, ok := count(raw); ok {
+				unclaimed = max(unclaimed, n)
+			}
+		}
+	}
+	if !found {
+		return 0, 0, fmt.Errorf("%s: data.attributes has no running task count", scalePath)
+	}
+	return running, unclaimed, nil
+}
+
+// restore sets the latches at start and returns what it did, for the log. A class with a saved state (the IPs that claimed and are
+// still there) gets exactly that. A class with none cannot know who has claimed, so it asks CircleCI (scale): no running task of the
+// class means that no runner present holds one, and they may claim; otherwise, or when the answer is missing, every IP present
+// is latched, which only costs those runners their claim (they leave and are replaced).
+func (p *proxy) restore(ctx context.Context) (string, error) {
 	sets, err := p.resolve(ctx)
 	if err != nil {
 		return "", err
@@ -173,44 +274,58 @@ func (p *proxy) restore(ctx context.Context, noState string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	latchAll := func() int {
-		n := 0
-		for c, set := range sets {
-			for ip := range set {
-				c.latched[ip] = true
-				n++
-			}
-		}
-		return n
+	why := map[startKind]string{
+		stateOK:      "state restored",
+		stateNone:    "no state (a first start)",
+		stateLost:    "state lost",
+		stateNoStore: "no state directory",
+	}[kind]
+	type verdict struct {
+		latch []string // IPs to latch
+		what  string
 	}
-	var what string
-	switch {
-	case kind == stateOK:
-		n := 0
-		for c, set := range sets {
+	verdicts := map[*class]verdict{}
+	var lines []string
+	for _, c := range p.classes {
+		set := sets[c]
+		var ips []string
+		for ip := range set {
+			ips = append(ips, ip)
+		}
+		sort.Strings(ips)
+		var v verdict
+		if kind == stateOK && saved[c.dns] != nil {
 			for _, ip := range saved[c.dns] {
 				if set[ip] {
-					c.latched[ip] = true
-					n++
+					v.latch = append(v.latch, ip)
 				}
 			}
+			v.what = fmt.Sprintf("%d runner(s) have claimed and stay refused; the others may claim", len(v.latch))
+		} else if len(ips) == 0 {
+			v.what = "no runner present"
+		} else if running, unclaimed, err := p.scale(ctx, c); err != nil {
+			v.latch = ips
+			v.what = fmt.Sprintf("CircleCI does not say how many tasks run (%v): failing safe, latching the %d runner(s) present", err, len(ips))
+		} else if running > 0 {
+			v.latch = ips
+			v.what = fmt.Sprintf("CircleCI reports %d running task(s), %d unclaimed: failing safe, latching the %d runner(s) present", running, unclaimed, len(ips))
+		} else {
+			v.what = fmt.Sprintf("CircleCI reports 0 running tasks, %d unclaimed: the %d runner(s) present may claim", unclaimed, len(ips))
 		}
-		what = fmt.Sprintf("state restored: %d runner(s) have claimed and stay refused; the others may claim", n)
-	case kind == stateNone && noState == noStateAllow:
-		what = "no state: a first start, so no runner has claimed through this proxy and every runner present may claim"
-	case kind == stateNone:
-		what = fmt.Sprintf("no state and -no-state latch: latching all %d runner(s) present", latchAll())
-	case kind == stateLost:
-		what = fmt.Sprintf("state lost: failing safe, latching all %d runner(s) present", latchAll())
-	default: // no store: nothing persists, and a restart cannot know who claimed
-		what = fmt.Sprintf("no state directory: latching all %d runner(s) present", latchAll())
+		verdicts[c] = v
+		lines = append(lines, c.dns+": "+v.what)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for c, v := range verdicts {
+		for _, ip := range v.latch {
+			c.latched[ip] = true
+		}
 	}
 	if err := p.store.save(p.classes); err != nil {
 		return "", err
 	}
-	return what, nil
+	return why + "; " + strings.Join(lines, "; "), nil
 }
 
 // persist writes the latched IPs to the state directory, if there is one. The caller holds p.mu.
@@ -364,11 +479,25 @@ func parseClasses(flagValues, env []string) ([]*class, error) {
 	return classes, nil
 }
 
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
+// checkHealth is the -healthcheck flag: the exit status of one GET of /healthz on the address that -listen names.
+func checkHealth(listen string) int {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return 1
 	}
-	return def
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	client := http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://" + net.JoinHostPort(host, port) + healthPath)
+	if err != nil {
+		return 1
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
 }
 
 func main() {
@@ -376,28 +505,30 @@ func main() {
 	flag.Var(&cf, "class", "SERVICE=TOKEN-FILE: the runner service of one resource class (tasks.<service> is resolved) and the file with its token, bare or a runner config with auth_token (repeatable; also "+classEnvPrefix+"* variables)")
 	listen, upstream := flag.String("listen", ":8080", "address to listen on"), flag.String("upstream", "https://runner.circleci.com", "the runner API")
 	poll := flag.Duration("poll", time.Second, "how often to look for runners that have left")
-	stateDir := flag.String("state-dir", "", "a directory of a volume that keeps the latched runner addresses across restarts (empty: none, and a restart latches every runner present)")
-	noState := flag.String("no-state", envOr("MACHINE_RUNNER_SWARM_PROXY_NO_STATE", noStateAllow), "a start with a state directory that was never used: allow (a first start: no runner has claimed) or latch (every runner present counts as having claimed). Also MACHINE_RUNNER_SWARM_PROXY_NO_STATE")
+	stateDir := flag.String("state-dir", "", "a directory of a volume that keeps the latched runner addresses across restarts (empty: none, and every restart asks CircleCI which runners may claim)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	healthcheck := flag.Bool("healthcheck", false, "ask the proxy on -listen for /healthz, print nothing and exit 0 when it is healthy, else 1 (for the HEALTHCHECK of an image that has no curl)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("machine-runner-swarm-proxy", version)
 		return
 	}
+	if *healthcheck {
+		os.Exit(checkHealth(*listen))
+	}
 	u, err := url.Parse(*upstream)
 	classes, cerr := parseClasses(cf, os.Environ())
-	if err != nil || u.Host == "" || cerr != nil || (*noState != noStateAllow && *noState != noStateLatch) { // usage
+	if err != nil || u.Host == "" || cerr != nil { // usage
 		if cerr != nil {
 			log.Print(cerr)
 		}
-		log.Fatal("usage: machine-runner-swarm-proxy -class <service>=<token-file> [-class ...] [-upstream URL] [-listen ADDR] [-state-dir DIR [-no-state allow|latch]]")
+		log.Fatal("usage: machine-runner-swarm-proxy -class <service>=<token-file> [-class ...] [-upstream URL] [-listen ADDR] [-state-dir DIR]")
 	}
 	st, err := openStore(*stateDir)
 	if err != nil {
 		log.Fatalf("state directory: %v", err) // fail closed: a proxy that cannot keep its state does not start
 	}
-	p := &proxy{upstream: u, classes: classes, store: st,
-		lookup: lookupHost}
+	p := &proxy{upstream: u, classes: classes, store: st, lookup: lookupHost, scaleTries: 3, scaleWait: 2 * time.Second}
 	for _, c := range classes { // fail closed: no token, no proxy
 		if _, err := c.token(); err != nil {
 			log.Fatalf("token file of %s: %v", c.dns, err)
@@ -407,7 +538,7 @@ func main() {
 	defer stop()
 	// a restarted proxy must know who has claimed (state.go): from its state, or else it fails safe
 	for {
-		what, err := p.restore(ctx, *noState)
+		what, err := p.restore(ctx)
 		if err == nil {
 			log.Print(what)
 			break

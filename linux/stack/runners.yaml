@@ -234,9 +234,6 @@ services:
       MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_DEFAULT: linux-default=/run/secrets/linux-default-token
       MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_JAVA: linux-java=/run/secrets/linux-java-token
       MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_HARDENED: linux-hardened=/run/secrets/linux-hardened-token
-      # What a start with an empty proxy-state means: allow (a first start: no runner has claimed through this proxy) or latch (every
-      # runner present counts as having claimed). Set latch before you move the proxy to another node. docs/operations.md
-      MACHINE_RUNNER_SWARM_PROXY_NO_STATE: ${MACHINE_RUNNER_SWARM_PROXY_NO_STATE:-allow}
     read_only: true
     cap_drop: [ALL]
     secrets:

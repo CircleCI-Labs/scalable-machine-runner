@@ -118,13 +118,17 @@ The proxy answers `GET /healthz` with 200 when every class has a usable token fi
 
 #### Restart the proxy
 
-A restart is safe at any time, on the same node. The proxy keeps the addresses of the runners that have claimed in the volume `proxy-state` and refuses only those after the restart. A runner that has not claimed, idle or just started, may claim afterwards, so no restart, deploy, or node reboot locks a runner out. The start line of the log says what the proxy found:
+A restart is safe at any time, on the same node. The proxy keeps the addresses of the runners that have claimed in the volume `proxy-state` and refuses only those after the restart. A runner that has not claimed, idle or just started, may claim afterwards, so no restart, deploy, or node reboot locks a runner out. The start line of the log says what the proxy found, and then what it did for every class:
 
 | Log line at start | State |
 |---|---|
-| `state restored: N runner(s) have claimed and stay refused` | The normal case: the state was read, and N runners present have claimed |
-| `no state: a first start, so no runner has claimed through this proxy and every runner present may claim` | `proxy-state` was empty: the first start of the stack |
-| `state lost: failing safe, latching all N runner(s) present` | The marker is there but the state file is not (damaged or removed): every runner present is refused until Swarm replaces it, which is at its idle timeout (1 hour in the shipped files) or when you replace it |
+| `state restored; <class>: N runner(s) have claimed and stay refused; the others may claim` | The normal case: the state was read, and N runners of that class have claimed |
+| `no state (a first start); <class>: CircleCI reports 0 running tasks, ...: the N runner(s) present may claim` | `proxy-state` was empty, and CircleCI says that no task of the class runs, so no runner present can be holding one |
+| `no state (a first start); <class>: CircleCI reports M running task(s), ...: failing safe, latching the N runner(s) present` | `proxy-state` was empty, and tasks of the class run: the proxy cannot tell which runners hold them, so it refuses every runner present until Swarm replaces it |
+| `...: CircleCI does not say how many tasks run (<error>): failing safe, latching the N runner(s) present` | The same, because the call to CircleCI failed or its answer had no count of running tasks |
+| `state lost; ...` and `no state directory; ...` | The marker is there but the state file is not (damaged or removed), or the proxy has no state directory at all: the same decision for every class, from what CircleCI says |
+
+**With no state the proxy asks CircleCI.** For each class that has runners present, it calls `GET /api/v3/runner/scale` on the runner API with the token of that class, up to three times. The answer holds the number of running and unclaimed tasks in `data.attributes`. With no running task, the runners present may claim. With a running task, or when the call fails, the proxy latches every runner of that class present, so a runner that already holds a job cannot claim a second one. A refused runner gets 403 (`this runner has already claimed a task`) until it recycles: at its idle timeout (1 hour in the shipped files), or at once with the command below. A runner that is running a job is not affected, and a runner that starts after the proxy is allowed. A class that is new to the state (you added it with an add-on stack file) is treated the same way.
 
 Replace the idle runners of a class at once with:
 
@@ -144,19 +148,18 @@ The proxy runs the binary that the distributor installed behind `proxy/current` 
 
 The proxy runs on a manager by default (`node.role == manager`), with no label. In a cluster with one manager it never moves. Its state, the addresses of the runners that have claimed, is the volume `proxy-state` of the node that it runs on.
 
-**The worst case.** If the proxy moves to another node, its state is lost: the new node has an empty volume, which the proxy cannot tell from a first start. A move happens by itself when its node is down and another manager matches, and it happens by hand when you change the placement. Then what the runners see depends on `MACHINE_RUNNER_SWARM_PROXY_NO_STATE`, which names what a start without any state means:
+**The worst case.** If the proxy moves to another node, its state is lost: the new node has an empty volume. A move happens by itself when its node is down and another manager matches, and it happens by hand when you change the placement. The proxy then asks CircleCI for each class (the previous section), and what the runners see depends on the answer:
 
-- **`latch` (what you set before a planned move).** The proxy treats every runner present as having claimed, and **refuses the existing runners** (403, `this runner has already claimed a task`) until they recycle: at their idle timeout (1 hour in the shipped files), or at once with `docker service update --force --update-parallelism 0 runners_<service>` for each class. A runner that is running a job is not affected, and a runner that starts after the move is allowed. This is the safe side: no runner can claim twice.
-- **`allow` (the default, and what an unplanned move meets).** The start counts as a first start, so every runner present may claim once, **a busy runner too**. A job that runs in such a runner can then claim one more job of its class and read its code and secrets, so the rule of one claim for each container does not hold for the runners that exist at the move. Replace them to close it, with the command above.
+- **No running task in the class.** Every runner present may claim, which is right: none of them holds a job.
+- **Running tasks in the class, or no answer.** The proxy **refuses the existing runners** of that class (403, `this runner has already claimed a task`) until they recycle. A runner that is running a job is not affected. Replace the idle ones at once with `docker service update --force --update-parallelism 0 runners_<service>` for each class. This is the safe side: no runner can claim twice.
 
-So a move you plan is done with `latch`, and one that you did not plan is answered with the replacement of the runners:
+There is nothing to set before a planned move. To move the proxy by hand:
 
 ```console
-$ docker service update --env-add MACHINE_RUNNER_SWARM_PROXY_NO_STATE=latch runners_token-proxy
 $ docker service update --constraint-rm 'node.role == manager' --constraint-add 'node.hostname == <new manager>' runners_token-proxy
 ```
 
-The proxy starts on the new node, and the runners get 403 until Swarm replaces them: use the command of the previous section. Then set the variable back with `docker service update --env-add MACHINE_RUNNER_SWARM_PROXY_NO_STATE=allow runners_token-proxy`, or remove it from your copy of the stack file. If no node matches (the only manager is down), the service stays pending and no runner can claim in the meantime.
+If no node matches (the only manager is down), the service stays pending and no runner can claim in the meantime.
 
 **Several managers.** The default lets the proxy start on any of them, so a failure of its node moves it. To keep it on one, label that manager and say so at deploy time, in the environment of `docker stack deploy`:
 

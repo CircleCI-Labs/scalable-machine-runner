@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -33,18 +35,29 @@ type env struct {
 	p        *proxy
 	dns      map[string][]string // DNS name -> IPs
 	dnsErr   error
-	status   []int // upstream statuses, one per request that reaches it (the last repeats)
-	calls    atomic.Int32
+	status   []int        // upstream statuses, one per request that reaches it (the last repeats)
+	calls    atomic.Int32 // requests that reach the upstream, the scale calls not counted
 	mu       sync.Mutex
 	lastAuth string
 	lastUA   string
 	logs     bytes.Buffer
+
+	// what the fake /api/v3/runner/scale of the upstream says, by the token of the call
+	running     map[string]int    // running task count (default 0)
+	scaleStatus map[string][]int  // statuses of the next calls, one each, instead of the counts
+	scaleBody   map[string]string // a body instead of the counts
+	scaleCalls  []string          // the Authorization header of every scale call
 }
 
 // newEnv makes a proxy for two classes: class-a with the given runner IPs, and class-b with runnerB1.
 func newEnv(t *testing.T, ipsA ...string) *env {
 	e := &env{t: t, dns: map[string][]string{dnsA: ipsA, dnsB: {runnerB1}}, status: []int{200}}
+	e.running, e.scaleStatus, e.scaleBody = map[string]int{}, map[string][]int{}, map[string]string{}
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == scalePath {
+			e.serveScale(w, r)
+			return
+		}
 		n := int(e.calls.Add(1)) - 1
 		e.mu.Lock()
 		e.lastAuth = r.Header.Get("Authorization")
@@ -59,7 +72,7 @@ func newEnv(t *testing.T, ipsA ...string) *env {
 	fileA, fileB := filepath.Join(dir, "a"), filepath.Join(dir, "b")
 	os.WriteFile(fileA, []byte("api:\n  auth_token: "+tokenA+"\n"), 0o400)
 	os.WriteFile(fileB, []byte(tokenB+"\n"), 0o400)
-	e.p = &proxy{upstream: u, classes: []*class{newClass("class-a", fileA), newClass(dnsB, fileB)}}
+	e.p = &proxy{upstream: u, classes: []*class{newClass("class-a", fileA), newClass(dnsB, fileB)}, scaleTries: 3}
 	e.p.lookup = func(_ context.Context, host string) ([]string, error) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -74,6 +87,29 @@ func newEnv(t *testing.T, ipsA ...string) *env {
 	log.SetOutput(&e.logs)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	return e
+}
+
+// serveScale answers GET /api/v3/runner/scale like CircleCI: the counts of the class of the bearer token.
+func (e *env) serveScale(w http.ResponseWriter, r *http.Request) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.scaleCalls = append(e.scaleCalls, r.Header.Get("Authorization"))
+	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if r.Method != http.MethodGet || (tok != tokenA && tok != tokenB) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if seq := e.scaleStatus[tok]; len(seq) > 0 { // the next call fails with this status
+		e.scaleStatus[tok] = seq[1:]
+		w.WriteHeader(seq[0])
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if b, ok := e.scaleBody[tok]; ok {
+		io.WriteString(w, b)
+		return
+	}
+	fmt.Fprintf(w, `{"data":{"type":"scale","attributes":{"unclaimed_task_count":4,"running_task_count":%d}}}`, e.running[tok])
 }
 
 func (e *env) do(from, method, path, auth string) int {
@@ -212,22 +248,163 @@ func TestFailsClosed(t *testing.T) {
 	e.check(e.claim(runnerA1), 403, "no runners at all")
 }
 
-func TestStartWithoutAStateDirectoryLatchesEveryRunnerPresent(t *testing.T) {
+func TestStartWithoutAStateDirectoryLatchesTheRunnersOfAClassWithRunningTasks(t *testing.T) {
 	e := newEnv(t, runnerA1, runnerA2)
-	if _, err := e.p.restore(context.Background(), noStateAllow); err != nil {
+	e.running[tokenA] = 2 // class a has running tasks, class b has none
+	what, err := e.p.restore(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	e.check(e.claim(runnerA1), 403, "runner of class a present at start")
-	e.check(e.claim(runnerB1), 403, "runner of class b present at start")
+	if !strings.Contains(what, "no state directory") || !strings.Contains(what, "tasks.class-a: CircleCI reports 2 running task(s)") {
+		t.Errorf("the log line does not say what happened: %s", what)
+	}
+	e.check(e.claim(runnerA1), 403, "runner of class a present at start, with running tasks")
+	e.check(e.claim(runnerB1), 200, "class b has no running task: its runner may claim")
 	e.dns[dnsA] = []string{runnerA1}
 	e.p.members(context.Background()) // A2 left and is released
 	e.dns[dnsA] = []string{runnerA1, runnerA2}
 	e.p.members(context.Background()) // a new container for A2
 	e.check(e.claim(runnerA2), 200, "runner A2 was released when it left")
 	e.check(e.claim(runnerA1), 403, "runner A1 never left")
-	if e.calls.Load() != 1 {
-		t.Errorf("%d claims reached the upstream, want 1", e.calls.Load())
+	if e.calls.Load() != 2 {
+		t.Errorf("%d claims reached the upstream, want 2", e.calls.Load())
 	}
+}
+
+func TestEachClassAsksWithItsOwnToken(t *testing.T) {
+	e := newEnv(t, runnerA1)
+	if _, err := e.p.restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.scaleCalls) != 2 || e.scaleCalls[0] != "Bearer "+tokenA || e.scaleCalls[1] != "Bearer "+tokenB {
+		t.Errorf("want one scale call per class with the token of that class, got %d calls", len(e.scaleCalls))
+	}
+	if strings.Contains(e.logs.String(), tokenA) || strings.Contains(e.logs.String(), tokenB) {
+		t.Error("a token is in the log")
+	}
+}
+
+func TestAFailedScaleCallLatchesTheClass(t *testing.T) {
+	for name, fail := range map[string]func(e *env){
+		"a server error":   func(e *env) { e.scaleStatus[tokenA] = []int{500, 500, 500} },
+		"a rejected token": func(e *env) { e.scaleStatus[tokenA] = []int{401, 401, 401} },
+		"not JSON":         func(e *env) { e.scaleBody[tokenA] = "<html>" },
+		"a bad one of several": func(e *env) {
+			e.scaleBody[tokenA] = `{"data":{"attributes":{"running_tasks":0,"running_task_total":"x"}}}`
+		},
+		"no running count":   func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"unclaimed_task_count":0}}}` },
+		"no attributes":      func(e *env) { e.scaleBody[tokenA] = `{"data":{}}` },
+		"a null count":       func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":null}}}` },
+		"a text count":       func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":"0"}}}` },
+		"a negative count":   func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":-1}}}` },
+		"a fractional count": func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":0.5}}}` },
+		"no token file":      func(e *env) { os.Remove(e.p.classes[0].tokenFile) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, runnerA1, runnerA2)
+			fail(e)
+			what, err := e.p.restore(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(what, "tasks.class-a: CircleCI does not say how many tasks run") || !strings.Contains(what, "latching the 2 runner(s) present") {
+				t.Errorf("want a fail-safe line, got: %s", what)
+			}
+			for _, ip := range []string{runnerA1, runnerA2} {
+				if !e.p.classes[0].latched[ip] {
+					t.Errorf("%s of the class whose count is not known must be latched", ip)
+				}
+			}
+			if e.p.classes[1].latched[runnerB1] {
+				t.Error("class b has a count of 0 running tasks and must not be latched")
+			}
+		})
+	}
+	t.Run("an unreachable API", func(t *testing.T) {
+		e := newEnv(t, runnerA1)
+		e.p.upstream, _ = url.Parse("http://127.0.0.1:1")
+		if _, err := e.p.restore(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if !e.p.classes[0].latched[runnerA1] || !e.p.classes[1].latched[runnerB1] {
+			t.Error("with no answer at all every runner present is latched")
+		}
+	})
+}
+
+func TestTheScaleCallIsTriedAgainAtStart(t *testing.T) {
+	e := newEnv(t, runnerA1)
+	e.scaleStatus[tokenA] = []int{503, 502} // the third try answers
+	if _, err := e.p.restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.check(e.claim(runnerA1), 200, "the API answered on the third try with 0 running tasks")
+	n := 0
+	for _, a := range e.scaleCalls {
+		if a == "Bearer "+tokenA {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Errorf("%d scale calls for class a, want 3", n)
+	}
+}
+
+func TestNoRunnerPresentAsksNothing(t *testing.T) {
+	e := newEnv(t)
+	e.dns[dnsB] = nil
+	if what, err := e.p.restore(context.Background()); err != nil || !strings.Contains(what, "no runner present") {
+		t.Fatalf("got %q, %v", what, err)
+	}
+	if len(e.scaleCalls) != 0 {
+		t.Errorf("%d scale calls for classes without a runner, want none", len(e.scaleCalls))
+	}
+}
+
+func TestOtherNamesOfTheCounts(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		want int // latched runners of class a
+	}{
+		"running_tasks 0":                    {`{"data":{"attributes":{"running_tasks":0,"unclaimed_tasks":3}}}`, 0},
+		"running_tasks 1":                    {`{"data":{"attributes":{"running_tasks":1}}}`, 1},
+		"running_runner_tasks 0":             {`{"data":{"attributes":{"running_runner_tasks":0}}}`, 0},
+		"running_task_count 2.0":             {`{"data":{"attributes":{"running_task_count":2.0}}}`, 1},
+		"the largest of several":             {`{"data":{"attributes":{"running_tasks":0,"running_task_total":3}}}`, 1},
+		"an attribute that is no task count": {`{"data":{"attributes":{"running_tasks":0,"agents_running":7}}}`, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, runnerA1)
+			e.scaleBody[tokenA] = tc.body
+			if _, err := e.p.restore(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(e.p.classes[0].latched); got != tc.want {
+				t.Errorf("%d runner(s) latched, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAClassThatIsNewToTheStateAsksCircleCI(t *testing.T) {
+	e := newEnv(t, runnerA1, runnerA2)
+	dir := t.TempDir()
+	e.withState(dir)
+	e.restart()
+	e.check(e.claim(runnerA1), 200, "claim")
+	// an add-on stack file adds class c after that: the saved state has no entry for it
+	fileC := filepath.Join(t.TempDir(), "c")
+	os.WriteFile(fileC, []byte(tokenB+"\n"), 0o400)
+	e.p.classes = append(e.p.classes, newClass("class-c", fileC))
+	e.dns["tasks.class-c"] = []string{"10.0.3.5"}
+	e.running[tokenB] = 1 // class c has the token of class b in this test: one task running
+	what := e.restart()
+	if !strings.Contains(what, "state restored") || !strings.Contains(what, "tasks.class-c: CircleCI reports 1 running task(s)") {
+		t.Errorf("got: %s", what)
+	}
+	e.check(e.claim(runnerA1), 403, "class a has its state: the runner that claimed stays refused")
+	e.check(e.claim(runnerA2), 200, "class a has its state: the other may claim")
+	e.check(e.claim("10.0.3.5"), 403, "class c has none, and a task is running: latched")
 }
 
 func TestOneClaimInFlightPerRunner(t *testing.T) {
@@ -342,12 +519,12 @@ func (e *env) withState(dir string) {
 }
 
 // restart is what a restarted proxy does: a new process with the same classes and the same directory, whose latches start empty.
-func (e *env) restart(noState string) string {
+func (e *env) restart() string {
 	for _, c := range e.p.classes {
 		c.latched = map[string]bool{}
 		c.busy = map[string]bool{}
 	}
-	what, err := e.p.restore(context.Background(), noState)
+	what, err := e.p.restore(context.Background())
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -357,20 +534,20 @@ func (e *env) restart(noState string) string {
 func TestAFirstStartAllowsEveryoneAndARestartRefusesOnlyWhoClaimed(t *testing.T) {
 	e := newEnv(t, runnerA1, runnerA2)
 	e.withState(t.TempDir())
-	if what := e.restart(noStateAllow); !strings.Contains(what, "first start") {
-		t.Errorf("a new directory is a first start, got: %s", what)
+	if what := e.restart(); !strings.Contains(what, "no state (a first start)") || !strings.Contains(what, "0 running tasks") {
+		t.Errorf("a new directory is a first start that asks CircleCI, got: %s", what)
 	}
 	e.check(e.claim(runnerA1), 200, "a runner that was there before the proxy")
 	e.check(e.claim(runnerA1), 403, "and only one claim")
 	// the proxy restarts: A1 claimed, A2 and B1 did not
-	if what := e.restart(noStateAllow); !strings.Contains(what, "state restored: 1 runner") {
+	if what := e.restart(); !strings.Contains(what, "tasks.class-a: 1 runner(s) have claimed") {
 		t.Errorf("want one runner restored, got: %s", what)
 	}
 	e.check(e.claim(runnerA1), 403, "the runner that claimed stays refused after the restart")
 	e.check(e.claim(runnerA2), 200, "a runner that has not claimed may claim after the restart")
 	e.check(e.claim(runnerB1), 200, "so may a runner of the other class")
 	// and a second restart knows about all three
-	e.restart(noStateAllow)
+	e.restart()
 	for _, ip := range []string{runnerA1, runnerA2, runnerB1} {
 		e.check(e.claim(ip), 403, "claimed before the second restart: "+ip)
 	}
@@ -380,7 +557,7 @@ func TestTheStateIsWrittenBeforeTheRunnerGetsItsAnswer(t *testing.T) {
 	e := newEnv(t, runnerA1)
 	dir := t.TempDir()
 	e.withState(dir)
-	e.restart(noStateAllow)
+	e.restart()
 	var seen string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
 	defer up.Close()
@@ -407,7 +584,7 @@ func TestReleasedRunnersLeaveTheState(t *testing.T) {
 	e := newEnv(t, runnerA1, runnerA2)
 	dir := t.TempDir()
 	e.withState(dir)
-	e.restart(noStateAllow)
+	e.restart()
 	e.check(e.claim(runnerA1), 200, "claim")
 	e.dns[dnsA] = []string{runnerA2} // A1's container is gone
 	e.p.members(context.Background())
@@ -416,11 +593,11 @@ func TestReleasedRunnersLeaveTheState(t *testing.T) {
 		t.Errorf("a runner that left is still in the state: %s", b)
 	}
 	e.dns[dnsA] = []string{runnerA1, runnerA2} // a new container takes the address
-	e.restart(noStateAllow)
+	e.restart()
 	e.check(e.claim(runnerA1), 200, "the new container on the same address may claim")
 }
 
-func TestLostStateFailsSafe(t *testing.T) {
+func TestLostStateAsksCircleCI(t *testing.T) {
 	for name, damage := range map[string]func(dir string){
 		"state file removed": func(dir string) { os.Remove(filepath.Join(dir, stateFile)) },
 		"state file corrupt": func(dir string) { os.WriteFile(filepath.Join(dir, stateFile), []byte("{not json"), 0o600) },
@@ -433,27 +610,30 @@ func TestLostStateFailsSafe(t *testing.T) {
 			e := newEnv(t, runnerA1, runnerA2)
 			dir := t.TempDir()
 			e.withState(dir)
-			e.restart(noStateAllow)
+			e.restart()
 			e.check(e.claim(runnerA1), 200, "claim")
 			damage(dir)
-			if what := e.restart(noStateAllow); !strings.Contains(what, "state lost") {
+			e.running[tokenA] = 1 // the claim is a running task
+			if what := e.restart(); !strings.Contains(what, "state lost") {
 				t.Errorf("want a lost state, got: %s", what)
 			}
-			for _, ip := range []string{runnerA1, runnerA2, runnerB1} {
-				e.check(e.claim(ip), 403, "every runner present is latched: "+ip)
+			for _, ip := range []string{runnerA1, runnerA2} {
+				e.check(e.claim(ip), 403, "class a has a running task: every runner present is latched: "+ip)
 			}
+			e.check(e.claim(runnerB1), 200, "class b has none: its runner may claim")
 		})
 	}
-}
-
-func TestNoStateLatchIsTheFailSafeStartOfAnUnusedDirectory(t *testing.T) {
-	e := newEnv(t, runnerA1, runnerA2)
-	e.withState(t.TempDir())
-	if what := e.restart(noStateLatch); !strings.Contains(what, "-no-state latch") {
-		t.Errorf("got: %s", what)
-	}
-	e.check(e.claim(runnerA1), 403, "latched by -no-state latch")
-	e.check(e.claim(runnerB1), 403, "latched by -no-state latch")
+	t.Run("nothing runs", func(t *testing.T) {
+		e := newEnv(t, runnerA1, runnerA2)
+		dir := t.TempDir()
+		e.withState(dir)
+		e.restart()
+		os.Remove(filepath.Join(dir, stateFile))
+		if what := e.restart(); !strings.Contains(what, "state lost") || !strings.Contains(what, "may claim") {
+			t.Errorf("got: %s", what)
+		}
+		e.check(e.claim(runnerA1), 200, "no task of the class runs: the runner may claim")
+	})
 }
 
 func TestStateDirectoryMustBeWritable(t *testing.T) {
@@ -471,9 +651,40 @@ func TestAStateThatCannotBeWrittenMakesTheProxyUnhealthy(t *testing.T) {
 	e := newEnv(t, runnerA1)
 	dir := t.TempDir()
 	e.withState(dir)
-	e.restart(noStateAllow)
+	e.restart()
 	e.check(e.do("10.9.9.9", "GET", healthPath, ""), 200, "healthy")
 	os.RemoveAll(dir) // the volume is gone
 	e.claim(runnerA1)
 	e.check(e.do("10.9.9.9", "GET", healthPath, ""), 503, "the state cannot be written")
+}
+
+func TestHealthcheckFlag(t *testing.T) {
+	status := atomic.Int32{}
+	status.Store(200)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != healthPath {
+			t.Errorf("asked for %s", r.URL.Path)
+		}
+		w.WriteHeader(int(status.Load()))
+	}))
+	defer srv.Close()
+	listen := strings.TrimPrefix(srv.URL, "http://")
+	if got := checkHealth(listen); got != 0 {
+		t.Errorf("healthy proxy: exit %d, want 0", got)
+	}
+	_, port, _ := net.SplitHostPort(listen)
+	if got := checkHealth(":" + port); got != 0 {
+		t.Errorf("-listen :%s means this host: exit %d, want 0", port, got)
+	}
+	status.Store(503)
+	if got := checkHealth(listen); got != 1 {
+		t.Errorf("unhealthy proxy: exit %d, want 1", got)
+	}
+	srv.Close()
+	if got := checkHealth(listen); got != 1 {
+		t.Errorf("no proxy: exit %d, want 1", got)
+	}
+	if got := checkHealth("not an address"); got != 1 {
+		t.Errorf("bad address: exit %d, want 1", got)
+	}
 }

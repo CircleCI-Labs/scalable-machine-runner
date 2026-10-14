@@ -18,9 +18,6 @@ import (
 const (
 	stateFile   = "state.json"
 	stateMarker = ".initialized"
-
-	noStateAllow = "allow" // a start without any state is a first start: no runner has claimed through this proxy
-	noStateLatch = "latch" // a start without any state latches every runner present, like a proxy without a state directory
 )
 
 type startKind int

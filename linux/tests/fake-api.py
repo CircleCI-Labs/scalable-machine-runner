@@ -14,6 +14,10 @@ By default no token is checked and nothing is logged. proxy.sh turns on, with en
   LOG_REQUESTS=1                one line per request, "REQ <method> <path> auth=<label> ua=<user agent>", never a token:
                                 the label is CLASS:<label>, PLACEHOLDER, TASK (the task token of a claim), OTHER or NONE
 The queue is held (every claim gets 204, no task) while the file /tmp/hold exists.
+GET /api/v3/runner/scale answers like CircleCI's scale call for the class of the bearer token (with CLASS_TOKENS set, any other
+token gets 401): {"data":{"attributes":{"unclaimed_task_count":N,"running_task_count":R}}}. R is what GET /_running/R last set
+(default 0: the test says how many tasks run, because the fake agent does not report the end of its job). While the file
+/tmp/scale-fail exists the call answers 500.
 """
 import hashlib
 import http.server
@@ -37,7 +41,7 @@ echo "TASK uid=$(id -u) user=$(id -un) home=$HOME workdir=$w residue=$(ls -A "$w
 mkdir -p "$w/project/.git/objects" "$w/project/sub" && echo data > "$w/project/.git/objects/pack" && echo x > "$w/project/sub/file"
 """ + (b'sleep %d; echo TASKEND >&2\n' % SLEEP if SLEEP else b"") + b"""exit 0
 """
-state = {"claims": 0, "limit": TASKS}
+state = {"claims": 0, "limit": TASKS, "running": 0}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -84,6 +88,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._reply(200, json.dumps(doc).encode())
         elif self.path == "/agent":
             self._reply(200, AGENT, "application/octet-stream")
+        elif self.path.startswith("/api/v3/runner/scale"):
+            if os.path.exists("/tmp/scale-fail"):
+                self._reply(500, b'{"error":{"title":"scale is down"}}')
+            elif CLASS_TOKENS and not self._auth().startswith("CLASS:"):
+                self._reply(401, b'{"message":"bad resource class token"}')
+            else:
+                doc = {"data": {"type": "scale", "attributes": {"unclaimed_task_count": 0, "running_task_count": state["running"]}}}
+                self._reply(200, json.dumps(doc).encode())
+        elif self.path.startswith("/_running/"):
+            state["running"] = int(self.path.rsplit("/", 1)[1])
+            self._reply(200, b"{}")
         elif self.path.startswith("/_arm/"):
             state["claims"], state["limit"] = 0, int(self.path.rsplit("/", 1)[1])
             self._reply(200, b"{}")

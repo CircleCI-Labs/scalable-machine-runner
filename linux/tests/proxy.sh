@@ -7,7 +7,8 @@
 # config; the three class tokens are Swarm secrets of the proxy alone. Phases:
 #   dist      the distributor installs the proxy next to the runner: SHA256SUMS, a record, root-owned; a wrong SHA256SUMS line or a hash that
 #             MACHINE_RUNNER_SWARM_PROXY_SHA256 does not allow installs nothing; a changed binary is refused and repaired
-#   order     the runners start BEFORE the proxy: when it comes up (a first start, no state) they claim at once, none is locked out
+#   order     the runners start BEFORE the proxy: when it comes up (a first start, no state) it asks the API (scale) how many tasks run, none do,
+#             and they claim at once, none is locked out
 #   claims    each class claims with its own token and no other call carries one
 #   midjob    the proxy restarts while the first jobs run: they finish (the API gets their step end and cleanup), the restart restores its state,
 #             and the runners that claimed stay refused
@@ -15,8 +16,9 @@
 #             container that is not a runner (either network); the proxy is hardened, healthy, and logs no token
 #   restart   idle runners are present at a restart WITH state: they may claim afterwards (only a runner that claimed stays refused)
 #   endjob    the proxy is down when the jobs end, and for a while after it: whether the runner reports the end of the job once the proxy is back
-#   lost      the state file is gone but its marker is not: the proxy fails safe, every runner present is refused
-#   fresh     the whole state directory is empty again (a first start): the idle runners present may claim
+#   lost      the state file is gone but its marker is not, and the API says that tasks run: every runner present is refused
+#   unknown   the same, and the scale call fails: the proxy fails safe, every runner present is refused
+#   fresh     the whole state directory is empty again (a first start) and no task runs: the idle runners present may claim
 # Usage: proxy.sh        Env: TIMEOUT=240, JOB_S=60 (seconds a job runs)
 set -euo pipefail
 # shellcheck source=linux/tests/lib.sh
@@ -86,6 +88,7 @@ probe() { local c=$1; shift; dk exec -u 0 "$c" "$@"; }   # as root in a containe
 claim_code() { probe "$1" curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $PLACEHOLDER" "http://token-proxy:8080$CLAIM" || true; }   # 000: no answer
 upstream_claims() { count "$(alog)" "REQ POST $CLAIM"; }
 api_count() { count "$(alog)" "$1"; }   # a literal piece of an API log line
+api_running() { dk exec fake-api python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/_running/$1')"; }   # what the scale call reports as running tasks
 hold() { dk exec fake-api touch /tmp/hold; }
 release() { dk exec fake-api rm -f /tmp/hold; }
 vol() { docker exec "$mgr" "$@"; }
@@ -192,7 +195,8 @@ c_def=$(cont linux-default)
 c_java=$(cont linux-java)
 echo "RESULT test=proxy phase=order runners_before_the_proxy=2 same_containers_claimed=$([[ $c_def == "$before_def" && $c_java == "$before_java" ]] && echo yes || echo no) proxy_said=\"$first_line\""
 [[ $c_def == "$before_def" && $c_java == "$before_java" ]] || fail "the claims did not come from the containers that waited for the proxy"
-[[ $first_line == *"first start"* ]] || fail "the proxy did not treat its first start as one: $first_line"
+[[ $first_line == *"no state (a first start)"* && $first_line == *"tasks.linux-default: CircleCI reports 0 running tasks"* ]] || fail "the proxy did not treat its first start as one, and ask the API: $first_line"
+[[ $(api_count "REQ GET /api/v3/runner/scale auth=CLASS:linux-default ") -ge 1 && $(api_count "REQ GET /api/v3/runner/scale auth=CLASS:linux-java ") -ge 1 ]] || fail "the proxy did not ask for the scale with the token of each class"
 
 # ---------------------------------------------------------------------------------------------
 # claims
@@ -225,7 +229,7 @@ proxy_stop
 sleep 5
 proxy_start
 outage=$((SECONDS - down))
-[[ $state_line == *"state restored: 2 runner"* ]] || fail "the restarted proxy did not restore the two runners that claimed: $state_line"
+[[ $state_line == *"state restored"* && $state_line == *"tasks.linux-default: 1 runner(s) have claimed"* && $state_line == *"tasks.linux-java: 1 runner(s) have claimed"* ]] || fail "the restarted proxy did not restore the two runners that claimed: $state_line"
 reachable() { [[ $(claim_code "$1") != 000 ]]; }   # the name token-proxy takes a moment to point at the new container
 wait_for 30 reachable "$c_def" || fail "the restarted proxy is not reachable from the runner"
 after_c_def=$(claim_code "$c_def")
@@ -304,7 +308,7 @@ idle() { polled_from "$1" tasks.linux-default && polled_from "$2" tasks.linux-ja
 wait_for 120 idle "$nip_def" "$nip_java" || fail "the new containers do not poll"
 restart_proxy
 echo "RESULT test=proxy phase=restart idle_runners_present=2 state=\"$state_line\""
-[[ $state_line == *"state restored: 0 runner"* ]] || fail "the restart did not restore an empty latch: $state_line"
+[[ $state_line == *"state restored"* && $state_line == *"tasks.linux-default: 0 runner(s) have claimed"* && $state_line == *"tasks.linux-java: 0 runner(s) have claimed"* ]] || fail "the restart did not restore an empty latch: $state_line"
 end1=$(jobs_ended step/end)
 clean1=$(jobs_ended task/event/cleanup)
 release
@@ -329,7 +333,7 @@ if wait_for 120 endjob_report; then reported=yes; else reported=no; fi
 echo "RESULT test=proxy phase=endjob runner_reported_the_end_once_the_proxy_was_back=$reported step_end=$(($(jobs_ended step/end) - end1)) cleanup=$(($(jobs_ended task/event/cleanup) - clean1)) default=\"$(dk inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$n_def")\" java=\"$(dk inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$n_java")\" (the fake agent does not call the API: these are the calls of the runner)"
 
 # ---------------------------------------------------------------------------------------------
-# lost: the state file is gone, its marker is not
+# lost: the state file is gone, its marker is not, and the API says that tasks run
 # ---------------------------------------------------------------------------------------------
 wait_for "$TIMEOUT" new_containers "$n_def" "$n_java" || fail "no new containers after the second jobs"
 lip_def=$(ip_of "$n_def")
@@ -337,18 +341,34 @@ lip_java=$(ip_of "$n_java")
 wait_for 120 idle "$lip_def" "$lip_java" || fail "the replacement runners do not poll"
 vol rm -f "$state_dir/state.json"
 vol test -e "$state_dir/.initialized" || fail "the state marker is missing"
+api_running 2   # two tasks run, as far as the API says
 restart_proxy
 echo "RESULT test=proxy phase=lost state=\"$state_line\""
-[[ $state_line == *"state lost"* ]] || fail "a state without its file was not treated as lost: $state_line"
+[[ $state_line == *"state lost"* && $state_line == *"tasks.linux-default: CircleCI reports 2 running task(s)"* ]] || fail "a state without its file was not treated as lost, with the API's count: $state_line"
 claims2=$(upstream_claims)
 release
-refused_both() { refused_from "$1" && refused_from "$2"; }
-wait_for 60 refused_both "$lip_def" "$lip_java" || fail "a proxy that lost its state did not refuse the runners present"
+refused_now() { [[ $(count "$(plog_now)" "claim from $1 refused: this runner has already claimed") -ge 1 ]]; }
+refused_both() { refused_now "$1" && refused_now "$2"; }
+wait_for 60 refused_both "$lip_def" "$lip_java" || fail "a proxy that lost its state while tasks run did not refuse the runners present"
 [[ $(upstream_claims) == "$claims2" ]] || fail "a claim reached the API through a proxy that lost its state"
 echo "RESULT test=proxy phase=lost idle_runners_refused=yes reached_upstream=0"
 
 # ---------------------------------------------------------------------------------------------
-# fresh: an empty state directory is a first start again
+# unknown: the scale call fails (a first start again): fail safe
+# ---------------------------------------------------------------------------------------------
+dk exec fake-api touch /tmp/scale-fail
+api_running 0   # the API would say 0, but the call fails
+vol sh -c "rm -f $state_dir/state.json $state_dir/.initialized"
+restart_proxy
+echo "RESULT test=proxy phase=unknown state=\"$state_line\""
+[[ $state_line == *"no state (a first start)"* && $state_line == *"CircleCI does not say how many tasks run"* && $state_line == *"failing safe"* ]] || fail "a failing scale call did not fail safe: $state_line"
+wait_for 60 refused_both "$lip_def" "$lip_java" || fail "a proxy that cannot ask the API did not refuse the runners present"
+[[ $(upstream_claims) == "$claims2" ]] || fail "a claim reached the API through a proxy that could not ask the scale"
+dk exec fake-api rm -f /tmp/scale-fail
+echo "RESULT test=proxy phase=unknown idle_runners_refused=yes reached_upstream=0"
+
+# ---------------------------------------------------------------------------------------------
+# fresh: an empty state directory is a first start again, and no task runs
 # ---------------------------------------------------------------------------------------------
 hold
 dk service update -d --force --update-parallelism 0 "${STACK}_linux-default" > /dev/null
@@ -360,7 +380,7 @@ wait_for 120 idle "$fip_def" "$fip_java" || fail "the replacement runners do not
 vol sh -c "rm -f $state_dir/state.json $state_dir/.initialized"
 restart_proxy
 echo "RESULT test=proxy phase=fresh state=\"$state_line\""
-[[ $state_line == *"first start"* ]] || fail "an empty state directory was not a first start: $state_line"
+[[ $state_line == *"no state (a first start)"* && $state_line == *"0 running tasks"* ]] || fail "an empty state directory was not a first start that asked the API: $state_line"
 release
 wait_for "$TIMEOUT" claimed_both "$fip_def" "$fip_java" || fail "the idle runners present at a first start could not claim"
 hold
@@ -384,4 +404,4 @@ dk service update -d --constraint-rm 'node.labels.hold == yes' "${STACK}_runner-
 wait_for 120 proxy_up || fail "the distributor did not repair the binary: $(rlog runner-distributor | tail -n 5)"
 echo "RESULT test=proxy phase=tamper repaired_by_the_distributor=yes"
 
-pass "the distributor installs the proxy from the SHA256SUMS of its release; runners that start before the proxy are not locked out; two classes claim through one proxy, each with its own token and nowhere else; no class token in a runner container; one claim per container; 403 for non-runners; a restart with state refuses only the runners that claimed, a lost state fails safe, and an empty one is a first start; a changed binary does not start"
+pass "the distributor installs the proxy from the SHA256SUMS of its release; runners that start before the proxy are not locked out; two classes claim through one proxy, each with its own token and nowhere else; no class token in a runner container; one claim per container; 403 for non-runners; a restart with state refuses only the runners that claimed; with no state the proxy asks the API how many tasks run: some, or no answer, and every runner present is refused, none and they may claim; a changed binary does not start"

@@ -16,9 +16,9 @@ check() { # service description regex
 }
 service_block() { awk -v s="$1" '$0 == "  " s ":" { f = 1; next } f && (/^  [^ ]/ || /^[^ ]/) { f = 0 } f' <<< "$cfg"; }
 
-# every file combination must load (an add-on stack file also alone); the last one holds all six services
-for files in "runners.yaml" "ssh-rerun.yaml" "runners.yaml docker-build.yaml" "runners.yaml persistent.yaml" "runners.yaml ssh-rerun.yaml" \
-  "runners.yaml docker-build.yaml persistent.yaml ssh-rerun.yaml"; do
+# every file combination must load (an add-on stack file also alone); the last one holds all six services and the container agent
+for files in "runners.yaml" "ssh-rerun.yaml" "container-mode.yaml" "runners.yaml docker-build.yaml" "runners.yaml persistent.yaml" "runners.yaml ssh-rerun.yaml" \
+  "runners.yaml container-mode.yaml" "runners.yaml docker-build.yaml persistent.yaml ssh-rerun.yaml container-mode.yaml"; do
   args=()
   for f in $files; do args+=(-c "$dir/$f"); done
   cfg=$(docker stack config "${args[@]}") || { echo "FAIL: docker stack config rejected: $files"; exit 1; }
@@ -146,6 +146,46 @@ if grep -q 'docker-build != true' <<< "$block"; then
   echo "  runner-distributor: must also run on a Docker-build node, whose runner needs the binary"
   problems=$((problems + 1))
 fi
+# Container mode (prototype): the agent is the one service of that file, and the only one with the socket besides the docker-build class.
+block=$(service_block container-agent)
+check container-agent 'a global service' '^      mode: global$'
+check container-agent 'a stock Go image pinned by digest (nothing is built or published)' '^    image: golang:[0-9.]+-alpine@sha256:[0-9a-f]{64}$'
+check container-agent 'user "0" (the socket is owned by root)' '^    user: "0"$'
+check container-agent 'the entrypoint as a config' '^        target: /entrypoint.sh$'
+check container-agent 'the Go sources as configs' '^        target: /src/task.go$'
+check container-agent 'a read-only root filesystem' '^    read_only: true$'
+check container-agent 'a volume for the build' '^        target: /work$'
+check container-agent 'cap_drop ALL' '^      - ALL$'
+check container-agent 'init: true' '^    init: true$'
+check container-agent 'stop_grace_period 5h5m' '^    stop_grace_period: 5h5m0s$'
+check container-agent 'update_config order stop-first (two agents on a node would remove each other'"'"'s jobs)' '^        order: stop-first$'
+check container-agent 'restart_policy condition any' '^        condition: any$'
+check container-agent 'resource limits' '^        limits:$'
+check container-agent 'a logging block with rotation' '^        max-size: 20m$'
+check container-agent 'the docker.sock bind' '^        source: /var/run/docker.sock$'
+check container-agent 'the worker role constraint (the socket on a manager controls the Swarm)' '^          - node.role == worker$'
+check container-agent 'the opt-in node label constraint' '^          - node.labels.machine-runner-swarm.container-mode == true$'
+check container-agent 'no Docker-build node' '^          - node.labels.machine-runner-swarm.docker-build != true$'
+check container-agent 'the init image pinned by digest' '^      CCA_INIT_IMAGE: .*@sha256:[0-9a-f]{64}$'
+check container-agent 'the pause image pinned by digest' '^      CCA_PAUSE_IMAGE: .*@sha256:[0-9a-f]{64}$'
+check container-agent 'a class with a token file under /run/secrets' '^      CCA_CLASSES: .*"token_file":"/run/secrets/docker-default-token"'
+check container-agent 'the class secret docker-default-token, root only' '^      - source: docker-default-token$'
+check container-agent 'its own network' '^      container-agent: null$'
+if grep -q 'ports:\|privileged\|security_opt' <<< "$block"; then
+  echo "  container-agent: publishes a port or uses a key Swarm ignores"
+  problems=$((problems + 1))
+fi
+# every Go source file of the agent is a config, so that no file is missing from the build (tests are not delivered)
+for f in "$dir"/container-agent/*.go; do
+  case $f in *_test.go) continue ;; esac
+  grep -q "file: container-agent/$(basename "$f")}\$" "$dir/container-mode.yaml" || { echo "  container-agent: $(basename "$f") is not a config of container-mode.yaml"; problems=$((problems + 1)); }
+done
+sockets=$(grep -c 'source: /var/run/docker.sock' <<< "$cfg" || true)
+if [[ $sockets -ne 2 ]]; then
+  echo "  the merged stack mounts the Docker socket in $sockets services, expected 2 (linux-docker-build and container-agent)"
+  problems=$((problems + 1))
+fi
+
 # the version policy can be set at deploy time, and the variables reach the distributor only
 cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_CHECK_INTERVAL=1h \
   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc docker stack config -c "$dir/runners.yaml")
@@ -163,7 +203,7 @@ if ! out=$("$dir/../../ci/config-names.sh" 2>&1); then
   problems=$((problems + 1))
 fi
 
-echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml services=${#services[@]} problems=$problems"
+echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml,container-mode.yaml services=$((${#services[@]} + 1)) problems=$problems"
 if [[ $problems -eq 0 ]]; then
   echo "PASS (docker stack config accepts every file combination; every service meets the contract)"
 else

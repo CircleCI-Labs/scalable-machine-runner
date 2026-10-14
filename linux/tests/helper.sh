@@ -14,7 +14,7 @@ work=$(mktemp -d)
 trap 'docker rm -f -v "$node" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 # a copy of the stack with no replicas (also for the global distributor): only the helper's steps are under test, not the tasks
 sed -E 's/^( +replicas: )[0-9]+/\10/; s/^( +)mode: global.*/\1mode: replicated\n\1replicas: 0/' "$stack_dir/runners.yaml" > "$work/runners.yaml"
-cp "$stack_dir/circleci-runner-entrypoint" "$stack_dir/runner-distributor.sh" "$stack_dir/proxy-entrypoint.sh" "$work/"   # the stack file names them next to itself
+cp "$stack_dir/circleci-runner-entrypoint" "$stack_dir/runner-distributor.sh" "$work/"   # the stack file names them next to itself
 dind_load "$node" "$CIMG_IMAGE"
 dind_load "$node" alpine:3
 

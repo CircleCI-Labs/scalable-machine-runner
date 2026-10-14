@@ -73,16 +73,17 @@ Describe 'the stack files' {
         }
     }
 
-    It 'run the token proxy as one replica with dnsrr, from the volume (read-only, subpath proxy\current), with its state in a named volume, on a manager by default' {
+    It 'run the token proxy from its image as one replica with dnsrr, with its state in a named volume, on a manager by default' {
         $proxy = [regex]::Match($script:files['runners.yaml'], '(?ms)^  token-proxy-windows:\r?\n(.*?)(?=^[a-z])').Groups[1].Value
         $proxy | Should -Not -BeNullOrEmpty
-        $proxy | Should -Match "(?m)^      - 'C:\\machine-runner-swarm-proxy\\bin\\machine-runner-swarm-proxy\.exe'"
+        $proxy | Should -Match '(?m)^    image: \$\{MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:edge\}'
+        $proxy | Should -Not -Match 'runner-bin|subpath|entrypoint' -Because 'the image is the program: nothing comes from the volume of the distributor'
+        $proxy | Should -Not -Match 'windows-ltsc20' -Because 'one tag covers both Windows versions, and Docker picks the image of the node'
         $proxy | Should -Match '(?m)^      replicas: 1'
         $proxy | Should -Match '(?m)^      endpoint_mode: dnsrr'
-        $proxy | Should -Match "(?m)^          subpath: 'proxy\\current'"
-        $proxy | Should -Match '(?m)^        read_only: true'
         $proxy | Should -Match '(?m)^        source: proxy-state'
-        $proxy | Should -Match '(?m)^      - -state-dir'
+        $proxy | Should -Match "(?m)^      - -state-dir\r?\n      - 'C:\\proxy-state'"
+        $proxy | Should -Match "(?m)^      test: \['CMD', 'C:\\machine-runner-swarm-proxy\.exe', '-healthcheck'\]"
         $proxy | Should -Match '(?m)^          - "\$\{MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node\.role == manager\}"'
         $proxy | Should -Not -Match 'machine-runner-swarm\.proxy ==' -Because 'a manager is the default and needs no label'
         $proxy | Should -Match '(?m)^          - node\.labels\.machine-runner-swarm\.docker-build != true'
@@ -103,12 +104,10 @@ Describe 'the stack files' {
         $script:files['persistent.yaml'] | Should -Not -Match 'token-proxy-windows:'
     }
 
-    It 'give the proxy settings to the distributor only, and pin nothing in a runner service' {
+    It 'name the proxy image by a variable, and give the distributor and the runner services no proxy setting' {
         $text = $script:files['runners.yaml']
-        $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_PROXY_VERSION: \$\{MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased\}'
-        $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_PROXY_LATEST_URL: \$\{MACHINE_RUNNER_SWARM_PROXY_LATEST_URL:-https://api\.github\.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest\}'
-        $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_PROXY_BASE_URL: \$\{MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github\.com/CircleCI-Labs/scalable-machine-runner/releases/download\}'
-        foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Not -Match 'PROXY_VERSION|PROXY_SHA256' }
+        $text | Should -Not -Match 'PROXY_VERSION|PROXY_BASE_URL|PROXY_LATEST_URL|PROXY_SHA256|PROXY_NO_STATE' -Because 'the proxy is an image, not a download of the distributor'
+        foreach ($s in $script:blocks.Keys) { $script:blocks[$s] | Should -Not -Match 'PROXY_IMAGE' }
     }
 
     It 'have no entrypoint script in a runner service: the runner is the main process' {

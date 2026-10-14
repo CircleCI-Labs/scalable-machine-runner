@@ -165,14 +165,6 @@ x-distributor-env: &distributor-env
   MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}
   # A mirror of the two pinned Git downloads: a directory URL that holds PortableGit-<version>-64-bit.7z.exe (arm64: -arm64.7z.exe) and 7zr.exe.
   MACHINE_RUNNER_SWARM_TOOLS_BASE_URL: ${MACHINE_RUNNER_SWARM_TOOLS_BASE_URL:-}
-  # The token proxy: machine-runner-swarm-proxy_windows_<amd64|arm64> of the GitHub release v<version> of this repository, verified against
-  # that release's SHA256SUMS. ci/release.sh pins the default below to the release it cuts. In a checkout (git clone, Download ZIP) it
-  # is "unreleased", which means the latest published release of this repository, looked at again every CHECK_INTERVAL; with no release
-  # published yet the proxy is not installed, and the distributor says so in its log. The same variables as in the Linux stack file.
-  MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}
-  MACHINE_RUNNER_SWARM_PROXY_LATEST_URL: ${MACHINE_RUNNER_SWARM_PROXY_LATEST_URL:-https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest}
-  MACHINE_RUNNER_SWARM_PROXY_BASE_URL: ${MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download}
-  MACHINE_RUNNER_SWARM_PROXY_SHA256: ${MACHINE_RUNNER_SWARM_PROXY_SHA256:-}
   # HTTPS_PROXY: http://proxy.example.com:3128    # for every download of the distributor
 
 services:
@@ -257,39 +249,35 @@ services:
   # docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
   # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'. A claim is accepted from a runner in the DNS set tasks.<service> of
   # its class, once per container, and gets the token of that class; every other call passes through with the caller's own token. If it is
-  # down, runners cannot claim and the calls of a running job wait until it is back (docs/operations.md). Its binary comes from the
-  # distributor (proxy\current in runner-bin, mounted read-only). A binary in a stock Server Core image has no start script that
-  # could check it, so the distributor checks it before it flips the link, like the runner.
+  # down, runners cannot claim and the calls of a running job wait until it is back (docs/operations.md). It is a published, signed
+  # image (docs/install-windows.md, "The token proxy image"): ccilabs/machine-runner-swarm-proxy, the tag edge by default (the latest
+  # commit of main). One tag covers Windows Server 2022 and 2025 (and the Linux platforms), and Docker picks the image of the node. A
+  # release bundle names the tag and the digest of its release instead; pin a digest yourself with MACHINE_RUNNER_SWARM_PROXY_IMAGE. In a
+  # checkout, build the image (docs/install-windows.md) and deploy with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to its name. The image
+  # runs as ContainerAdministrator: a named volume is writable for it only.
   token-proxy-windows:
-    image: mcr.microsoft.com/windows/servercore:ltsc2022
+    image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:edge}
     isolation: process
     # CircleCI server: your runner API URL in -upstream
-    entrypoint:
-      - 'C:\machine-runner-swarm-proxy\bin\machine-runner-swarm-proxy.exe'
+    command:
       - -upstream
       - https://runner.circleci.com
       - -state-dir
       - 'C:\proxy-state'
     environment:
-      # One variable for each class, because stack files merge variables but replace an entrypoint: an add-on stack file adds its class
+      # One variable for each class, because stack files merge variables but replace a command: an add-on stack file adds its class
       # with a variable of its own. The value is <service>=<token file>; the proxy resolves tasks.<service>.
       MACHINE_RUNNER_SWARM_PROXY_CLASS_WINDOWS_DEFAULT: 'windows-default=C:\ProgramData\Docker\secrets\windows-default-token'
     secrets:
       - source: windows-default-token
         target: windows-default-token
     healthcheck:
-      test: ['CMD', 'curl.exe', '-s', '-f', '-o', 'NUL', 'http://127.0.0.1:8080/healthz']
+      test: ['CMD', 'C:\machine-runner-swarm-proxy.exe', '-healthcheck']
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 20s
     volumes:
-      - type: volume
-        source: runner-bin
-        target: 'C:\machine-runner-swarm-proxy'
-        read_only: true
-        volume:
-          subpath: 'proxy\current'          # a link to versions\<version>, resolved when the container is created
       - type: volume
         source: proxy-state
         target: 'C:\proxy-state'
@@ -304,7 +292,7 @@ services:
       replicas: 1                           # exactly one: the latch of claimed runners lives in the proxy
       endpoint_mode: dnsrr                  # no VIP: the proxy must see the address of each runner
       restart_policy:
-        condition: any                      # until the distributor has installed the binary, the container fails to start
+        condition: any
         delay: 10s
       update_config:
         order: stop-first
@@ -315,7 +303,6 @@ services:
         constraints:
           - node.platform.os == windows
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: the tokens must not sit next to the engine
-          - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
           - "${MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node.role == manager}"   # the node that keeps proxy-state
 
 secrets:
@@ -328,8 +315,8 @@ configs:
   # Swarm configs cannot change, so the name carries the first 12 hex digits of the SHA-256 of the file: ci/config-names.sh --write
   # renames it after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
   # distributor, and only the distributor.
-  distributor-windows: {name: machine-runner-swarm-distributor-windows-95a11105a611, file: runner-distributor.ps1}
+  distributor-windows: {name: machine-runner-swarm-distributor-windows-b0211cf42762, file: runner-distributor.ps1}
 
 volumes:
-  runner-bin: {}                            # one per node: the runner, Git and the token proxy of that node
+  runner-bin: {}                            # one per node: the runner and Git of that node
   proxy-state: {}                           # the addresses of the runners that have claimed, on the node of the proxy

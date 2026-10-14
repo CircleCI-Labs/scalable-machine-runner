@@ -18,9 +18,6 @@
       history                        "<UTC time> <directory>" for every flip of current
       git\<git version>\             portable Git, pinned below, its post-install done; PORTABLEGIT records the download
       git\current                    a relative directory symbolic link to git\<git version>
-      proxy\versions\<version>\bin\machine-runner-swarm-proxy.exe   the token proxy of the release, with SHA256 (its record) and VERSION
-      proxy\current                 a relative directory symbolic link to versions\<version>, mounted by the token-proxy-windows service;
-                                    the last 2 versions that were active stay
 
     <arch> is amd64 or arm64, from PROCESSOR_ARCHITECTURE (AMD64 or ARM64): the architectures of CircleCI's manifest for Windows.
 
@@ -37,14 +34,6 @@
                                               instead of the hash of the manifest
       MACHINE_RUNNER_SWARM_TOOLS_BASE_URL     optional: a directory with PortableGit-<version>-64-bit.7z.exe (arm64: -arm64.7z.exe) and 7zr.exe
                                               (default: their GitHub release downloads)
-      MACHINE_RUNNER_SWARM_PROXY_VERSION      the token proxy of the release v<version> of this repository. unreleased (the default of a
-                                              checkout; ci/release.sh pins the default of a release bundle) means the latest published release
-                                              of this repository, looked at again every check interval. Empty: no proxy is installed
-      MACHINE_RUNNER_SWARM_PROXY_BASE_URL     where v<version>/machine-runner-swarm-proxy_windows_<arch> and v<version>/SHA256SUMS live
-                                              (default: the GitHub releases of this repository)
-      MACHINE_RUNNER_SWARM_PROXY_LATEST_URL   what unreleased asks for the latest release: JSON with its "tag_name" (default: the GitHub
-                                              API of this repository, releases/latest)
-      MACHINE_RUNNER_SWARM_PROXY_SHA256       optional: the proxy binary SHA-256 values that may be installed, separated by commas
       HTTPS_PROXY                             optional: a proxy for every download
 
     Each check resolves the version, verifies the active binary against its record, downloads and verifies what is missing,
@@ -88,8 +77,6 @@ $script:Git = @{
     SevenZipVersion = '26.04'
     SevenZipSha256  = '256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282'
 }
-$script:ProxyExe = 'machine-runner-swarm-proxy.exe'
-$script:ProxyKeep = 2   # proxy versions to keep: the last ones that were active
 $script:Keep = 3        # runner versions to keep: the last ones that were active
 $script:RetrySeconds = 300
 
@@ -108,11 +95,10 @@ function Get-RunnerArchitecture {
 }
 
 function Initialize-Architecture {
-    # The file names that depend on the architecture: the runner tarball, the proxy binary of the release, portable Git.
+    # The file names that depend on the architecture: the runner tarball and portable Git.
     param([ValidateSet('amd64', 'arm64')] [string] $Arch)
     $script:Arch = $Arch
     $script:Tarball = "circleci-runner_windows_$Arch.tar.gz"
-    $script:ProxyAsset = "machine-runner-swarm-proxy_windows_$Arch"
     $script:GitAsset = $script:GitByArch[$Arch].Asset
     $script:GitSha256 = $script:GitByArch[$Arch].Sha256
 }
@@ -153,18 +139,6 @@ function Get-DistributorSetting {
         if ($h -notmatch '^[0-9a-f]{64}$') { throw "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h" }
     }
     $tools = "$env:MACHINE_RUNNER_SWARM_TOOLS_BASE_URL"
-    $proxyVersion = "$env:MACHINE_RUNNER_SWARM_PROXY_VERSION"
-    if ($proxyVersion -and $proxyVersion -ne 'unreleased' -and $proxyVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z._-]*$') {
-        throw "MACHINE_RUNNER_SWARM_PROXY_VERSION must be a release such as 0.3.0, got '$proxyVersion'"
-    }
-    $proxyBase = "$env:MACHINE_RUNNER_SWARM_PROXY_BASE_URL"
-    if (-not $proxyBase) { $proxyBase = 'https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download' }
-    $proxyLatest = "$env:MACHINE_RUNNER_SWARM_PROXY_LATEST_URL"
-    if (-not $proxyLatest) { $proxyLatest = 'https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest' }
-    $proxyHashes = @("$env:MACHINE_RUNNER_SWARM_PROXY_SHA256" -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
-    foreach ($h in $proxyHashes) {
-        if ($h -notmatch '^[0-9a-f]{64}$') { throw "MACHINE_RUNNER_SWARM_PROXY_SHA256 holds a value that is not a SHA-256: $h" }
-    }
     return @{
         Want     = $want
         Kind     = $kind
@@ -174,10 +148,6 @@ function Get-DistributorSetting {
         Base     = $base.TrimEnd('/')
         Hashes   = $hashes
         Tools    = $tools.TrimEnd('/')
-        ProxyVersion = $proxyVersion
-        ProxyBase    = $proxyBase.TrimEnd('/')
-        ProxyLatest  = $proxyLatest
-        ProxyHashes  = $proxyHashes
     }
 }
 
@@ -528,138 +498,6 @@ function Install-PinnedGit {
     return $true
 }
 
-# --- the token proxy ---------------------------------------------------------------------------------------------------
-
-function Test-ProxyDirectory {
-    # A proxy version directory is complete and its binary matches its record (and, with Accept, one of those hashes).
-    param([string] $Dir, [string[]] $Accept = @())
-    $exe = Join-Path $Dir "bin\$($script:ProxyExe)"
-    $record = Join-Path $Dir 'SHA256'
-    if (-not (Test-Path -LiteralPath $exe -PathType Leaf) -or -not (Test-Path -LiteralPath $record -PathType Leaf)) { return $false }
-    if ([IO.File]::ReadAllText($record).Trim() -notmatch ('^([0-9a-f]{64})  bin/' + [regex]::Escape($script:ProxyExe) + '$')) { return $false }
-    $recorded = $Matches[1]
-    if ((Get-Sha256 $exe) -ne $recorded) { return $false }
-    return (@($Accept).Count -eq 0 -or @($Accept) -contains $recorded)
-}
-
-function Find-Proxy {
-    # The directory name under proxy\versions of a verified copy of Version: the active one first, then <version>, then <version>_<n>.
-    param([string] $Version, [string[]] $Accept = @())
-    $versions = Join-Path $script:Root 'proxy\versions'
-    if (-not (Test-Path -LiteralPath $versions)) { return $null }
-    $pattern = '^' + [regex]::Escape($Version) + '(_[0-9]+)?$'
-    $active = Split-Path -Leaf "$(Get-LinkTarget (Join-Path $script:Root 'proxy\current'))"
-    $names = @(Get-ChildItem -LiteralPath $versions -Directory | Where-Object { $_.Name -match $pattern } | ForEach-Object { $_.Name } | Sort-Object)
-    foreach ($name in @($names | Where-Object { $_ -eq $active }) + @($names | Where-Object { $_ -ne $active })) {
-        if (Test-ProxyDirectory -Dir (Join-Path $versions $name) -Accept $Accept) { return $name }
-    }
-    return $null
-}
-
-function Install-Proxy {
-    # Downloads the SHA256SUMS and the binary of the release v<Version>, checks the binary against its line (and against Accept when it is
-    # not empty), records it next to the others. Returns the directory name, or $null.
-    param([string] $Version, [string[]] $Accept, [string] $Base)
-    $versions = Join-Path $script:Root 'proxy\versions'
-    $tmp = Join-Path $script:Root ".tmp-proxy-$PID"
-    Invoke-TreeRemoval $tmp
-    New-Item -ItemType Directory -Force -Path $versions, (Join-Path $tmp 'bin') | Out-Null
-    Write-DistributorLog "downloading the token proxy $Version windows/$($script:Arch) from $Base/v$Version"
-    $sums = Join-Path $tmp 'SHA256SUMS'
-    if (-not (Save-Url "$Base/v$Version/SHA256SUMS" $sums)) { Invoke-TreeRemoval $tmp; return $null }
-    $want = ''
-    foreach ($line in @(Get-Content -LiteralPath $sums)) {
-        if ($line -match ('^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($script:ProxyAsset) + '$')) { $want = $Matches[1].ToLowerInvariant(); break }
-    }
-    if (-not $want) { Write-DistributorLog "SHA256SUMS of v$Version lists no $($script:ProxyAsset)"; Invoke-TreeRemoval $tmp; return $null }
-    if (@($Accept).Count -gt 0 -and @($Accept) -notcontains $want) {
-        Write-DistributorLog "SHA256SUMS of v$Version lists $want for $($script:ProxyAsset), which MACHINE_RUNNER_SWARM_PROXY_SHA256 does not allow: refusing to install"
-        Invoke-TreeRemoval $tmp
-        return $null
-    }
-    $exe = Join-Path $tmp "bin\$($script:ProxyExe)"
-    if (-not (Save-Url "$Base/v$Version/$($script:ProxyAsset)" $exe)) { Invoke-TreeRemoval $tmp; return $null }
-    $got = Get-Sha256 $exe
-    if ($got -ne $want) {
-        Write-DistributorLog "SHA-256 mismatch for $($script:ProxyAsset) v${Version}: got $got, SHA256SUMS says ${want}: refusing to install"
-        Invoke-TreeRemoval $tmp
-        return $null
-    }
-    $r = Invoke-Native $exe @('-version')
-    if (($r.Output -join ' ') -notmatch ('(^|[^0-9.])' + [regex]::Escape($Version) + '([^0-9.]|$)')) {
-        Write-DistributorLog "the downloaded proxy does not report version ${Version} ($($r.Output -join ' ')): refusing to install"
-        Invoke-TreeRemoval $tmp
-        return $null
-    }
-    Remove-Item -LiteralPath $sums -Force
-    Write-Ascii (Join-Path $tmp 'SHA256') "$got  bin/$($script:ProxyExe)"
-    Write-Ascii (Join-Path $tmp 'VERSION') $Version
-    $name = Move-IntoPlace -Source $tmp -Parent $versions -Name $Version
-    Write-DistributorLog "installed the token proxy $Version in proxy\versions\${name}: binary SHA-256 $got"
-    return $name
-}
-
-function Get-LatestProxyVersion {
-    # The version of the latest published release of this repository (what unreleased means), from the JSON that Url returns, or $null.
-    param([string] $Url)
-    $file = Join-Path $env:TEMP "runner-distributor-latest-$PID.json"
-    if (-not (Save-Url $Url $file)) {
-        Write-DistributorLog "error: the token proxy is not installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is unreleased (a checkout of this repository), which means its latest published release, and $Url returns none. Either this repository has published no release yet, or GitHub is not reachable. Use the bundle of a release, or set MACHINE_RUNNER_SWARM_PROXY_VERSION to a release such as 0.3.0"
-        return $null
-    }
-    try { $json = [IO.File]::ReadAllText($file) | ConvertFrom-Json } catch { Write-DistributorLog "error: $Url is not JSON: the token proxy is not installed"; return $null }
-    finally { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
-    if ("$($json.tag_name)" -notmatch '^v([0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z._-]*)$') {
-        Write-DistributorLog "error: $Url names no release tag of the form v0.3.0: the token proxy is not installed"
-        return $null
-    }
-    return $Matches[1]
-}
-
-function Invoke-ProxyCheck {
-    # $true when the proxy is not wanted, or is installed and active. A failure never touches the runner.
-    param($Setting)
-    if (-not $Setting.ProxyVersion) { return $true }
-    $version = $Setting.ProxyVersion
-    if ($version -eq 'unreleased') {
-        $version = Get-LatestProxyVersion $Setting.ProxyLatest
-        if (-not $version) { return $false }
-    }
-    $proxyRoot = Join-Path $script:Root 'proxy'
-    $name = Find-Proxy -Version $version -Accept $Setting.ProxyHashes
-    if ($name) {
-        Write-DistributorLog "the token proxy $version is installed already (proxy\versions\$name)"
-    } else {
-        $name = Install-Proxy -Version $version -Accept $Setting.ProxyHashes -Base $Setting.ProxyBase
-        if (-not $name) { return $false }
-    }
-    if (Switch-Link -Link (Join-Path $proxyRoot 'current') -Target "versions\$name") {
-        $history = Join-Path $proxyRoot 'history'
-        $lines = @()
-        if (Test-Path -LiteralPath $history) { $lines = @(Get-Content -LiteralPath $history) }
-        $lines += "$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')) $name"
-        Write-Ascii $history @($lines | Select-Object -Last 200)
-        Write-DistributorLog "[ ok ] proxy\current -> versions\${name}: the token proxy $version windows/$($script:Arch)"
-    }
-    # keep the last ProxyKeep versions that were active, never the active one
-    $active = Split-Path -Leaf "$(Get-LinkTarget (Join-Path $proxyRoot 'current'))"
-    $seen = @()
-    $history = Join-Path $proxyRoot 'history'
-    if (Test-Path -LiteralPath $history) {
-        $lines = @(Get-Content -LiteralPath $history)
-        for ($i = $lines.Count - 1; $i -ge 0 -and $seen.Count -lt $script:ProxyKeep; $i--) {
-            $n = ($lines[$i] -split ' ')[-1]
-            if ($n -and $seen -notcontains $n) { $seen += $n }
-        }
-    }
-    foreach ($dir in @(Get-ChildItem -LiteralPath (Join-Path $proxyRoot 'versions') -Directory -ErrorAction SilentlyContinue)) {
-        if ($dir.Name -eq $active -or $seen -contains $dir.Name) { continue }
-        if (Move-Away $dir.FullName) { Write-DistributorLog "removed the token proxy $($dir.Name) (only the last $($script:ProxyKeep) active versions are kept)" }
-        else { Write-DistributorLog "the token proxy $($dir.Name) is in use: removing it at a later check" }
-    }
-    return $true
-}
-
 # --- one check ---------------------------------------------------------------------------------------------------------
 
 function Invoke-Check {
@@ -671,8 +509,6 @@ function Invoke-Check {
     }
     $gitOk = $true
     if (-not $script:SkipGit) { $gitOk = Install-PinnedGit -Tools $Setting.Tools }
-    $proxyOk = Invoke-ProxyCheck $Setting
-    $gitOk = $gitOk -and $proxyOk   # a failed proxy install is retried like a failed Git install, and never touches the runner
     $target = Resolve-Runner $Setting
     if (-not $target) { return $false }
     if (-not $target.Version) {
@@ -707,9 +543,6 @@ if ($MyInvocation.InvocationName -ne '.') {
         default { $what = "floating: the newest $($setting.Want).x of the manifest" }
     }
     Write-DistributorLog "version $($setting.Want) ($what), windows/$($script:Arch), check every $($setting.Interval)s, from $($setting.Base)"
-    if ($setting.ProxyVersion -eq 'unreleased') { Write-DistributorLog "token proxy: the latest published release of this repository (unreleased), looked at every $($setting.Interval)s: $($setting.ProxyLatest)" }
-    elseif ($setting.ProxyVersion) { Write-DistributorLog "token proxy $($setting.ProxyVersion) from $($setting.ProxyBase)" }
-    else { Write-DistributorLog 'no token proxy is installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is empty' }
     while ($true) {
         $ok = $false
         try { $ok = Invoke-Check $setting } catch { Write-DistributorLog "error: $($_.Exception.Message)" }

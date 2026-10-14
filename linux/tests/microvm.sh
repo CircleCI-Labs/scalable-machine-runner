@@ -5,8 +5,8 @@
 #   manager  runc is the default runtime; it runs the DNS forwarder (microvm-dns)
 #   worker   Kata (Cloud Hypervisor, runtime-rs) is the default runtime, labelled machine-runner-swarm.microvm=true
 # The daemon.json of the worker is the JSON block of docs/microvm.md, so the docs are tested too. The REAL stack files runners.yaml
-# and microvm.yaml are deployed, the runner and the token proxy reach the runc node through its distributor, and each microVM downloads its
-# own runner, both from a test mirror. Checks:
+# and microvm.yaml are deployed, the runner reaches the runc node through its distributor, and each microVM downloads its
+# own runner, both from a test mirror (the token proxy is the image built from proxy/). Checks:
 #   1. placement      the microVM classes stay pending until a node has the label; the Kata node runs no distributor and has no runner volume, the
 #                     forwarder runs on runc
 #   2. in the VM      the guest kernel is not the host's, /proc/cmdline names kata-containers, no class token is in the VM, public and service DNS
@@ -128,7 +128,7 @@ idocker "$KN" swarm join --token "$(idocker "$MGR" swarm join-token -q worker)" 
 idocker "$MGR" swarm update --task-history-limit 20 > /dev/null
 COREDNS_IMAGE=$(sed -n 's/^    image: \(coredns\/coredns:[^ ]*\).*/\1/p' "$stack_dir/microvm.yaml")
 DIST_IMAGE=$(sed -n 's/^    image: \(alpine:3@sha256:[0-9a-f]*\).*/\1/p' "$stack_dir/runners.yaml")
-PROXY_IMAGE=$(sed -n 's/^    image: \(alpine:3\.[0-9]*\).*$/\1/p' "$stack_dir/runners.yaml")
+proxy_image_build   # the token proxy of the stack is an image: lib.sh builds it from proxy/ ($PROXY_IMAGE)
 for n in "$MGR" "$KN"; do dind_load "$n" "$CIMG_IMAGE"; done
 dind_load "$MGR" "$DIST_IMAGE"   # the distributor runs on the runc node only: a microVM downloads its own runner
 dind_load "$MGR" "$COREDNS_IMAGE"
@@ -145,11 +145,10 @@ node_resolv "$MGR" > /dev/null
 gw=$(node_resolv "$KN" | awk '{ print $2 }')
 [[ $gw =~ ^[0-9.]+$ ]] || fail "could not read the gateway of docker_gwbridge on $KN"
 
-# The runner and the proxy come from the test mirror through the distributors, as in production: a fake runner that runs a job through the
-# real entrypoint and keeps it up (1.0.0), the real runner (for the real-runner part), and the token proxy built from proxy/.
+# The runner comes from the test mirror through the distributors, as in production: a fake runner that runs a job through the
+# real entrypoint and keeps it up (1.0.0), and the real runner (for the real-runner part). The token proxy is the image built from proxy/.
 publish_runner fake 1.0.0 > /dev/null
 publish_runner real > /dev/null
-publish_proxy 0.0.1-test > /dev/null
 FAKE_VERSION=1.0.0
 docker cp "$tests_dir/fake-api.py" "$MGR:/fake-api.py"
 api_ip=$(docker exec "$MGR" hostname -i | awk '{ print $1 }')
@@ -195,7 +194,7 @@ phase_deploy() {
   {
     echo "services:"
     echo "  token-proxy:"
-    echo "    command: [\"-upstream\", \"http://$api_ip:8099\", \"-state-dir\", \"/var/tmp\"]"
+    echo "    command: [\"-upstream\", \"http://$api_ip:8099\", \"-state-dir\", \"/state\"]"
   } > "$work/mv-ov.yaml"
   EXTRA_OVERRIDES="$work/mv-ov.yaml"
   deploy_stack "$MGR" "$work/ov.yaml" runners.yaml microvm.yaml

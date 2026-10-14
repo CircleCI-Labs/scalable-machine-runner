@@ -21,10 +21,6 @@
       running-job     a container that runs version A keeps A when current moves to B (it mounted the link when it started), the
                       next container gets B, and a version that a container still runs is not removed (Windows locks it): it goes at
                       a later check, when the container has ended
-      proxy-*         the token proxy: installed from the release files of a mirror (SHA256SUMS next to the binary) with its record, a wrong line or
-                      a hash that MACHINE_RUNNER_SWARM_PROXY_SHA256 does not allow installs nothing and the runner stays, only the last 2
-                      active versions stay, a changed binary is replaced, "unreleased" installs the latest published release (the tag
-                      of the latest-release URL), and with no release published it says so, installs none and keeps the runner
       bad-setting     an invalid MACHINE_RUNNER_SWARM_RUNNER_VERSION exits 1 at once
 
 .EXAMPLE
@@ -69,26 +65,6 @@ function Publish-Release {
     if ($LASTEXITCODE -ne 0) { throw "tar failed for $Version" }
     Copy-Item -LiteralPath $tgz -Destination (Join-Path $dir 'circleci-runner_windows_arm64.tar.gz')   # the same bytes under the arm64 name: only the names are tested
     $published[$Version] = (Get-FileHash -LiteralPath $tgz -Algorithm SHA256).Hash.ToLowerInvariant()
-}
-$publishedProxy = @{}   # version -> SHA-256 of the fake proxy binary
-function Publish-Proxy {
-    # A fake release of the token proxy as GitHub has it: v<version>\machine-runner-swarm-proxy_windows_amd64 and v<version>\SHA256SUMS
-    # (with the lines of other platforms around it). WrongLine writes a hash that is not the binary's.
-    param([string] $Version, [switch] $WrongLine)
-    $stage = Join-Path $work "proxy-stage-$Version"
-    $null = Initialize-SwarmFakeRunner -OutputDirectory $stage -SourcePath (Join-Path $here 'fixtures\FakeRunner.cs') -Version $Version -ExeName 'machine-runner-swarm-proxy.exe'
-    $dir = Join-Path $mirror "proxy\v$Version"
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $asset = Join-Path $dir 'machine-runner-swarm-proxy_windows_amd64'
-    Copy-Item -LiteralPath (Join-Path $stage 'machine-runner-swarm-proxy.exe') -Destination $asset
-    Copy-Item -LiteralPath $asset -Destination (Join-Path $dir 'machine-runner-swarm-proxy_windows_arm64')   # the same bytes under the arm64 name
-    $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
-    $line = $hash
-    if ($WrongLine) { $line = '2' * 64 }
-    [IO.File]::WriteAllText((Join-Path $dir 'SHA256SUMS'), "$zeros  machine-runner-swarm-proxy_linux_amd64`n$line  machine-runner-swarm-proxy_windows_amd64`n$line  machine-runner-swarm-proxy_windows_arm64`n")
-    # what the latest-release URL of GitHub answers while this is the newest release (the test points at it with file://)
-    [IO.File]::WriteAllText((Join-Path $dir 'latest.json'), "{ `"tag_name`": `"v$Version`", `"draft`": false, `"prerelease`": false }`n")
-    $publishedProxy[$Version] = $hash
 }
 function Write-Manifest {
     # current (and edge) name the tarball of $Current, as CircleCI's manifest does: by the SHA-256 that a versioned entry has too
@@ -230,72 +206,6 @@ try {
     $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=4.0.0') -ScriptArgument @('-Architecture', 'arm64')
     $kv = Read-Volume
     Write-SwarmCheck 'arm64' ($rc -eq 0 -and $script:log -match 'downloading circleci-runner 4\.0\.0 windows/arm64' -and $kv['tarball'] -match '  circleci-runner_windows_arm64\.tar\.gz$' -and $kv['version'] -eq '4.0.0') "exit $rc; record of the tarball: $($kv['tarball'])"
-
-    # --- the token proxy: installed next to the runner, from the release files of a mirror -----------------------------------------
-    foreach ($v in '0.0.1', '0.0.2', '0.0.3') { Publish-Proxy -Version $v }
-    Publish-Proxy -Version '0.0.4' -WrongLine
-    function Invoke-ProxyDistributor {
-        param([string] $Version, [string[]] $Extra = @())
-        return (Invoke-Distributor (@('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', "MACHINE_RUNNER_SWARM_PROXY_VERSION=$Version", 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/mirror/proxy') + $Extra))
-    }
-    function Read-ProxyVolume {
-        $cmd = @'
-$r = 'C:\v\proxy'
-"pcurrent=$(try { $i = Get-Item $r\current -Force -ErrorAction Stop; "$($i.LinkType) $(@($i.Target)[0])" } catch { 'none' })"
-"pversions=$(@(Get-ChildItem $r\versions -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Sort-Object) -join ',')"
-$cur = "$r\current"
-if (Test-Path $cur\bin\machine-runner-swarm-proxy.exe) {
-    "pversion=$((Get-Content $cur\VERSION -TotalCount 1).Trim())"
-    "precord=$((Get-Content $cur\SHA256 -TotalCount 1).Trim())"
-    "pexe=$((Get-FileHash $cur\bin\machine-runner-swarm-proxy.exe -Algorithm SHA256).Hash.ToLowerInvariant())"
-}
-"runner=$((Get-Content C:\v\current\VERSION -TotalCount 1 -ErrorAction SilentlyContinue))"
-'@
-        $r = Invoke-Docker (@('run', '--rm') + $iso + @('--mount', "type=volume,source=$volume,target=C:\v,readonly", '--entrypoint', 'powershell.exe', $Image, '-NoLogo', '-NoProfile', '-NonInteractive') + (Get-SwarmEncodedCommandArgument -Script $cmd))
-        $kv = @{}
-        foreach ($l in $r.Output) { if ($l -match '^([a-z]+)=(.*)$') { $kv[$Matches[1]] = $Matches[2] } }
-        return $kv
-    }
-    $rc = Invoke-ProxyDistributor '0.0.1'
-    $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-install' ($rc -eq 0 -and $kv['pcurrent'] -eq 'SymbolicLink versions\0.0.1' -and $kv['pversion'] -eq '0.0.1' -and $kv['pexe'] -eq $publishedProxy['0.0.1'] -and $kv['precord'] -eq "$($publishedProxy['0.0.1'])  bin/machine-runner-swarm-proxy.exe" -and $script:log -match 'downloading the token proxy 0\.0\.1') "exit $rc; proxy current: $($kv['pcurrent']); binary $($kv['pexe']); record $($kv['precord'])"
-    $rc = Invoke-ProxyDistributor '0.0.1'
-    Write-SwarmCheck 'proxy-again' ($rc -eq 0 -and $script:log -notmatch 'downloading the token proxy' -and $script:log -match 'token proxy 0\.0\.1 is installed already') "a second check downloads nothing: exit $rc"
-    $rc = Invoke-ProxyDistributor '0.0.4'
-    $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-mismatch' ($rc -eq 1 -and $script:log -match 'SHA-256 mismatch for machine-runner-swarm-proxy_windows_amd64' -and $kv['pversions'] -notmatch '0\.0\.4' -and $kv['pcurrent'] -eq 'SymbolicLink versions\0.0.1' -and $kv['runner'] -eq '3.4.0') "a SHA256SUMS line that is not the binary installs nothing, and the runner stays: exit $rc; proxy versions: $($kv['pversions']); runner: $($kv['runner'])"
-    $rc = Invoke-ProxyDistributor '0.0.2' @("MACHINE_RUNNER_SWARM_PROXY_SHA256=$zeros")
-    $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-strict' ($rc -eq 1 -and $script:log -match 'does not allow' -and $kv['pversions'] -notmatch '0\.0\.2') "a hash that the list does not allow: exit $rc; proxy versions: $($kv['pversions'])"
-    $rc = Invoke-ProxyDistributor '0.0.2' @("MACHINE_RUNNER_SWARM_PROXY_SHA256=$zeros,$($publishedProxy['0.0.2'].ToUpperInvariant())")
-    $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-strict-list' ($rc -eq 0 -and $kv['pcurrent'] -eq 'SymbolicLink versions\0.0.2') "a list with the right hash (in capitals) installs: exit $rc; proxy current: $($kv['pcurrent'])"
-    $rc = Invoke-ProxyDistributor '0.0.3'
-    $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-prune' ($rc -eq 0 -and $kv['pversions'] -eq '0.0.2,0.0.3' -and $kv['pcurrent'] -eq 'SymbolicLink versions\0.0.3') "only the last 2 active versions stay: $($kv['pversions']); proxy current: $($kv['pcurrent'])"
-    $null = Invoke-Docker (@('run', '--rm') + $iso + @('--mount', "type=volume,source=$volume,target=C:\v", '--entrypoint', 'powershell.exe', $Image, '-NoLogo', '-NoProfile', '-NonInteractive') +
-        (Get-SwarmEncodedCommandArgument -Script "Add-Content -LiteralPath C:\v\proxy\versions\0.0.3\bin\machine-runner-swarm-proxy.exe -Value 'tampered' -Encoding ASCII"))
-    $rc = Invoke-ProxyDistributor '0.0.3'
-    $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-tamper' ($rc -eq 0 -and $kv['pexe'] -eq $publishedProxy['0.0.3'] -and $kv['precord'] -match "^$($publishedProxy['0.0.3'])  bin/") "a changed binary is replaced by the verified one: exit $rc; binary $($kv['pexe'])"
-    # "unreleased" (a checkout) is the latest published release: its tag comes from the latest-release URL
-    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', 'MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased', 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/mirror/proxy',
-        'MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=file:///C:/mirror/proxy/v0.0.3/latest.json')
-    $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-unreleased' ($rc -eq 0 -and $script:log -match 'token proxy 0\.0\.3 is installed already' -and $kv['pcurrent'] -eq 'SymbolicLink versions\0.0.3') "unreleased is the latest published release, 0.0.3: exit $rc; proxy current: $($kv['pcurrent'])"
-    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', 'MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased', 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/mirror/proxy',
-        'MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=file:///C:/nowhere/latest.json')
-    $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-unreleased-none' ($rc -eq 1 -and $script:log -match 'unreleased \(a checkout of this repository\), which means its latest published release' -and $script:log -match 'published no release yet' -and $kv['pcurrent'] -eq 'SymbolicLink versions\0.0.3' -and $kv['runner'] -eq '3.4.0') "no release published: the message says so, nothing is installed and the runner stays: exit $rc; proxy current: $($kv['pcurrent']); runner: $($kv['runner'])"
-    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', 'MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased', 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/mirror/proxy',
-        'MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=file:///C:/mirror/manifest.json')
-    Write-SwarmCheck 'proxy-unreleased-bad-answer' ($rc -eq 1 -and $script:log -match 'names no release tag') "an answer without a release tag installs nothing: exit $rc"
-    # the proxy of the arm64 build is its own asset, and a release that has it installs the same way
-    $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.4.0', 'MACHINE_RUNNER_SWARM_PROXY_VERSION=0.0.1', 'MACHINE_RUNNER_SWARM_PROXY_BASE_URL=file:///C:/mirror/proxy') -ScriptArgument @('-Architecture', 'arm64')
-    $kv = Read-ProxyVolume
-    Write-SwarmCheck 'proxy-arm64' ($rc -eq 0 -and $script:log -match 'token proxy 0\.0\.1 windows/arm64' -and $kv['pversions'] -match '0\.0\.1') "the arm64 asset installs: exit $rc; proxy versions: $($kv['pversions'])"
-    $rc = Invoke-ProxyDistributor 'latest'
-    Write-SwarmCheck 'proxy-bad-setting' ($rc -eq 1 -and $script:log -match 'MACHINE_RUNNER_SWARM_PROXY_VERSION must be a release') "exit $rc"
 
     # --- bad-setting -----------------------------------------------------------------------------------------------------------
     $rc = Invoke-Distributor @('MACHINE_RUNNER_SWARM_RUNNER_VERSION=latest')

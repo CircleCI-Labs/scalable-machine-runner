@@ -1,5 +1,4 @@
-// Stand-in for circleci-runner.exe in tests\Test-StopHandling.ps1, tests\Test-Persistent.ps1 and tests\Test-Distributor.ps1 (there also for
-// machine-runner-swarm-proxy.exe, which only reports its version). Compile with
+// Stand-in for circleci-runner.exe in tests\Test-StopHandling.ps1, tests\Test-Persistent.ps1 and tests\Test-Distributor.ps1. Compile with
 // csc.exe (it ships with .NET Framework on every Windows host). "FakeRunner.exe machine" pretends to be running
 // a job for FAKE_JOB_SECONDS. Like the real runner (a Go program, which turns a console shutdown event into
 // SIGTERM and drains), it keeps working when it is told to stop, and exits 0 when the job is done.
@@ -46,8 +45,6 @@ public static class FakeRunner
     public static int Main(string[] args)
     {
         if (args.Length > 0 && args[0] == "--version") { Console.Out.WriteLine("circleci-runner version " + Version); return 0; }
-        // as the token proxy (machine-runner-swarm-proxy.exe) of a fake release: "machine-runner-swarm-proxy <version>"
-        if (args.Length > 0 && args[0] == "-version") { Console.Out.WriteLine("machine-runner-swarm-proxy " + Version); return 0; }
         int seconds = 40;
         string configured = Environment.GetEnvironmentVariable("FAKE_JOB_SECONDS");
         if (!string.IsNullOrEmpty(configured)) { seconds = int.Parse(configured); }

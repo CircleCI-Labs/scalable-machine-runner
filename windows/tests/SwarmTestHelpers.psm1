@@ -256,7 +256,7 @@ function Install-SwarmDistributor {
     .SYNOPSIS
         Deploys the shipped windows\stack\runners.yaml with no runner replicas, so that its distributor service installs the
         runner and portable Git into the volume <Stack>_runner-bin, and waits until it has flipped both links. Returns
-        @{ Ok; Detail; Log }. The Swarm secrets of the class and of the runners' placeholder are made-up ones, created here when they are missing. The token proxy gets no replica here (it would run on this manager and wait for a binary): the tests that need it deploy it themselves. ExtraOverride is one more compose file for the deploy (the e2e adds a mirror of the proxy to the distributor); when MACHINE_RUNNER_SWARM_PROXY_VERSION is set in the environment, the distributor must have installed the proxy too.
+        @{ Ok; Detail; Log }. The Swarm secrets of the class and of the runners' placeholder are made-up ones, created here when they are missing. The token proxy gets no replica here: the tests that need it deploy it themselves. ExtraOverride is one more compose file for the deploy.
     #>
     param(
         [string] $Stack = 'runners',
@@ -286,9 +286,7 @@ function Install-SwarmDistributor {
     $log = ''
     $ok = Wait-SwarmCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 10 -Condition {
         $script:distLog = ((Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('service', 'logs', '--raw', $service)).Output -join "`n")
-        $proxyOk = $true
-        if ($env:MACHINE_RUNNER_SWARM_PROXY_VERSION -and $env:MACHINE_RUNNER_SWARM_PROXY_VERSION -ne 'unreleased') { $proxyOk = ($script:distLog -match '\[ ok \] proxy\\current -> versions') }
-        ($script:distLog -match '\[ ok \] current -> versions') -and ($script:distLog -match '\[ ok \] git\\current -> git') -and $proxyOk
+        ($script:distLog -match '\[ ok \] current -> versions') -and ($script:distLog -match '\[ ok \] git\\current -> git')
     }
     $log = $script:distLog
     return @{ Ok = $ok; Detail = "the distributor did not install the runner and Git within ${TimeoutSeconds}s"; Log = $log }

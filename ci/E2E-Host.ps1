@@ -31,7 +31,8 @@
     Swarm secret windows-default-token holds the runner config (api.auth_token): the token proxy mounts it, and the runners read
     the placeholder secret runner-placeholder-token instead. It is written to a file outside the artifacts directory only for the
     instant `docker secret create` needs it, and never printed. The token proxy of the stack stays as shipped (every runner claims
-    through it); its binary is the windows/amd64 build of proxy-test, which the distributor installs from a local mirror.
+    through it); its image is built on this host (ci\Build-ProxyImage.ps1) from the windows/amd64 build of proxy-test, because there
+    is no registry here.
 
 .EXAMPLE
     .\ci\E2E-Host.ps1 -Mode Run
@@ -60,10 +61,9 @@ $wf = $env:CIRCLE_WORKFLOW_ID
 if (-not $wf) { throw 'CIRCLE_WORKFLOW_ID is not set' }
 $build = if ($env:CIRCLE_BUILD_NUM) { $env:CIRCLE_BUILD_NUM } else { 'local' }
 $secrets = 'C:\e2e-secrets'          # never under $Root: $Root is uploaded as artifacts
-# There is no release of the token proxy to download yet: the job gets the windows/amd64 binary that proxy-test built (the workspace),
-# Prepare puts it in a mirror with the SHA256SUMS of a release, and the distributor installs it from there (file:// in a bind mount).
-$proxyVersion = '0.0.0-e2e'
-$proxyMirror = 'C:\e2e-proxy'
+# The token proxy is an image. The job gets the windows/amd64 binary that proxy-test built (the workspace), Prepare builds the image of this
+# checkout from it on this host (Build-ProxyImage.ps1), and the stack is deployed with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to its name.
+$proxyImage = 'machine-runner-swarm-proxy:e2e'
 if (-not $ProxyBinary) { $ProxyBinary = if ($env:E2E_PROXY_BIN) { $env:E2E_PROXY_BIN } else { Join-Path $repo 'proxy-bin\machine-runner-swarm-proxy_windows_amd64' } }
 $fullService = "${Stack}_${Service}"
 # The image of the service under test: the stock Server Core image of the shipped stack, unless -Image names another.
@@ -191,26 +191,16 @@ function Exit-WithFailure([string] $Message) {
 }
 
 function Use-ProxyEnvironment {
-    # What `docker stack deploy` reads for the distributor of the stack (the variables of x-distributor-env).
-    $env:MACHINE_RUNNER_SWARM_PROXY_VERSION = $proxyVersion
-    $env:MACHINE_RUNNER_SWARM_PROXY_BASE_URL = 'file:///C:/e2e-proxy'
+    # What `docker stack deploy` reads for the token proxy of the stack (its image).
+    $env:MACHINE_RUNNER_SWARM_PROXY_IMAGE = $proxyImage
 }
-function Write-ProxyMirrorOverride {
-    # The mirror, mounted read-only into the distributor (the same override in Prepare and in Run: its spec must not change).
-    $file = Join-Path $logDir 'stack.proxy-mirror.yaml'
-    @('services:', '  runner-distributor-windows:', '    volumes:', '      - type: bind', "        source: '$proxyMirror'", "        target: '$proxyMirror'",
-        '        read_only: true') | Set-Content -LiteralPath $file -Encoding ASCII
-    return $file
-}
-function Initialize-ProxyMirror {
+function Build-ProxyImage {
     if (-not (Test-Path -LiteralPath $ProxyBinary)) { Exit-WithFailure "the token proxy binary $ProxyBinary is missing: the job attaches the workspace of proxy-test" }
-    $dir = Join-Path $proxyMirror "v$proxyVersion"
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    Copy-Item -LiteralPath $ProxyBinary -Destination (Join-Path $dir 'machine-runner-swarm-proxy_windows_amd64') -Force
-    $hash = (Get-FileHash -LiteralPath $ProxyBinary -Algorithm SHA256).Hash.ToLowerInvariant()
-    [IO.File]::WriteAllText((Join-Path $dir 'SHA256SUMS'), "$hash  machine-runner-swarm-proxy_windows_amd64`n", (New-Object Text.ASCIIEncoding))
-    Grant-AuthenticatedUser $proxyMirror '(OI)(CI)RX'
-    Write-E2ELog "the token proxy $proxyVersion ($hash) is in the mirror $proxyMirror"
+    $revision = if ($env:CIRCLE_SHA1) { $env:CIRCLE_SHA1 } else { '' }
+    $version = if ($revision) { 'sha-' + $revision.Substring(0, 12) } else { 'dev' }
+    Write-E2ELog "building the token proxy image $proxyImage ($tag)"
+    & (Join-Path $repo 'ci\Build-ProxyImage.ps1') -Tag $tag -Binary $ProxyBinary -Name $proxyImage -Version $version -Revision $revision
+    if ($LASTEXITCODE -ne 0) { Exit-WithFailure "ci\Build-ProxyImage.ps1 exited $LASTEXITCODE" }
     Use-ProxyEnvironment
 }
 function Invoke-Prepare {
@@ -222,6 +212,7 @@ function Invoke-Prepare {
     Write-E2ELog "docker pull $base"
     Invoke-Docker pull $base | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure "docker pull $base failed" }
+    Build-ProxyImage   # pulls the Nano Server base too, which must also happen before the swarm exists
     # The shipped helper: docker swarm init and the machine-runner-swarm.windows-ltsc* node labels.
     $ip = Get-AdvertiseAddress
     Write-E2ELog "windows\Setup.ps1 -InitSwarm -AdvertiseAddr $ip"
@@ -234,10 +225,8 @@ function Invoke-Prepare {
     Import-Module (Join-Path $repo 'windows\tests\SwarmTestHelpers.psm1') -Force
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     Write-RenderedStack
-    Initialize-ProxyMirror
-    $mirrorOverride = Write-ProxyMirrorOverride
-    Write-E2ELog 'deploying the stack with no runner replicas: the distributor installs the runner, Git and the token proxy'
-    $d = Install-SwarmDistributor -Stack $Stack -StackFile $renderedStack -TimeoutSeconds 1500 -ExtraOverride $mirrorOverride
+    Write-E2ELog 'deploying the stack with no runner replicas: the distributor installs the runner and Git'
+    $d = Install-SwarmDistributor -Stack $Stack -StackFile $renderedStack -TimeoutSeconds 1500
     Write-Host $d.Log
     if (-not $d.Ok) { Exit-WithFailure $d.Detail }
     Invoke-StackRemoval
@@ -370,10 +359,9 @@ function Invoke-Run {
 
     Write-RenderedStack
     Write-Override
-    Use-ProxyEnvironment
-    $mirrorOverride = Write-ProxyMirrorOverride
+    Use-ProxyEnvironment   # the image that Prepare built
     Write-E2ELog "deploying $fullService from $($StackFile.Replace($repo + '\', '')) + override: idle_timeout=$runnerIdle max_run_time=$runnerMaxRun"
-    Invoke-Docker stack deploy --detach=true --resolve-image never -c $renderedStack -c $override -c $mirrorOverride $Stack | ForEach-Object { Write-Host $_ }
+    Invoke-Docker stack deploy --detach=true --resolve-image never -c $renderedStack -c $override $Stack | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure 'docker stack deploy failed' }
     $script:logsProc = Start-Process -FilePath docker.exe -NoNewWindow -PassThru `
         -RedirectStandardOutput $serviceLog -RedirectStandardError (Join-Path $logDir 'service.err') `

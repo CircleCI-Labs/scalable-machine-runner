@@ -98,6 +98,16 @@ dind_load() {
   fi
 }
 
+# The token proxy of the stack is an image (ccilabs/machine-runner-swarm-proxy). The tests build it from proxy/ once, on the host, and load it
+# into every node; no registry is involved. SWARM_TEST_PROXY_IMAGE names an image that CI has built already (docker build -t NAME proxy/).
+PROXY_IMAGE=${SWARM_TEST_PROXY_IMAGE:-machine-runner-swarm-proxy:dev}
+proxy_image_build() {
+  if [[ -z ${SWARM_TEST_PROXY_IMAGE:-} ]] || ! docker image inspect "$PROXY_IMAGE" >/dev/null 2>&1; then
+    log "building the token proxy image $PROXY_IMAGE from proxy/"
+    docker build -q -t "$PROXY_IMAGE" "$repo_dir/proxy" >/dev/null
+  fi
+}
+
 dind_stop_all() {
   local c
   if [[ ${SWARM_TEST_KEEP:-} == 1 ]]; then return 0; fi
@@ -134,6 +144,7 @@ session_begin() {
   [[ ${1:-} == --worker ]] && want_worker=true
   work=$(mktemp -d)
   trap 'dind_stop_all; rm -rf "$work"' EXIT
+  proxy_image_build
   if [[ ${SWARM_TEST_SESSION_ACTIVE:-} == 1 ]] && { [[ $want_worker == false ]] || [[ -n ${SWARM_TEST_WRK:-} ]]; }; then
     inner_reset "$SWARM_TEST_MGR"
     if [[ -n ${SWARM_TEST_WRK:-} ]]; then
@@ -162,11 +173,13 @@ session_begin() {
     token=$(idocker "$SWARM_TEST_MGR" swarm join-token -q worker)
     idocker "$SWARM_TEST_WRK" swarm join --token "$token" "$ip:2377" >/dev/null
     dind_load "$SWARM_TEST_WRK" "$CIMG_IMAGE"
+    dind_load "$SWARM_TEST_WRK" "$PROXY_IMAGE"
   else
     dind_start "$SWARM_TEST_MGR"
     idocker "$SWARM_TEST_MGR" swarm init --advertise-addr 127.0.0.1 >/dev/null
   fi
   dind_load "$SWARM_TEST_MGR" "$CIMG_IMAGE"
+  dind_load "$SWARM_TEST_MGR" "$PROXY_IMAGE"
   idocker "$SWARM_TEST_MGR" swarm update --task-history-limit 20 >/dev/null
 }
 
@@ -267,30 +280,6 @@ publish_runner() {
   mirror_manifest "${cur:-$v}"
   PUBLISHED_SHA[$v]=$(sha256sum "$dir/circleci-runner_linux_$ARCH.tar.gz" | cut -d' ' -f1)
 }
-# publish_proxy [VERSION]: build the token proxy from proxy/ (ci/build-proxy.sh, reporting VERSION, default 0.0.1-test) and put it on the mirror
-# as a GitHub release would have it: proxy/v<VERSION>/machine-runner-swarm-proxy_linux_<arch> and proxy/v<VERSION>/SHA256SUMS, and proxy/latest.json,
-# what the latest-release URL of GitHub answers (the tag of the release that "unreleased" means). The distributor of the stack installs it from
-# there (make_override sets PROXY_VERSION). Sets PROXY_VERSION and PROXY_SHA.
-publish_proxy() {
-  local v=${1:-0.0.1-test} dir
-  [[ $ARCH != unsupported ]] || fail "unsupported host architecture $(uname -m)"
-  mkdir -p "$work/mirror"
-  mirror_start
-  dir=$work/mirror/proxy/v$v
-  mkdir -p "$dir"
-  "$repo_dir/ci/build-proxy.sh" "$dir" "$v" "linux/$ARCH" >&2
-  PROXY_SHA=$(sha256sum "$dir/machine-runner-swarm-proxy_linux_$ARCH" | cut -d' ' -f1)
-  {
-    echo "0000000000000000000000000000000000000000000000000000000000000000  machine-runner-swarm-proxy_windows_amd64"
-    echo "$PROXY_SHA  machine-runner-swarm-proxy_linux_$ARCH"
-    echo "1111111111111111111111111111111111111111111111111111111111111111  machine-runner-swarm-proxy_linux_other"
-  } > "$dir/SHA256SUMS"
-  printf '{\n  "url": "https://api.github.com/repos/example/example/releases/1",\n  "tag_name": "v%s",\n  "name": "v%s",\n  "draft": false,\n  "prerelease": false\n}\n' "$v" "$v" > "$work/mirror/proxy/latest.json"
-  PROXY_VERSION=$v
-  docker cp "$work/mirror/." "${SWARM_TEST_MGR}:/mirror/" >/dev/null
-}
-PROXY_VERSION=
-PROXY_SHA=
 declare -gA PUBLISHED_SHA=()   # version -> SHA-256 of the tarball that the mirror serves
 
 # ---------------------------------------------------------------------------------------------
@@ -346,10 +335,6 @@ make_override() {
       echo "    environment:"
       echo "      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: \"$MIRROR_URL\""
       echo "      MACHINE_RUNNER_SWARM_RUNNER_VERSION: \"$DIST_VERSION\""
-      if [[ -n ${PROXY_VERSION:-} ]]; then   # publish_proxy: the proxy the distributor installs, from the mirror
-        echo "      MACHINE_RUNNER_SWARM_PROXY_VERSION: \"$PROXY_VERSION\""
-        echo "      MACHINE_RUNNER_SWARM_PROXY_BASE_URL: \"$MIRROR_URL/proxy\""
-      fi
       for kv in "${DIST_ENV[@]:-}"; do [[ -z $kv ]] || echo "      ${kv%%=*}: \"${kv#*=}\""; done
       # DIST_HOLD=1: no node matches, so the distributor does not run (a first deployment before the runner is there)
       [[ -z ${DIST_HOLD:-} ]] || printf '    deploy:\n      placement:\n        constraints: ["node.labels.hold == yes"]\n'
@@ -366,6 +351,7 @@ deploy_stack() {
   local node=$1 override=$2 f tmp kv
   local -a args=() extra=() envargs=()
   for kv in "${DEPLOY_ENV[@]:-}"; do [[ -z $kv ]] || envargs+=(-e "$kv"); done   # variables of the deploy itself (MACHINE_RUNNER_SWARM_PROXY_PLACEMENT)
+  envargs+=(-e "MACHINE_RUNNER_SWARM_PROXY_IMAGE=$PROXY_IMAGE")   # the image that proxy_image_build made, which every node has
   shift 2
   [[ $# -gt 0 ]] || set -- runners.yaml
   tmp=$(mktemp -d)
@@ -374,7 +360,6 @@ deploy_stack() {
   # the stack files name the entrypoint and the distributor script relative to themselves: they sit next to the stack files
   docker cp "$stack_dir/circleci-runner-entrypoint" "$node:/stack/circleci-runner-entrypoint"
   docker cp "$stack_dir/runner-distributor.sh" "$node:/stack/runner-distributor.sh"
-  docker cp "$stack_dir/proxy-entrypoint.sh" "$node:/stack/proxy-entrypoint.sh"
   for f in "$@"; do
     sed "s/CHANGE-ME/${SWARM_TEST_HOST:-CHANGE-ME}/" "$stack_dir/$f" > "$tmp/$f"
     docker cp "$tmp/$f" "$node:/stack/$f"

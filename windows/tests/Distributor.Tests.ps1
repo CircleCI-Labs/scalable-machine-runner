@@ -9,7 +9,7 @@ BeforeAll {
     if (-not $env:TEMP) { $env:TEMP = [IO.Path]::GetTempPath() }
     function Use-DistributorEnvironment {
         param([hashtable] $Values = @{})
-        foreach ($n in 'RUNNER_VERSION', 'RUNNER_MAJOR', 'CHECK_INTERVAL', 'DOWNLOAD_BASE_URL', 'RUNNER_SHA256', 'TOOLS_BASE_URL', 'PROXY_VERSION', 'PROXY_BASE_URL', 'PROXY_LATEST_URL', 'PROXY_SHA256') { Remove-Item "Env:MACHINE_RUNNER_SWARM_$n" -ErrorAction SilentlyContinue }
+        foreach ($n in 'RUNNER_VERSION', 'RUNNER_MAJOR', 'CHECK_INTERVAL', 'DOWNLOAD_BASE_URL', 'RUNNER_SHA256', 'TOOLS_BASE_URL') { Remove-Item "Env:MACHINE_RUNNER_SWARM_$n" -ErrorAction SilentlyContinue }
         foreach ($k in $Values.Keys) { Set-Item "Env:MACHINE_RUNNER_SWARM_$k" $Values[$k] }
     }
     $script:manifestJson = @{ releases = [ordered]@{
@@ -94,40 +94,6 @@ Describe 'Get-DistributorSetting' {
     }
 }
 
-
-Describe 'Get-DistributorSetting, the token proxy' {
-    It 'installs no proxy without a version, and downloads from the GitHub releases of this repository' {
-        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13' }
-        $s = Get-DistributorSetting
-        $s.ProxyVersion | Should -Be ''
-        $s.ProxyBase | Should -Be 'https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download'
-        $s.ProxyLatest | Should -Be 'https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest'
-        @($s.ProxyHashes).Count | Should -Be 0
-    }
-
-    It 'takes unreleased, a checkout, as the latest published release' {
-        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; PROXY_VERSION = 'unreleased'; PROXY_LATEST_URL = 'https://mirror.example.com/latest.json' }
-        $s = Get-DistributorSetting
-        $s.ProxyVersion | Should -Be 'unreleased'
-        $s.ProxyLatest | Should -Be 'https://mirror.example.com/latest.json'
-    }
-
-    It 'reads a release, a mirror without a trailing slash, and a list of SHA-256 values in any case' {
-        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; PROXY_VERSION = '0.3.0'; PROXY_BASE_URL = 'https://mirror.example.com/proxy/'; PROXY_SHA256 = ('A' * 64) + ', ' + ('b' * 64) }
-        $s = Get-DistributorSetting
-        $s.ProxyVersion | Should -Be '0.3.0'
-        $s.ProxyBase | Should -Be 'https://mirror.example.com/proxy'
-        @($s.ProxyHashes) | Should -Be @(('a' * 64), ('b' * 64))
-    }
-
-    It 'refuses a proxy version that is not a release, and a hash that is not a SHA-256' {
-        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; PROXY_VERSION = 'latest' }
-        { Get-DistributorSetting } | Should -Throw '*MACHINE_RUNNER_SWARM_PROXY_VERSION*'
-        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; PROXY_VERSION = '0.3.0'; PROXY_SHA256 = 'abc' }
-        { Get-DistributorSetting } | Should -Throw '*MACHINE_RUNNER_SWARM_PROXY_SHA256*'
-    }
-}
-
 Describe 'Get-RunnerArchitecture' {
     AfterAll { Remove-Item Env:PROCESSOR_ARCHITEW6432 -ErrorAction SilentlyContinue }
 
@@ -152,11 +118,10 @@ Describe 'Get-RunnerArchitecture' {
         } finally { $env:PROCESSOR_ARCHITECTURE = $saved }
     }
 
-    It 'names the tarball, the proxy binary and portable Git of the architecture' {
+    It 'names the tarball and portable Git of the architecture' {
         try {
             Initialize-Architecture 'arm64'
             $script:Tarball | Should -Be 'circleci-runner_windows_arm64.tar.gz'
-            $script:ProxyAsset | Should -Be 'machine-runner-swarm-proxy_windows_arm64'
             $script:GitAsset | Should -Be 'PortableGit-2.56.0.2-arm64.7z.exe'
             Initialize-Architecture 'amd64'
             $script:Tarball | Should -Be 'circleci-runner_windows_amd64.tar.gz'
@@ -249,30 +214,6 @@ Describe 'Resolve-Runner' {
         Use-DistributorEnvironment @{ RUNNER_VERSION = 'current' }
         Mock Save-Url { return $false }
         Resolve-Runner (Get-DistributorSetting) | Should -BeNullOrEmpty
-    }
-}
-
-Describe 'Get-LatestProxyVersion' {
-    BeforeEach {
-        Mock Write-DistributorLog { }
-    }
-
-    It 'reads the tag of the latest release and drops the v' {
-        Mock Save-Url { [IO.File]::WriteAllText($OutFile, '{ "url": "u", "tag_name": "v0.3.0", "draft": false }'); return $true }
-        Get-LatestProxyVersion 'https://mirror.example.com/latest.json' | Should -Be '0.3.0'
-    }
-
-    It 'says that no release is published, in words, when the URL answers with an error' {
-        Mock Save-Url { return $false }
-        Get-LatestProxyVersion 'https://mirror.example.com/latest.json' | Should -BeNullOrEmpty
-        Should -Invoke Write-DistributorLog -ParameterFilter { $Message -like '*unreleased (a checkout of this repository), which means its latest published release*published no release yet*' }
-    }
-
-    It 'refuses an answer that is not JSON, and one without a tag of the form v0.3.0' -TestCases @(@{ Body = 'not json' }, @{ Body = '{ "tag_name": "nightly" }' }, @{ Body = '{ "name": "x" }' }) {
-        param($Body)
-        $script:body = $Body
-        Mock Save-Url { [IO.File]::WriteAllText($OutFile, $script:body); return $true }
-        Get-LatestProxyVersion 'https://mirror.example.com/latest.json' | Should -BeNullOrEmpty
     }
 }
 

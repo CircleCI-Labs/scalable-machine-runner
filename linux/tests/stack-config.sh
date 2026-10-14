@@ -130,10 +130,8 @@ if [[ -z $block ]]; then
   echo "  token-proxy: service not found"
   problems=$((problems + 1))
 else
-  check token-proxy 'a stock alpine image' '^    image: alpine:3\.[0-9]+(@sha256:[0-9a-f]+)?$'
+  check token-proxy 'the published image, the edge tag by default (MACHINE_RUNNER_SWARM_PROXY_IMAGE)' '^    image: ccilabs/machine-runner-swarm-proxy:edge$'
   check token-proxy 'user 65534' '^    user: "65534"$'
-  check token-proxy 'the entrypoint script as a config' '^      - /proxy-entrypoint.sh$'
-  check token-proxy 'the entrypoint config at /proxy-entrypoint.sh' '^        target: /proxy-entrypoint.sh$'
   check token-proxy 'a read-only root filesystem' '^    read_only: true$'
   check token-proxy 'cap_drop ALL' '^      - ALL$'
   check token-proxy 'endpoint_mode dnsrr (a virtual IP hides the runner addresses)' '^      endpoint_mode: dnsrr$'
@@ -143,14 +141,18 @@ else
   check token-proxy 'the Docker-build isolation constraint (docker-build != true)' '^          - node.labels.machine-runner-swarm.docker-build != true$'
   check token-proxy 'the microVM isolation constraint (Docker DNS, which finds tasks.<service>, does not work in a Kata VM)' '^          - node.labels.machine-runner-swarm.microvm != true$'
   check token-proxy 'a manager by default, with no label (the node that keeps proxy-state)' '^          - node.role == manager$'
-  if grep -q 'machine-runner-swarm.proxy' <<< "$block"; then
+  if grep -q 'machine-runner-swarm\.proxy' <<< "$block"; then
     echo "  token-proxy: the default placement needs a node label (a manager is the default; the label is an optional pin)"
     problems=$((problems + 1))
   fi
   check token-proxy 'a healthcheck' '^    healthcheck:$'
-  check token-proxy 'the per-node volume runner-bin, read-only' '^        source: runner-bin$'
   check token-proxy 'the state volume proxy-state' '^        source: proxy-state$'
-  check token-proxy 'the state directory in the arguments' '^      - /var/tmp$'
+  check token-proxy 'the state volume at /state, where the image makes it writable for 65534' '^        target: /state$'
+  check token-proxy 'the state directory in the arguments' '^      - /state$'
+  if grep -qE 'runner-bin|configs:|entrypoint' <<< "$block"; then
+    echo "  token-proxy: it runs from its image alone: no runner-bin volume, config or entrypoint"
+    problems=$((problems + 1))
+  fi
   for c in "${proxied[@]}"; do
     check token-proxy "the network of $c" "^      $c: null$"
     check token-proxy "the class token $c-token" "^      - source: $c-token$"
@@ -222,9 +224,10 @@ check runner-distributor 'to stay off microVM nodes (a microVM class downloads i
 check runner-distributor 'the version policy: an exact pin by default' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: [0-9]+\.[0-9]+\.[0-9]+$'
 check runner-distributor 'the major version it follows' '^      MACHINE_RUNNER_SWARM_RUNNER_MAJOR: "3"$'
 check runner-distributor 'the check interval' '^      MACHINE_RUNNER_SWARM_CHECK_INTERVAL: 24h$'
-check runner-distributor 'the proxy version: unreleased in a checkout, which ci/release.sh pins' '^      MACHINE_RUNNER_SWARM_PROXY_VERSION: unreleased$'
-check runner-distributor 'the latest-release URL that unreleased resolves with (GitHub API)' '^      MACHINE_RUNNER_SWARM_PROXY_LATEST_URL: https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest$'
-check runner-distributor 'the proxy download URL (GitHub releases)' '^      MACHINE_RUNNER_SWARM_PROXY_BASE_URL: https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download$'
+if grep -q 'PROXY' <<< "$block"; then
+  echo "  runner-distributor: it installs the runner only: the token proxy is an image"
+  problems=$((problems + 1))
+fi
 check runner-distributor 'the CircleCI download URL' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://circleci-binary-releases.s3.amazonaws.com/circleci-runner$'
 check runner-distributor 'cap_drop ALL' '^      - ALL$'
 if grep -q '^        read_only: true$' <<< "$block"; then
@@ -238,15 +241,20 @@ fi
 # the version policy can be set at deploy time, and the variables reach the distributor only
 cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_CHECK_INTERVAL=1h \
   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc \
-  MACHINE_RUNNER_SWARM_PROXY_VERSION=0.3.0 MACHINE_RUNNER_SWARM_PROXY_SHA256=def docker stack config -c "$dir/runners.yaml")
+  docker stack config -c "$dir/runners.yaml")
 block=$(service_block runner-distributor)
 check runner-distributor 'a floating version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: "3.1"$'
 check runner-distributor 'the mirror from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://mirror.example.com/circleci-runner$'
 check runner-distributor 'the explicit SHA-256 from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_SHA256: abc$'
-check runner-distributor 'the proxy version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_PROXY_VERSION: 0.3.0$'
 for svc in linux-default linux-java linux-hardened; do
-  if grep -q 'mirror.example.com\|RUNNER_SHA256\|PROXY_VERSION\|PROXY_SHA256' <<< "$(service_block "$svc")"; then echo "  $svc: the distributor's settings reached a runner service"; problems=$((problems + 1)); fi
+  if grep -q 'mirror.example.com\|RUNNER_SHA256' <<< "$(service_block "$svc")"; then echo "  $svc: the distributor's settings reached a runner service"; problems=$((problems + 1)); fi
 done
+
+# the proxy image can be named at deploy time (a local build, a digest, a mirror), and it reaches the proxy only
+cfg=$(MACHINE_RUNNER_SWARM_PROXY_IMAGE='registry.example.com/team/proxy:1.2.3@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' docker stack config -c "$dir/runners.yaml")
+block=$(service_block token-proxy)
+check token-proxy 'the image from the environment of the deploy' '^    image: registry.example.com/team/proxy:1.2.3@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$'
+if [[ $(grep -c 'registry.example.com/team/proxy' <<< "$cfg") -ne 1 ]]; then echo "  the proxy image reached a service other than token-proxy"; problems=$((problems + 1)); fi
 
 # the proxy placement can be pinned at deploy time (a label on one manager, or a worker), and the pin replaces the manager default
 cfg=$(MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true' docker stack config -c "$dir/runners.yaml")

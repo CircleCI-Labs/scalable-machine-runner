@@ -16,8 +16,6 @@
 #              and (once installed) the manifest is not asked again
 #   floating   3.1 follows the newest 3.1.x and 3 the newest 3.x.y of the manifest, each with no redeploy, and neither adopts a release
 #              outside its line
-#   unreleased the token proxy "unreleased" means the latest published release: its tag is read from the latest-release URL; with none
-#              published the distributor says so, installs no proxy and keeps the runner; a bad URL or tag installs nothing
 #   tamper     a binary in the volume is replaced: new containers exit 80 on the record; the distributor repairs it by itself
 #   mismatch   a download that does not match the pinned SHA-256 installs nothing; a list with the right one installs
 #   real       version "current" against CircleCI's real manifest: the version it names, verified, with a matching record
@@ -339,38 +337,6 @@ for bad in latest 3. .1 3.1. 3..1 3x 3.1.x.; do
   [[ $dist_rc -ne 0 && $dist_log == *"MACHINE_RUNNER_SWARM_RUNNER_VERSION must be"* ]] || fail "the version '$bad' was accepted: $dist_log"
 done
 echo "RESULT test=distributor phase=bad-version refused=latest,3.,.1,3.1.,3..1,3x,3.1.x."
-
-# ---------------------------------------------------------------------------------------------
-# unreleased: the token proxy of a checkout is the latest published release of this repository
-# ---------------------------------------------------------------------------------------------
-publish_proxy 0.0.1-test   # the release on the mirror: v0.0.1-test/{machine-runner-swarm-proxy_linux_<arch>,SHA256SUMS} and latest.json
-docker exec "$MGR" sh -c "printf '{\"tag_name\": \"nightly\"}' > /mirror/proxy/bad.json"
-punreleased=(MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased "MACHINE_RUNNER_SWARM_PROXY_BASE_URL=$MIRROR_URL/proxy")
-DIST_ONCE_WAIT='\[ ok \] proxy/current' dist_once pv-latest "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "${punreleased[@]}" "MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=$MIRROR_URL/proxy/latest.json"
-pv=$(dk "$MGR" run --rm -v pv-latest:/v "$DIST_IMAGE" sh -c 'readlink /v/proxy/current; cat /v/proxy/versions/*/VERSION | paste -sd, -')
-echo "RESULT test=distributor phase=unreleased latest_release=0.0.1-test installed=\"$pv\""
-[[ $dist_log == *"the latest published release of this repository (unreleased)"* && $pv == "versions/0.0.1-test"*"0.0.1-test" ]] ||
-  fail "unreleased did not install the latest published release: $pv / $dist_log"
-DIST_ONCE_WAIT='not installed or not up to date' dist_once pv-none "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "${punreleased[@]}" "MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=$MIRROR_URL/proxy/none.json"
-pv=$(dk "$MGR" run --rm -v pv-none:/v "$DIST_IMAGE" sh -c 'readlink /v/current; ls /v/proxy/versions 2>/dev/null | paste -sd, -')
-echo "RESULT test=distributor phase=unreleased-none runner=${pv%%$'\n'*} proxy=nothing message=\"$(grep -o 'returns none.*' <<< "$dist_log" | head -n 1 | cut -c1-120)\""
-[[ $dist_log == *"MACHINE_RUNNER_SWARM_PROXY_VERSION is unreleased (a checkout of this repository), which means its latest published release"* &&
-  $dist_log == *"published no release yet"* && $pv == "versions/$OLD" ]] || fail "no release published: the message is unclear, or the runner was not kept: $pv / $dist_log"
-DIST_ONCE_WAIT='names no release tag' dist_once pv-bad "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "${punreleased[@]}" "MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=$MIRROR_URL/proxy/bad.json"
-[[ $dist_log == *"names no release tag of the form v0.3.0"* ]] || fail "a latest release without a version tag was accepted: $dist_log"
-# a floating runner version keeps working at the later checks after the proxy install (the install must not touch the settings of the runner)
-dk "$MGR" rm -f dist-later >/dev/null 2>&1 || true
-dk "$MGR" run -d --name dist-later -v /stack/runner-distributor.sh:/runner-distributor.sh:ro -v pv-both:/opt/machine-runner-swarm \
-  -e "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL" -e MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 -e MACHINE_RUNNER_SWARM_CHECK_INTERVAL=3 \
-  -e MACHINE_RUNNER_SWARM_PROXY_VERSION=unreleased -e "MACHINE_RUNNER_SWARM_PROXY_BASE_URL=$MIRROR_URL/proxy" \
-  -e "MACHINE_RUNNER_SWARM_PROXY_LATEST_URL=$MIRROR_URL/proxy/latest.json" "$DIST_IMAGE" sh /runner-distributor.sh >/dev/null
-sleep 14
-dist_log=$(dk "$MGR" logs dist-later 2>&1 || true)
-dk "$MGR" rm -f dist-later >/dev/null 2>&1 || true
-[[ $(grep -c 'circleci-runner .* is installed already' <<< "$dist_log") -ge 3 && $(grep -c 'the token proxy .* is installed already' <<< "$dist_log") -ge 3 ]] ||
-  fail "the later checks of a distributor with a floating runner and the proxy did not all run: $dist_log"
-[[ $dist_log != *"error"* ]] || fail "a later check failed after the proxy install: $dist_log"
-echo "RESULT test=distributor phase=unreleased-later-checks floating_runner_and_proxy_checked_again=yes"
 
 # ---------------------------------------------------------------------------------------------
 # real: CircleCI's own manifest and bucket, nothing mirrored

@@ -22,9 +22,9 @@ Options:
   --stack-file FILE  stack file for --deploy, repeatable (default: stack/runners.yaml)
   --stack-name NAME  default: runners
 The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION (an exact pin by default, or 3.1, 3, current), _RUNNER_MAJOR, _CHECK_INTERVAL,
-_DOWNLOAD_BASE_URL and _RUNNER_SHA256, and for the token proxy _PROXY_VERSION, _PROXY_BASE_URL, _PROXY_LATEST_URL and _PROXY_SHA256,
-from the environment of --deploy (docs/operations.md). The token proxy runs on a manager; MACHINE_RUNNER_SWARM_PROXY_PLACEMENT pins it
-(docs/multi-node.md).
+_DOWNLOAD_BASE_URL and _RUNNER_SHA256 from the environment of --deploy (docs/operations.md). The token proxy is an image:
+MACHINE_RUNNER_SWARM_PROXY_IMAGE names another one than the published default (docs/install-linux.md). It runs on a manager;
+MACHINE_RUNNER_SWARM_PROXY_PLACEMENT pins it (docs/multi-node.md).
 Every runner reads the placeholder secret: printf %s machine-runner-swarm-placeholder | setup.sh --secret runner-placeholder
 EOF
 }

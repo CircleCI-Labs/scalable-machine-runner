@@ -5,7 +5,7 @@
 #   docker stack deploy -c linux/stack/runners.yaml runners
 #
 # That is the whole install: nothing is installed on the nodes by hand. The service runner-distributor runs on every Linux node, also
-# on a node that joins later, and keeps the circleci-runner and the token proxy of that node in the per-node volume runner-bin. The
+# on a node that joins later, and keeps the circleci-runner of that node in the per-node volume runner-bin. The
 # runner version is an exact pin by default (the newest one that this repository's CI tests, which a release of this repository
 # bumps), so the nodes never change version by themselves. 3.1, 3 or current make it float: the distributor then follows CircleCI's
 # manifest and checks again every 24 hours. Every class mounts the volume read-only into a STOCK
@@ -84,16 +84,6 @@ x-distributor-env: &distributor-env
   # Strict sites: the SHA-256 of the tarballs that may be installed (comma-separated, every architecture of the fleet), from the release's
   # checksums.txt. Without it the hash of the manifest is used. Set it together with a pinned version.
   MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}
-  # The token proxy: machine-runner-swarm-proxy_linux_<arch> of the GitHub release v<version> of this repository, which the distributor
-  # downloads next to the runner and verifies against that release's SHA256SUMS. ci/release.sh pins the default below to the release
-  # it cuts (docs/releasing.md). In a checkout (git clone, Download ZIP) it is "unreleased", which means the latest published release
-  # of this repository, looked at again every CHECK_INTERVAL; with no release published yet the proxy is not installed, and the
-  # distributor says so in its log.
-  MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}
-  MACHINE_RUNNER_SWARM_PROXY_LATEST_URL: ${MACHINE_RUNNER_SWARM_PROXY_LATEST_URL:-https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest}
-  MACHINE_RUNNER_SWARM_PROXY_BASE_URL: ${MACHINE_RUNNER_SWARM_PROXY_BASE_URL:-https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download}
-  # Strict sites: the SHA-256 of the proxy binaries that may be installed (comma-separated, every architecture of the fleet), from SHA256SUMS.
-  MACHINE_RUNNER_SWARM_PROXY_SHA256: ${MACHINE_RUNNER_SWARM_PROXY_SHA256:-}
 
 # A class of another stack file needs the same five keys: the entrypoint and its config, user "0", the placeholder secret, and the volume.
 x-runner: &runner
@@ -215,19 +205,19 @@ services:
   # The token proxy: the ONLY holder of the class tokens, one replica for every class of the stack. A claim is accepted from a
   # runner that is in the DNS set tasks.<service> of its class, once per container, and gets that class's token. All other
   # calls pass through with the caller's own token. If it is down, runners cannot claim and the task agent cannot reach the API
-  # until it is back (docs/operations.md). The distributor of its node installs the binary (proxy/current in runner-bin), the
-  # entrypoint waits for it and checks its SHA-256 record. It keeps the addresses of the runners that have claimed in the small
-  # volume proxy-state, so that a restart refuses only them. It runs on a manager by default, with no label. If the proxy moves to
-  # another node, its state stays behind, and docs/operations.md says what the runners then see. In a cluster with several
-  # managers, pin it to one: docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
+  # until it is back (docs/operations.md). It is a published, signed, multi-architecture image (docs/install-linux.md, "The token
+  # proxy image"): ccilabs/machine-runner-swarm-proxy, the tag edge by default (the latest commit of main). A release bundle names
+  # the tag and the digest of its release instead; pin a digest yourself with MACHINE_RUNNER_SWARM_PROXY_IMAGE. In a checkout,
+  # docker build -t machine-runner-swarm-proxy:dev proxy/ and deploy with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to that name. It keeps
+  # the addresses of the runners that have claimed in the small volume proxy-state, so that a restart refuses only them. It runs
+  # on a manager by default, with no label. If the proxy moves to another node, its state stays behind, and docs/operations.md says
+  # what the runners then see. In a cluster with several managers, pin it to one:
+  # docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
   # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'.
   token-proxy:
-    image: alpine:3.24   # a stock image: the binary is static, alpine brings the CA bundle for the HTTPS upstream
+    image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:edge}
     user: "65534"
-    entrypoint: ["sh", "/proxy-entrypoint.sh"]
-    command: ["-upstream", "https://runner.circleci.com", "-state-dir", "/var/tmp"]   # CircleCI server: your runner API URL
-    configs:
-      - {source: proxy-entrypoint, target: /proxy-entrypoint.sh, mode: 0444}
+    command: ["-upstream", "https://runner.circleci.com", "-state-dir", "/state"]   # CircleCI server: your runner API URL
     environment:
       # One variable for each class, because stack files merge variables but replace a command: an add-on stack file adds its class
       # with a variable of its own. The value is <service>=<token file>; the proxy resolves tasks.<service>.
@@ -243,7 +233,7 @@ services:
     # The class overlays: the proxy sees each runner's own address there, and the class tokens reach no other network.
     networks: [linux-default, linux-java, linux-hardened]
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "/machine-runner-swarm-proxy", "-healthcheck"]   # the image has no wget or curl
       interval: 10s
       timeout: 3s
       retries: 3
@@ -252,9 +242,8 @@ services:
       driver: local
       options: {max-size: 20m, max-file: "3"}
     volumes:
-      - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}   # the proxy binary of this node
-      # The latched addresses. A new volume takes the owner and mode of the mount point (1777 in the image), so uid 65534 can write.
-      - {type: volume, source: proxy-state, target: /var/tmp}
+      # The latched addresses. A new volume takes the owner and mode of the mount point (/state in the image, 0700 for uid 65534).
+      - {type: volume, source: proxy-state, target: /state}
     deploy:
       replicas: 1   # exactly one: the latch of claimed runners lives in the proxy, so a second replica would allow a second claim
       endpoint_mode: dnsrr   # REQUIRED: behind a virtual IP, Swarm's load balancer rewrites the source address and the proxy cannot tell runners apart
@@ -287,9 +276,8 @@ configs:
   # renames them after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
   # services that use it.
   entrypoint: {name: machine-runner-swarm-entrypoint-bb6e7e5fecac, file: circleci-runner-entrypoint}
-  distributor: {name: machine-runner-swarm-distributor-ae56edce0770, file: runner-distributor.sh}
-  proxy-entrypoint: {name: machine-runner-swarm-proxy-entrypoint-0a46b32f494b, file: proxy-entrypoint.sh}
+  distributor: {name: machine-runner-swarm-distributor-a6ab45671133, file: runner-distributor.sh}
 
 volumes:
-  runner-bin: {}   # one per node: the runner and the token proxy of that node
+  runner-bin: {}   # one per node: the runner of that node
   proxy-state: {}   # the addresses of the runners that have claimed, on the node of the proxy

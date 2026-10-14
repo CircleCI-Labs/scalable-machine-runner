@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # proxy.sh: the token proxy in front of the REAL circleci-runner, two classes through ONE proxy. Needs no CircleCI token.
 #
-# The real linux/stack/runners.yaml, the real entrypoints and runner binary, the proxy built from proxy/ and installed by the
-# runner-distributor from the harness mirror (a SHA256SUMS next to the binary, as a GitHub release has it), and the fake API
-# (fake-api.py, with token checks turned on: it answers a claim only when it carries a class token). The runners hold a placeholder
-# config; the three class tokens are Swarm secrets of the proxy alone. Phases:
-#   dist      the distributor installs the proxy next to the runner: SHA256SUMS, a record, root-owned; a wrong SHA256SUMS line or a hash that
-#             MACHINE_RUNNER_SWARM_PROXY_SHA256 does not allow installs nothing; a changed binary is refused and repaired
+# The real linux/stack/runners.yaml, the real entrypoint and runner binary (installed by the runner-distributor from the harness mirror),
+# the proxy IMAGE built from proxy/ (lib.sh proxy_image_build) and the fake API (fake-api.py, with token checks turned on: it answers a
+# claim only when it carries a class token). The runners hold a placeholder config; the three class tokens are Swarm secrets of the proxy
+# alone. Phases:
 #   order     the runners start BEFORE the proxy: when it comes up (a first start, no state) it asks the API (scale) how many tasks run, none do,
 #             and they claim at once, none is locked out
 #   claims    each class claims with its own token and no other call carries one
 #   midjob    the proxy restarts while the first jobs run: they finish (the API gets their step end and cleanup), the restart restores its state,
 #             and the runners that claimed stay refused
 #   checks    no class token in a runner container (files, environ and cmdline, as root), its spec or its log; one claim per container; 403 for a
-#             container that is not a runner (either network); the proxy is hardened, healthy, and logs no token
+#             container that is not a runner (either network); the proxy is hardened (non-root, read-only, no capabilities), healthy through the
+#             healthcheck of its image, and logs no token
 #   restart   idle runners are present at a restart WITH state: they may claim afterwards (only a runner that claimed stays refused)
 #   endjob    the proxy is down when the jobs end, and for a while after it: whether the runner reports the end of the job once the proxy is back
 #   lost      the state file is gone but its marker is not, and the API says that tasks run: every runner present is refused
@@ -30,18 +29,15 @@ TOKEN_JAVA=CLASS-TOKEN-JAVA-2b6d0c58e19f4a73
 TOKEN_HARDENED=CLASS-TOKEN-HARDENED-c41e8a07d95b3f26
 PLACEHOLDER=machine-runner-swarm-placeholder
 CLAIM=/api/v3/runner/claim
-PROXY_IMAGE=$(sed -n 's/^    image: \(alpine:3\.[0-9]*\).*$/\1/p' "$stack_dir/runners.yaml")   # the image of the token-proxy service
-DIST_IMAGE=$(sed -n 's/^    image: \(alpine:3@sha256:[0-9a-f]*\).*/\1/p' "$stack_dir/runners.yaml")   # and of the distributor
-[[ -n $PROXY_IMAGE ]] || fail "no alpine image for token-proxy in runners.yaml"
+SCALE=/api/v3/runner/scale
+DIST_IMAGE=$(sed -n 's/^    image: \(alpine:3@sha256:[0-9a-f]*\).*/\1/p' "$stack_dir/runners.yaml")   # the image of the distributor
+[[ -n $DIST_IMAGE ]] || fail "no alpine image for runner-distributor in runners.yaml"
 
 session_begin
 mgr=$SWARM_TEST_MGR
-dind_load "$mgr" "$PROXY_IMAGE"
 dind_load "$mgr" "$DIST_IMAGE"
 publish_runner real
-publish_proxy 0.0.1-test
 state_dir=/var/lib/docker/volumes/${STACK}_proxy-state/_data
-bin_vol=/var/lib/docker/volumes/${STACK}_runner-bin/_data
 DIST_ENV=(MACHINE_RUNNER_SWARM_CHECK_INTERVAL=5s)
 
 # --- the API, the secrets, the stack -----------------------------------------------------------------------------------
@@ -57,7 +53,7 @@ config_yaml "$PLACEHOLDER" | idocker "$mgr" secret create runner-placeholder-tok
 cat > "$work/proxy-ov.yaml" << EOF
 services:
   token-proxy:
-    command: ["-upstream", "http://$api_ip:8099", "-state-dir", "/var/tmp"]
+    command: ["-upstream", "http://$api_ip:8099", "-state-dir", "/state"]
   intruder-default:   # not a runner: another container on the class network
     image: $CIMG_IMAGE
     command: ["sleep", "infinity"]
@@ -139,41 +135,7 @@ jobs_ended() { # STEP: the API got this many calls of the end of a job (step end
   api_count "REQ POST /api/v2/$1 auth=TASK"
 }
 
-# ---------------------------------------------------------------------------------------------
-# dist: the distributor installs the proxy
-# ---------------------------------------------------------------------------------------------
 dep 0   # the proxy waits: the runners go first (phase order)
-wait_for 120 vol test -L "$bin_vol/proxy/current" || fail "the distributor did not install the proxy: $(rlog runner-distributor | tail -n 5)"
-[[ $(vol readlink "$bin_vol/proxy/current") == versions/$PROXY_VERSION ]] || fail "proxy/current is $(vol readlink "$bin_vol/proxy/current")"
-installed=$(vol sha256sum "$bin_vol/proxy/versions/$PROXY_VERSION/bin/machine-runner-swarm-proxy" | cut -d' ' -f1)
-[[ $installed == "$PROXY_SHA" ]] || fail "the installed proxy is not the one on the mirror"
-[[ $(vol sh -c "cd $bin_vol/proxy/versions/$PROXY_VERSION && cat SHA256") == "$PROXY_SHA  bin/machine-runner-swarm-proxy" ]] || fail "the record of the proxy does not name the binary"
-[[ $(vol cat "$bin_vol/proxy/versions/$PROXY_VERSION/VERSION") == "$PROXY_VERSION" ]] || fail "VERSION of the proxy"
-[[ -z $(vol find "$bin_vol" ! -type l \( ! -user root -o -perm /022 \)) ]] || fail "a file of the volume is not root-owned or is group/world writable"
-echo "RESULT test=proxy phase=dist installed=yes version=$PROXY_VERSION sha256sums_checked=yes record=yes root_owned=yes"
-
-# a wrong line in SHA256SUMS, and a hash that the strict list does not allow: nothing is installed, the old proxy stays active
-publish_proxy 0.0.2-test
-sed -i "s/^[0-9a-f]\{64\}  machine-runner-swarm-proxy_linux_$ARCH\$/$(printf '2%.0s' $(seq 1 64))  machine-runner-swarm-proxy_linux_$ARCH/" "$work/mirror/proxy/v0.0.2-test/SHA256SUMS"
-docker cp "$work/mirror/." "$mgr:/mirror/" > /dev/null
-dep 0
-bad() { [[ $(count "$(rlog runner-distributor)" 'SHA-256 mismatch for machine-runner-swarm-proxy_linux') -ge 1 ]]; }
-wait_for 90 bad || fail "the distributor did not refuse a SHA256SUMS line that does not match the binary"
-[[ $(vol readlink "$bin_vol/proxy/current") == versions/0.0.1-test ]] || fail "the active proxy changed after a mismatch"
-vol test ! -d "$bin_vol/proxy/versions/0.0.2-test" || fail "a proxy that did not match was installed"
-publish_proxy 0.0.3-test   # a good one again, but the strict list names another hash
-DIST_ENV+=("MACHINE_RUNNER_SWARM_PROXY_SHA256=$(printf '3%.0s' $(seq 1 64))")
-dep 0
-strict() { [[ $(count "$(rlog runner-distributor)" 'does not allow: refusing to install') -ge 1 ]]; }
-wait_for 90 strict || fail "the distributor ignored MACHINE_RUNNER_SWARM_PROXY_SHA256"
-vol test ! -d "$bin_vol/proxy/versions/0.0.3-test" || fail "a proxy that the strict list does not allow was installed"
-DIST_ENV=("MACHINE_RUNNER_SWARM_PROXY_SHA256=$PROXY_SHA")   # the right hash: it installs
-dep 0
-ok3() { [[ $(vol readlink "$bin_vol/proxy/current") == versions/0.0.3-test ]]; }
-wait_for 90 ok3 || fail "the distributor did not install a proxy that the strict list allows: $(rlog runner-distributor | tail -n 5)"
-echo "RESULT test=proxy phase=dist wrong_line_refused=yes strict_list_refused=yes strict_list_allowed=yes active=$(vol readlink "$bin_vol/proxy/current")"
-DIST_ENV=(MACHINE_RUNNER_SWARM_CHECK_INTERVAL=5s)
-dep 0
 
 # ---------------------------------------------------------------------------------------------
 # order: the runners are up and polling before the proxy exists; it starts (a first start), and they claim
@@ -196,7 +158,7 @@ c_java=$(cont linux-java)
 echo "RESULT test=proxy phase=order runners_before_the_proxy=2 same_containers_claimed=$([[ $c_def == "$before_def" && $c_java == "$before_java" ]] && echo yes || echo no) proxy_said=\"$first_line\""
 [[ $c_def == "$before_def" && $c_java == "$before_java" ]] || fail "the claims did not come from the containers that waited for the proxy"
 [[ $first_line == *"no state (a first start)"* && $first_line == *"tasks.linux-default: CircleCI reports 0 running tasks"* ]] || fail "the proxy did not treat its first start as one, and ask the API: $first_line"
-[[ $(api_count "REQ GET /api/v3/runner/scale auth=CLASS:linux-default ") -ge 1 && $(api_count "REQ GET /api/v3/runner/scale auth=CLASS:linux-java ") -ge 1 ]] || fail "the proxy did not ask for the scale with the token of each class"
+[[ $(api_count "REQ GET $SCALE auth=CLASS:linux-default ") -ge 1 && $(api_count "REQ GET $SCALE auth=CLASS:linux-java ") -ge 1 ]] || fail "the proxy did not ask for the scale with the token of each class"
 
 # ---------------------------------------------------------------------------------------------
 # claims
@@ -214,7 +176,7 @@ for class in linux-default linux-java; do
   [[ $at_proxy -ge 1 && $at_proxy -eq $at_api ]] || fail "$class: claims at the proxy ($at_proxy) and claims at the API with its own token ($at_api) differ"
 done
 [[ $(alog | grep -a "REQ POST $CLAIM" | grep -avc 'auth=CLASS:') -eq 0 ]] || fail "a claim reached the API without a class token"
-[[ $(alog | grep -a 'auth=CLASS:' | grep -avc "REQ POST $CLAIM") -eq 0 ]] || fail "a class token reached an API call other than the claim"
+[[ $(alog | grep -a 'auth=CLASS:' | grep -av -e "REQ POST $CLAIM" -e "REQ GET $SCALE " | wc -l) -eq 0 ]] || fail "a class token reached an API call other than the claim and the scale call of a start with no state"
 alog | grep -a "REQ POST $CLAIM" | grep -aq 'ua=.*machine-runner-swarm-proxy/' || fail "the claim does not carry the proxy's User-Agent tag"
 echo "RESULT test=proxy phase=claims api_calls: $(alog | grep -a '^REQ' | sed 's/^REQ //; s/ ua=.*//' | sort | uniq -c | tr '\n' ';' | tr -s ' ')"
 
@@ -254,7 +216,7 @@ for t in "$TOKEN_DEFAULT" "$TOKEN_JAVA" "$TOKEN_HARDENED"; do
   [[ $spec != *"$t"* ]] || fail "a class token is in a runner's spec or log"
 done
 c_proxy=$(cont token-proxy)
-[[ $(dk exec -u 65534 "$c_proxy" cat /run/secrets/linux-default-token) == *"$TOKEN_DEFAULT"* ]] || fail "the proxy does not hold the class token: the scan control is void"
+[[ $(claims_of linux-default) -ge 1 && $(claims_of linux-java) -ge 1 ]] || fail "the API has not seen the class tokens, which only the proxy holds: the scan control is void"
 
 # one claim per container
 before=$(upstream_claims)
@@ -386,22 +348,4 @@ wait_for "$TIMEOUT" claimed_both "$fip_def" "$fip_java" || fail "the idle runner
 hold
 echo "RESULT test=proxy phase=fresh idle_runners_claimed=yes"
 
-# ---------------------------------------------------------------------------------------------
-# tamper: the binary in the volume is changed: the proxy does not start from it, the distributor repairs it
-# ---------------------------------------------------------------------------------------------
-active=$(vol readlink "$bin_vol/proxy/current")
-# hold the distributor back (no node matches), so that it cannot repair the binary before the proxy looks at it
-dk service update -d --constraint-add 'node.labels.hold == yes' "${STACK}_runner-distributor" > /dev/null
-no_distributor() { [[ -z $(cont runner-distributor) ]]; }
-wait_for 60 no_distributor || fail "the distributor did not stop"
-docker exec "$mgr" sh -c "cd $bin_vol/proxy/$active/bin && cp machine-runner-swarm-proxy t && printf x >> t && mv t machine-runner-swarm-proxy"   # the running binary is busy: replace it
-OLD_PROXY=$(cont token-proxy)
-proxy_restart
-refused_start() { [[ $(count "$(plog)" 'does not match its SHA-256 record') -ge 1 ]]; }
-wait_for 90 refused_start || fail "the proxy started from a changed binary"
-echo "RESULT test=proxy phase=tamper changed_binary_refused=yes"
-dk service update -d --constraint-rm 'node.labels.hold == yes' "${STACK}_runner-distributor" > /dev/null   # the distributor is back and repairs it
-wait_for 120 proxy_up || fail "the distributor did not repair the binary: $(rlog runner-distributor | tail -n 5)"
-echo "RESULT test=proxy phase=tamper repaired_by_the_distributor=yes"
-
-pass "the distributor installs the proxy from the SHA256SUMS of its release; runners that start before the proxy are not locked out; two classes claim through one proxy, each with its own token and nowhere else; no class token in a runner container; one claim per container; 403 for non-runners; a restart with state refuses only the runners that claimed; with no state the proxy asks the API how many tasks run: some, or no answer, and every runner present is refused, none and they may claim; a changed binary does not start"
+pass "the proxy runs from its image; runners that start before the proxy are not locked out; two classes claim through one proxy, each with its own token and nowhere else; no class token in a runner container; one claim per container; 403 for non-runners; a restart with state refuses only the runners that claimed; with no state the proxy asks the API how many tasks run: some, or no answer, and every runner present is refused, none and they may claim"

@@ -39,7 +39,7 @@
 #   E2E_MAX_RUN_TIME        runner max_run_time (default 10m)
 #   E2E_DEADLINE_SECONDS    hard limit for the whole run (default 2400)
 #   E2E_SWEEPER_IMAGE       image for the sweeper (default: pinned circleci/runner-agent)
-#   E2E_PROXY_PORT          port of the local mirror that serves the token proxy of this checkout (default 8097)
+#   E2E_PROXY_IMAGE         the name that the token proxy image of this checkout gets when prepare builds it (default machine-runner-swarm-proxy:e2e)
 set -euo pipefail
 
 mode=${1:?usage: e2e-host.sh prepare | run | cleanup | sweep}
@@ -67,13 +67,11 @@ override="${log_dir}/stack.e2e.yaml"
 start_seconds=${SECONDS}
 logs_pid=
 events_pid=
-# There is no release of the token proxy to download yet: prepare builds the one of this checkout and serves it, with the SHA256SUMS a
-# release has, from a local mirror; the distributor of the stack installs it from there (the stack's own variables).
+# The token proxy is an image. This job has no registry: prepare builds the image of this checkout (proxy/Dockerfile) on the VM, which is
+# the only node, and the stack is deployed with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to it.
 use_proxy=false   # a stack with a token-proxy service (the shipped one): the runners claim through it
 if grep -q '^  token-proxy:' "${stack_file}" 2> /dev/null; then use_proxy=true; fi
-proxy_version=0.0.0-e2e
-proxy_mirror=/tmp/e2e-proxy-mirror
-proxy_port=${E2E_PROXY_PORT:-8097}
+proxy_image=${E2E_PROXY_IMAGE:-machine-runner-swarm-proxy:e2e}
 
 log() { printf '[e2e-host %s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 die() { log "FAIL: $*"; exit 1; }
@@ -91,18 +89,15 @@ prepare() {
   log "sudo $(rel "${setup}") --swarm-init"
   sudo "${setup}" --swarm-init
   docker node ls
-  if [ "${use_proxy}" = true ]; then serve_proxy; fi
+  if [ "${use_proxy}" = true ]; then build_proxy; fi
 }
 
-serve_proxy() {
-  local arch
-  case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) die "no token proxy build for $(uname -m)" ;; esac
-  rm -rf "${proxy_mirror}"; mkdir -p "${proxy_mirror}/v${proxy_version}"
-  "${repo}/ci/build-proxy.sh" "${proxy_mirror}/v${proxy_version}" "${proxy_version}" "linux/${arch}"
-  (cd "${proxy_mirror}/v${proxy_version}" && sha256sum "machine-runner-swarm-proxy_linux_${arch}" > SHA256SUMS)
-  docker rm -f e2e-proxy-mirror > /dev/null 2>&1 || true
-  docker run -d --name e2e-proxy-mirror --network host -v "${proxy_mirror}:/srv:ro" "${image}" python3 -m http.server "${proxy_port}" --directory /srv > /dev/null
-  log "serving the token proxy ${proxy_version} ($(cat "${proxy_mirror}/v${proxy_version}/SHA256SUMS")) on port ${proxy_port}"
+build_proxy() {
+  local version=dev
+  [ -z "${CIRCLE_SHA1:-}" ] || version="sha-${CIRCLE_SHA1:0:12}"
+  log "building the token proxy image ${proxy_image} from proxy/"
+  docker build --quiet --tag "${proxy_image}" --build-arg "VERSION=${version}" "${repo}/proxy" > /dev/null
+  docker run --rm "${proxy_image}" -version
 }
 
 # ---------------------------------------------------------------------------
@@ -144,8 +139,6 @@ EOF
         printf '  %s:\n    deploy:\n      replicas: 0\n' "${s}"
       fi
     done
-    # the token proxy stays as the stack has it (every runner claims through it); the first deployment waits for the distributor
-    if [ "${use_proxy}" = true ]; then printf '  token-proxy:\n    environment:\n      MACHINE_RUNNER_SWARM_PROXY_WAIT: "600"\n'; fi
   } > "${override}"
 }
 
@@ -173,8 +166,8 @@ deploy() {  # deploy ACTIVE_SERVICE
   write_override "$1"
   log "deploying ${stack}_$1 from $(rel "${stack_file}") + override: image=${image%%@*} idle_timeout=${idle} max_run_time=${max_run}"
   if [ "${use_proxy}" = true ]; then
-    MACHINE_RUNNER_SWARM_PROXY_VERSION="${proxy_version}" MACHINE_RUNNER_SWARM_PROXY_BASE_URL="http://$(hostname -I | awk '{print $1}'):${proxy_port}" \
-      docker stack deploy --detach=true -c "${stack_file}" -c "${override}" "${stack}"
+    # the token proxy stays as the stack has it (every runner claims through it), with the image that prepare built (no registry has it)
+    MACHINE_RUNNER_SWARM_PROXY_IMAGE="${proxy_image}" docker stack deploy --detach=true --resolve-image never -c "${stack_file}" -c "${override}" "${stack}"
   else
     docker stack deploy --detach=true -c "${stack_file}" -c "${override}" "${stack}"
   fi
@@ -411,7 +404,6 @@ cleanup() {
   docker service logs "${stack}_runner-distributor" > "${log_dir}/distributor.log" 2>&1 || true
   log "cleanup: removing stack ${stack}, its secrets, and leaving the swarm"
   remove_stack
-  docker rm -f e2e-proxy-mirror > /dev/null 2>&1 || true
   docker secret ls -q 2> /dev/null | xargs -r docker secret rm > /dev/null 2>&1 || true
   docker swarm leave --force > /dev/null 2>&1 || true
   log "cleanup: swarm state is now $(docker info --format '{{.Swarm.LocalNodeState}}')"

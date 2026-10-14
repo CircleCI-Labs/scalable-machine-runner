@@ -10,9 +10,11 @@
 #      - the volume is root-owned, holds the record of the binary, and the runner runs, unmodified, in a stock cimg image through
 #        the read-only mount; the entrypoint refuses to start without a runner name (exit 80);
 #      - the services linux-default and linux-hardened start a container each, and inside them the runner runs as circleci-runner and
-#        the job user is circleci; the container mounts only the placeholder config (the class tokens belong to the token proxy, which this
-#        test stops), and the job user cannot read it, nor other users' process environments; linux-default keeps sudo (so sudo can read
+#        the job user is circleci; the container mounts only the placeholder config (the class tokens belong to the token proxy), and
+#        the job user cannot read it, nor other users' process environments; linux-default keeps sudo (so sudo can read
 #        the placeholder); linux-hardened has no sudo at all.
+#      - the token proxy runs from the image that this job builds from proxy/ (there is no registry here), natively for this architecture,
+#        non-root, read-only, healthy through the healthcheck of its image.
 #    The runner gets 401 from CircleCI for the made-up token, which does not matter here.
 #
 # Prints RESULT lines; exits 0 only if every check passed.
@@ -67,14 +69,15 @@ for svc in linux-java linux-persistent linux-docker-build; do
 done
 # The runners read a placeholder config; the class tokens above belong to the token proxy.
 printf '%s' "machine-runner-swarm-placeholder" | sudo "${setup}" --secret runner-placeholder > /dev/null 2>&1 || log "secret runner-placeholder failed"
-check setup-deploy sudo "${setup}" --deploy
+proxy_image=machine-runner-swarm-proxy:smoke
+log "building the token proxy image ${proxy_image} from proxy/"
+docker build --quiet --tag "${proxy_image}" "${repo}/proxy" > /dev/null || log "building the token proxy image failed"
+check setup-deploy sudo env "MACHINE_RUNNER_SWARM_PROXY_IMAGE=${proxy_image}" "${setup}" --deploy
 # The shipped sizes (2 CPUs and 4 GB each) do not fit one CI VM: shrink what the test needs, as an
 # operator would on a small host, and stop what it does not.
 docker service update --detach --replicas 1 --reserve-cpu 0.1 --reserve-memory 64m "${stack}_linux-default" > /dev/null
 docker service update --detach --reserve-cpu 0.1 --reserve-memory 64m "${stack}_linux-hardened" > /dev/null
 docker service scale --detach "${stack}_linux-java=0" > /dev/null
-# This test makes no claim, and no release of this repository may be published yet for "unreleased" to mean: stop the proxy.
-docker service scale --detach "${stack}_token-proxy=0" > /dev/null
 
 vol=/var/lib/docker/volumes/${stack}_runner-bin/_data   # the per-node volume that runner-distributor fills
 cur=${vol}/current
@@ -152,6 +155,32 @@ ready() {  # ready CONTAINER
   docker logs "$1" 2>&1 | tail -n 20
   return 1
 }
+
+# The token proxy: its image runs here, and Swarm calls it healthy (it has a token file for every class and can write its state).
+proxy_image_native() {
+  local a
+  a=$(docker image inspect --format '{{.Architecture}}' "${proxy_image}") && echo "image architecture ${a}, host ${arch}" &&
+    case ${arch} in x86_64) [ "${a}" = amd64 ] ;; aarch64) [ "${a}" = arm64 ] ;; *) false ;; esac
+}
+check token-proxy-image-architecture proxy_image_native
+proxy_cid=$(container_of token-proxy) || { printf 'CHECK token-proxy-container FAIL (no running container)\n'; docker service ps "${stack}_token-proxy" --no-trunc | head; failed=$((failed + 1)); }
+proxy_healthy() {
+  for _ in $(seq 1 45); do
+    [ "$(docker inspect --format '{{.State.Health.Status}}' "${proxy_cid}" 2> /dev/null)" = healthy ] && return 0
+    sleep 2
+  done
+  docker logs "${proxy_cid}" 2>&1 | tail -n 10
+  return 1
+}
+if [ -n "${proxy_cid:-}" ]; then
+  check token-proxy-healthy proxy_healthy
+  proxy_hardened() {
+    local h
+    h=$(docker inspect --format 'user={{.Config.User}} readonly={{.HostConfig.ReadonlyRootfs}} cap_drop={{.HostConfig.CapDrop}}' "${proxy_cid}") && echo "${h}" &&
+      [ "${h}" = 'user=65534 readonly=true cap_drop=[ALL]' ]
+  }
+  check token-proxy-hardened proxy_hardened
+fi
 
 for svc in linux-default linux-hardened; do
   cid=$(container_of "${svc}") || { printf 'CHECK %s-container FAIL (no running container)\n' "${svc}"; docker service ps "${stack}_${svc}" --no-trunc | head; failed=$((failed + 1)); continue; }

@@ -24,9 +24,9 @@
        -StackFile takes one or more files and replaces the default; list runners.yaml first, then each add-on file
        such as custom-image.yaml. The files that are deployed are printed.
     The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION (an exact pin by default, or 3.1, 3, current), _RUNNER_MAJOR,
-    _CHECK_INTERVAL, _DOWNLOAD_BASE_URL, _RUNNER_SHA256 and _TOOLS_BASE_URL, and for the token proxy _PROXY_VERSION,
-    _PROXY_BASE_URL, _PROXY_LATEST_URL and _PROXY_SHA256, from the environment of -Deploy (docs\operations.md). The token proxy
-    runs on a manager; MACHINE_RUNNER_SWARM_PROXY_PLACEMENT pins it (docs\multi-node.md).
+    _CHECK_INTERVAL, _DOWNLOAD_BASE_URL, _RUNNER_SHA256 and _TOOLS_BASE_URL from the environment of -Deploy (docs\operations.md). The token
+    proxy is an image: MACHINE_RUNNER_SWARM_PROXY_IMAGE names another one than the published default (docs\install-windows.md). It runs on
+    a manager; MACHINE_RUNNER_SWARM_PROXY_PLACEMENT pins it (docs\multi-node.md).
 
 .EXAMPLE
     # A first run: the shipped runners.yaml, unchanged.

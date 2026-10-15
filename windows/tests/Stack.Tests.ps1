@@ -76,7 +76,7 @@ Describe 'the stack files' {
     It 'run the token proxy from its image as one replica with dnsrr, with its state in a named volume, on a manager by default' {
         $proxy = [regex]::Match($script:files['runners.yaml'], '(?ms)^  token-proxy-windows:\r?\n(.*?)(?=^[a-z])').Groups[1].Value
         $proxy | Should -Not -BeNullOrEmpty
-        $proxy | Should -Match '(?m)^    image: \$\{MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:edge\}'
+        $proxy | Should -Match '(?m)^    image: \$\{MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:latest\}'
         $proxy | Should -Not -Match 'runner-bin|subpath|entrypoint' -Because 'the image is the program: nothing comes from the volume of the distributor'
         $proxy | Should -Not -Match 'windows-ltsc20' -Because 'one tag covers both Windows versions, and Docker picks the image of the node'
         $proxy | Should -Match '(?m)^      replicas: 1'

@@ -215,7 +215,7 @@ services:
   # docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
   # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'.
   token-proxy:
-    image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:edge}
+    image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:latest}
     user: "65534"
     # The classes are the files <service>-token in /run/secrets (-secrets-dir): the runners of a class are tasks.<service>. A class of
     # another stack file is its secret and its network below, nothing more (stack files merge secrets and networks by name, but replace a command).

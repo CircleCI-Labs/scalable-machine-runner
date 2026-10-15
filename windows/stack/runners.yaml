@@ -256,7 +256,7 @@ services:
   # checkout, build the image (docs/install-windows.md) and deploy with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to its name. The image
   # runs as ContainerAdministrator: a named volume is writable for it only.
   token-proxy-windows:
-    image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:edge}
+    image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:latest}
     isolation: process
     # The classes are the files <service>-token in C:\ProgramData\Docker\secrets (-secrets-dir): the runners of a class are tasks.<service>. A
     # class of another stack file is its secret, nothing more (stack files merge secrets by name, but replace a command).

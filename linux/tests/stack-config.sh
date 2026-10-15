@@ -130,7 +130,7 @@ if [[ -z $block ]]; then
   echo "  token-proxy: service not found"
   problems=$((problems + 1))
 else
-  check token-proxy 'the published image, the edge tag by default (MACHINE_RUNNER_SWARM_PROXY_IMAGE)' '^    image: ccilabs/machine-runner-swarm-proxy:edge$'
+  check token-proxy 'the published image, the latest tag by default (MACHINE_RUNNER_SWARM_PROXY_IMAGE)' '^    image: ccilabs/machine-runner-swarm-proxy:latest$'
   check token-proxy 'user 65534' '^    user: "65534"$'
   check token-proxy 'a read-only root filesystem' '^    read_only: true$'
   check token-proxy 'cap_drop ALL' '^      - ALL$'

@@ -72,7 +72,7 @@ func newEnv(t *testing.T, ipsA ...string) *env {
 	fileA, fileB := filepath.Join(dir, "a"), filepath.Join(dir, "b")
 	os.WriteFile(fileA, []byte("api:\n  auth_token: "+tokenA+"\n"), 0o400)
 	os.WriteFile(fileB, []byte(tokenB+"\n"), 0o400)
-	e.p = &proxy{upstream: u, classes: []*class{newClass("class-a", fileA), newClass(dnsB, fileB)}, scaleTries: 3}
+	e.p = &proxy{upstream: u, classes: []*class{newClass("class-a", fileA), newClass(dnsB, fileB)}, scaleTries: 3, releaseAfter: 3}
 	e.p.lookup = func(_ context.Context, host string) ([]string, error) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -121,6 +121,16 @@ func (e *env) do(from, method, path, auth string) int {
 	w := httptest.NewRecorder()
 	e.p.ServeHTTP(w, r)
 	return w.Code
+}
+
+// polls is what the poller does n times: look at DNS and count the latched addresses that it does not list.
+func (e *env) polls(n int) {
+	e.t.Helper()
+	for range n {
+		if err := e.p.poll(context.Background()); err != nil {
+			e.t.Fatal(err)
+		}
+	}
 }
 
 func (e *env) claim(from string) int { return e.do(from, "POST", claimPath, "placeholder") }
@@ -218,6 +228,9 @@ func TestOneClaimPerRunnerUntilItLeaves(t *testing.T) {
 		t.Errorf("%d claims reached the upstream, want 5", e.calls.Load())
 	}
 	e.dns[dnsA] = []string{runnerA2} // runner A1's container is gone ...
+	e.polls(2)
+	e.check(e.claim(runnerA1), 403, "claim from a runner that left, two polls ago")
+	e.polls(1)
 	e.check(e.claim(runnerA1), 403, "claim from a runner that left")
 	e.dns[dnsA] = []string{runnerA1, runnerA2} // ... and a new container takes its IP
 	e.check(e.claim(runnerA1), 200, "new container on the same IP")
@@ -261,9 +274,9 @@ func TestStartWithoutAStateDirectoryLatchesTheRunnersOfAClassWithRunningTasks(t 
 	e.check(e.claim(runnerA1), 403, "runner of class a present at start, with running tasks")
 	e.check(e.claim(runnerB1), 200, "class b has no running task: its runner may claim")
 	e.dns[dnsA] = []string{runnerA1}
-	e.p.members(context.Background()) // A2 left and is released
+	e.polls(3) // A2 left and is released
 	e.dns[dnsA] = []string{runnerA1, runnerA2}
-	e.p.members(context.Background()) // a new container for A2
+	e.polls(1) // a new container for A2
 	e.check(e.claim(runnerA2), 200, "runner A2 was released when it left")
 	e.check(e.claim(runnerA1), 403, "runner A1 never left")
 	if e.calls.Load() != 2 {
@@ -522,6 +535,7 @@ func (e *env) withState(dir string) {
 func (e *env) restart() string {
 	for _, c := range e.p.classes {
 		c.latched = map[string]bool{}
+		c.absent = map[string]int{}
 		c.busy = map[string]bool{}
 	}
 	what, err := e.p.restore(context.Background())
@@ -587,7 +601,7 @@ func TestReleasedRunnersLeaveTheState(t *testing.T) {
 	e.restart()
 	e.check(e.claim(runnerA1), 200, "claim")
 	e.dns[dnsA] = []string{runnerA2} // A1's container is gone
-	e.p.members(context.Background())
+	e.polls(3)
 	b, _ := os.ReadFile(filepath.Join(dir, stateFile))
 	if strings.Contains(string(b), runnerA1) {
 		t.Errorf("a runner that left is still in the state: %s", b)
@@ -654,7 +668,7 @@ func TestAStateThatCannotBeWrittenMakesTheProxyUnhealthy(t *testing.T) {
 	e.restart()
 	e.check(e.do("10.9.9.9", "GET", healthPath, ""), 200, "healthy")
 	os.RemoveAll(dir) // the volume is gone
-	e.claim(runnerA1)
+	e.check(e.claim(runnerA1), 503, "the latch of the claim cannot be saved: no task for the runner")
 	e.check(e.do("10.9.9.9", "GET", healthPath, ""), 503, "the state cannot be written")
 }
 

@@ -77,11 +77,23 @@ func (s *store) load() (startKind, map[string][]string, error) {
 	return stateOK, d.Latched, nil
 }
 
-// save writes the latched IPs of every class: marker first, then the state in a temporary file that replaces the old one.
+// save writes the latched IPs of every class: marker first, then the state in a temporary file that replaces the old one. On ANY failure
+// it removes state.json (and keeps the marker): a state that is behind the latches in memory must not be the one that a restart reads, and
+// with the marker and no state file the next start takes the fail-safe path (stateLost). If even the removal fails there is nothing more
+// to do here, and the caller refuses the claims until a write works.
 func (s *store) save(classes []*class) error {
 	if s == nil {
 		return nil
 	}
+	err := s.write(classes)
+	if err != nil {
+		os.Remove(filepath.Join(s.dir, stateFile+".tmp"))
+		os.Remove(filepath.Join(s.dir, stateFile))
+	}
+	return err
+}
+
+func (s *store) write(classes []*class) error {
 	d := stateDoc{Version: 1, Latched: map[string][]string{}}
 	for _, c := range classes {
 		ips := make([]string, 0, len(c.latched))

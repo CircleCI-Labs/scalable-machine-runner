@@ -9,12 +9,13 @@
 // A claim is allowed only from an IP that is currently in the DNS answer of a class, and it gets that class's token.
 //
 // One claim per runner container: after a claim that returns a task, that IP is latched and further claims from it
-// get 403 until the IP leaves the DNS answer (the container is gone). Single-task mode only: a continuous runner claims
-// many times.
+// get 403 until the IP has been missing from the DNS answer for several polls in a row (the container is gone). Single-task
+// mode only: a continuous runner claims many times. The latch fails closed: a claim whose latch cannot be saved does not
+// get its task, and any failure to write the state removes the state file, so that the next start takes the fail-safe path.
 //
 // A restarted proxy must know who has claimed. With -state-dir it keeps the latched IPs in a small file of a volume,
-// written before the claim's answer goes back to the runner, and a restart with that state refuses only the IPs that
-// really claimed. A class with no state (a proxy that never ran, a state that was lost, no -state-dir, a class that is new
+// written before the claim's answer goes back to the runner, and a restart with that state refuses every IP that really
+// claimed, whether DNS lists it yet or not. A class with no state (a proxy that never ran, a state that was lost, no -state-dir, a class that is new
 // to the state) cannot know, so the proxy asks CircleCI: GET /api/v3/runner/scale with the token of that class says how
 // many tasks of the class are running. With none running, no runner present can be holding a task, and the runners
 // present may claim. With some running, or when the call fails, the proxy fails safe and latches every IP present of
@@ -65,6 +66,7 @@ type class struct {
 	tokenFile string
 
 	latched map[string]bool // runner IPs that have claimed a task
+	absent  map[string]int  // latched IPs: how many polls in a row DNS has not listed them
 	busy    map[string]bool // runner IPs with a claim in flight
 }
 
@@ -72,7 +74,7 @@ func newClass(service, tokenFile string) *class {
 	if !strings.HasPrefix(service, "tasks.") {
 		service = "tasks." + service
 	}
-	return &class{dns: service, tokenFile: tokenFile, latched: map[string]bool{}, busy: map[string]bool{}}
+	return &class{dns: service, tokenFile: tokenFile, latched: map[string]bool{}, absent: map[string]int{}, busy: map[string]bool{}}
 }
 
 type proxy struct {
@@ -81,10 +83,12 @@ type proxy struct {
 	lookup   func(ctx context.Context, host string) ([]string, error)
 
 	store    *store // nil: no persistence: a restart asks CircleCI (scale) which runners may claim
-	stateErr error  // the last failure to write the state, which makes the proxy unhealthy
+	stateErr error  // the last failure to write the state, which makes the proxy unhealthy and refuses claims
 
 	scaleTries int           // attempts of the scale call at start (at least 1)
 	scaleWait  time.Duration // between the attempts
+
+	releaseAfter int // polls without a class listing a latched IP before the latch goes (at least 1)
 
 	mu sync.Mutex // guards the latched and busy maps of every class, and the state file
 }
@@ -146,28 +150,36 @@ func (p *proxy) resolve(ctx context.Context) (map[*class]map[string]bool, error)
 	return sets, nil
 }
 
-// members resolves the runner IPs of every class and releases the latch of every IP that has left.
-func (p *proxy) members(ctx context.Context) (map[*class]map[string]bool, error) {
+// poll looks at DNS once and releases the latch of every IP that has been missing for releaseAfter polls in a row. A failed lookup
+// says nothing and changes nothing (the latch stays), and an answer that lists the IP starts the count again. A whole class that DNS
+// does not know (no task of the service runs) is one missing poll for each of its latched IPs, not a release.
+func (p *proxy) poll(ctx context.Context) error {
 	sets, err := p.resolve(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	changed := false
-	for c, set := range sets {
+	for _, c := range p.classes {
 		for ip := range c.latched {
-			if !set[ip] {
+			if sets[c][ip] {
+				delete(c.absent, ip)
+				continue
+			}
+			c.absent[ip]++
+			if c.absent[ip] >= max(p.releaseAfter, 1) {
 				delete(c.latched, ip)
+				delete(c.absent, ip)
 				changed = true
 				log.Printf("released %s (%s)", ip, c.dns)
 			}
 		}
 	}
-	if changed {
+	if changed || p.stateErr != nil { // a state that could not be written is tried again
 		p.persist()
 	}
-	return sets, nil
+	return nil
 }
 
 // What GET /api/v3/runner/scale says about a class: data.attributes holds the counts of the tasks of that class. The names are
@@ -261,8 +273,8 @@ func (p *proxy) scaleOnce(ctx context.Context, tok string) (running, unclaimed i
 	return running, unclaimed, nil
 }
 
-// restore sets the latches at start and returns what it did, for the log. A class with a saved state (the IPs that claimed and are
-// still there) gets exactly that. A class with none cannot know who has claimed, so it asks CircleCI (scale): no running task of the
+// restore sets the latches at start and returns what it did, for the log. A class with a saved state (the IPs that claimed) gets
+// exactly those latched, whether DNS lists them yet or not. A class with none cannot know who has claimed, so it asks CircleCI (scale): no running task of the
 // class means that no runner present holds one, and they may claim; otherwise, or when the answer is missing, every IP present
 // is latched, which only costs those runners their claim (they leave and are replaced).
 func (p *proxy) restore(ctx context.Context) (string, error) {
@@ -295,11 +307,7 @@ func (p *proxy) restore(ctx context.Context) (string, error) {
 		sort.Strings(ips)
 		var v verdict
 		if kind == stateOK && saved[c.dns] != nil {
-			for _, ip := range saved[c.dns] {
-				if set[ip] {
-					v.latch = append(v.latch, ip)
-				}
-			}
+			v.latch = saved[c.dns]
 			v.what = fmt.Sprintf("%d runner(s) have claimed and stay refused; the others may claim", len(v.latch))
 		} else if len(ips) == 0 {
 			v.what = "no runner present"
@@ -322,21 +330,27 @@ func (p *proxy) restore(ctx context.Context) (string, error) {
 			c.latched[ip] = true
 		}
 	}
-	if err := p.store.save(p.classes); err != nil {
+	if err := p.persist(); err != nil {
 		return "", err
 	}
 	return why + "; " + strings.Join(lines, "; "), nil
 }
 
-// persist writes the latched IPs to the state directory, if there is one. The caller holds p.mu.
-func (p *proxy) persist() {
+// persist writes the latched IPs to the state directory, if there is one, and returns the failure: a latch that is not on disk is not
+// to be relied on. A failed write removes the state file (store.save), so that a restart does not read a state that is behind.
+// The caller holds p.mu.
+func (p *proxy) persist() error {
 	if err := p.store.save(p.classes); err != nil {
 		p.stateErr = err
 		log.Printf("state: cannot write it: %v", err)
-		return
+		return err
 	}
 	p.stateErr = nil
+	return nil
 }
+
+// errNotLatched: the upstream answered a claim with a task, but its latch could not be saved. The runner does not get the task.
+var errNotLatched = errors.New("the latch of the claim could not be saved")
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == healthPath {
@@ -349,13 +363,14 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ap, _ := netip.ParseAddrPort(r.RemoteAddr)
 	ip := ap.Addr().Unmap().String()
-	sets, err := p.members(r.Context())
+	sets, err := p.resolve(r.Context())
 	if err != nil {
 		log.Printf("claim from %s refused: cannot resolve the runners: %v", ip, err)
 		http.Error(w, "cannot resolve the runners", http.StatusServiceUnavailable)
 		return
 	}
 	var c *class
+	code := http.StatusForbidden
 	p.mu.Lock()
 	why := ""
 	owners := 0
@@ -374,13 +389,19 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		why = "this runner has already claimed a task"
 	case c.busy[ip]:
 		why = "a claim from this runner is in flight"
+	case p.stateErr != nil && p.persist() != nil: // no task that the latch could not hold
+		why, code = "the state cannot be written", http.StatusServiceUnavailable
 	default:
 		c.busy[ip] = true
 	}
 	p.mu.Unlock()
 	if why != "" {
 		log.Printf("claim from %s refused: %s", ip, why)
-		http.Error(w, "claim refused: "+why, http.StatusForbidden)
+		if code == http.StatusForbidden {
+			http.Error(w, "claim refused: "+why, code)
+		} else {
+			http.Error(w, "unavailable", code)
+		}
 		return
 	}
 	defer func() { p.mu.Lock(); delete(c.busy, ip); p.mu.Unlock() }()
@@ -428,14 +449,22 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, tok string, c *c
 				log.Printf("claim from %s (%s): upstream status %d", ip, c.dns, resp.StatusCode)
 				if resp.StatusCode/100 == 2 && resp.StatusCode != http.StatusNoContent { // 204: no task yet
 					p.mu.Lock()
+					defer p.mu.Unlock()
 					c.latched[ip] = true
-					p.persist() // before the runner gets its task: a restart must know that it has claimed
-					p.mu.Unlock()
+					delete(c.absent, ip)
+					if p.persist() != nil { // before the runner gets its task: a restart must know that it has claimed
+						return errNotLatched // the runner does not get the task; the latch stays in memory
+					}
 				}
 			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			if errors.Is(err, errNotLatched) {
+				log.Printf("claim from %s (%s): %v: the task is not handed to the runner", ip, c.dns, err)
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			log.Printf("upstream error: %v", err)
 			w.WriteHeader(http.StatusBadGateway)
 		},
@@ -528,7 +557,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("state directory: %v", err) // fail closed: a proxy that cannot keep its state does not start
 	}
-	p := &proxy{upstream: u, classes: classes, store: st, lookup: lookupHost, scaleTries: 3, scaleWait: 2 * time.Second}
+	p := &proxy{upstream: u, classes: classes, store: st, lookup: lookupHost, scaleTries: 3, scaleWait: 2 * time.Second,
+		releaseAfter: int(math.Ceil(30 * float64(time.Second) / float64(*poll)))}
 	for _, c := range classes { // fail closed: no token, no proxy
 		if _, err := c.token(); err != nil {
 			log.Fatalf("token file of %s: %v", c.dns, err)
@@ -551,7 +581,7 @@ func main() {
 	}
 	go func() {
 		for range time.Tick(*poll) {
-			p.members(ctx)
+			p.poll(ctx)
 		}
 	}()
 	srv := &http.Server{Addr: *listen, Handler: p, ReadHeaderTimeout: 10 * time.Second}

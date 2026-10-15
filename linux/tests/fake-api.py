@@ -15,7 +15,8 @@ By default no token is checked and nothing is logged. proxy.sh turns on, with en
                                 the label is CLASS:<label>, PLACEHOLDER, TASK (the task token of a claim), OTHER or NONE
 The queue is held (every claim gets 204, no task) while the file /tmp/hold exists.
 GET /api/v3/runner/scale answers like CircleCI's scale call for the class of the bearer token (with CLASS_TOKENS set, any other
-token gets 401): {"data":{"attributes":{"unclaimed_task_count":N,"running_task_count":R}}}. R is what GET /_running/R last set
+token gets 401): {"data":{"attributes":{"unclaimed_task_count":N,"running_task_count":R}}}, the two names that CircleCI's own scale endpoint uses and
+that the proxy reads, and nothing else. R is what GET /_running/R last set
 (default 0: the test says how many tasks run, because the fake agent does not report the end of its job). While the file
 /tmp/scale-fail exists the call answers 500.
 """

@@ -233,20 +233,6 @@ func (p *proxy) poll(ctx context.Context) error {
 	return nil
 }
 
-// What GET /api/v3/runner/scale says about a class: data.attributes holds the counts of the tasks of that class. The names are
-// matched by what they say, not spelled out: an attribute that has "running" and "task" in its name is a running count, one with
-// "unclaimed" or "queued" and "task" is the tasks that wait (for the log). A running count that is not a whole number, or not
-// there, is a failure, and with several the largest counts, so that a doubt never allows a claim.
-func isRunningCount(name string) bool {
-	n := strings.ToLower(name)
-	return strings.Contains(n, "running") && strings.Contains(n, "task")
-}
-
-func isWaitingCount(name string) bool {
-	n := strings.ToLower(name)
-	return (strings.Contains(n, "unclaimed") || strings.Contains(n, "queued")) && strings.Contains(n, "task")
-}
-
 // scale asks CircleCI how many tasks of class c are running and how many wait, with the token of that class. It tries scaleTries
 // times, scaleWait apart, because a proxy that starts together with its network may not reach the API at once.
 func (p *proxy) scale(ctx context.Context, c *class) (running, unclaimed int, err error) {
@@ -267,6 +253,8 @@ func (p *proxy) scale(ctx context.Context, c *class) (running, unclaimed int, er
 	}
 }
 
+// scaleOnce reads GET /api/v3/runner/scale: {"data":{"attributes":{"running_task_count":N,"unclaimed_task_count":M}}}. Both counts must be
+// there and be whole numbers of 0 or more; anything else is an error, which latches the runners of the class.
 func (p *proxy) scaleOnce(ctx context.Context, tok string) (running, unclaimed int, err error) {
 	u := *p.upstream
 	u.Path = strings.TrimRight(u.Path, "/") + scalePath
@@ -296,30 +284,18 @@ func (p *proxy) scaleOnce(ctx context.Context, tok string) (running, unclaimed i
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&doc); err != nil {
 		return 0, 0, fmt.Errorf("%s: cannot read the answer: %w", scalePath, err)
 	}
-	count := func(raw json.RawMessage) (int, bool) {
+	count := func(name string) (int, error) {
 		var v *float64 // a null is not a count: it would read as 0 and allow every runner
-		if json.Unmarshal(raw, &v) != nil || v == nil || *v < 0 || *v != math.Trunc(*v) || *v >= 1<<31 {
-			return 0, false
+		if json.Unmarshal(doc.Data.Attributes[name], &v) != nil || v == nil || *v < 0 || *v != math.Trunc(*v) || *v >= 1<<31 {
+			return 0, fmt.Errorf("%s: data.attributes.%s is missing or not a count", scalePath, name)
 		}
-		return int(*v), true
+		return int(*v), nil
 	}
-	found := false
-	for name, raw := range doc.Data.Attributes {
-		switch {
-		case isRunningCount(name):
-			n, ok := count(raw)
-			if !ok {
-				return 0, 0, fmt.Errorf("%s: data.attributes.%s is not a count", scalePath, name)
-			}
-			running, found = max(running, n), true
-		case isWaitingCount(name):
-			if n, ok := count(raw); ok {
-				unclaimed = max(unclaimed, n)
-			}
-		}
+	if running, err = count("running_task_count"); err != nil {
+		return 0, 0, err
 	}
-	if !found {
-		return 0, 0, fmt.Errorf("%s: data.attributes has no running task count", scalePath)
+	if unclaimed, err = count("unclaimed_task_count"); err != nil {
+		return 0, 0, err
 	}
 	return running, unclaimed, nil
 }

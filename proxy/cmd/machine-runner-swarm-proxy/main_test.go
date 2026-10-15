@@ -301,19 +301,32 @@ func TestEachClassAsksWithItsOwnToken(t *testing.T) {
 
 func TestAFailedScaleCallLatchesTheClass(t *testing.T) {
 	for name, fail := range map[string]func(e *env){
-		"a server error":   func(e *env) { e.scaleStatus[tokenA] = []int{500, 500, 500} },
-		"a rejected token": func(e *env) { e.scaleStatus[tokenA] = []int{401, 401, 401} },
-		"not JSON":         func(e *env) { e.scaleBody[tokenA] = "<html>" },
-		"a bad one of several": func(e *env) {
-			e.scaleBody[tokenA] = `{"data":{"attributes":{"running_tasks":0,"running_task_total":"x"}}}`
-		},
+		"a server error":     func(e *env) { e.scaleStatus[tokenA] = []int{500, 500, 500} },
+		"a rejected token":   func(e *env) { e.scaleStatus[tokenA] = []int{401, 401, 401} },
+		"not JSON":           func(e *env) { e.scaleBody[tokenA] = "<html>" },
 		"no running count":   func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"unclaimed_task_count":0}}}` },
-		"no attributes":      func(e *env) { e.scaleBody[tokenA] = `{"data":{}}` },
-		"a null count":       func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":null}}}` },
-		"a text count":       func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":"0"}}}` },
-		"a negative count":   func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":-1}}}` },
-		"a fractional count": func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":0.5}}}` },
-		"no token file":      func(e *env) { os.Remove(e.p.classes[0].tokenFile) },
+		"no unclaimed count": func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":0}}}` },
+		"a null unclaimed": func(e *env) {
+			e.scaleBody[tokenA] = `{"data":{"attributes":{"running_task_count":0,"unclaimed_task_count":null}}}`
+		},
+		"another name": func(e *env) { e.scaleBody[tokenA] = `{"data":{"attributes":{"running_tasks":0,"unclaimed_tasks":0}}}` },
+		"another case": func(e *env) {
+			e.scaleBody[tokenA] = `{"data":{"attributes":{"Running_Task_Count":0,"unclaimed_task_count":0}}}`
+		},
+		"no attributes": func(e *env) { e.scaleBody[tokenA] = `{"data":{}}` },
+		"a null count": func(e *env) {
+			e.scaleBody[tokenA] = `{"data":{"attributes":{"unclaimed_task_count":0,"running_task_count":null}}}`
+		},
+		"a text count": func(e *env) {
+			e.scaleBody[tokenA] = `{"data":{"attributes":{"unclaimed_task_count":0,"running_task_count":"0"}}}`
+		},
+		"a negative count": func(e *env) {
+			e.scaleBody[tokenA] = `{"data":{"attributes":{"unclaimed_task_count":0,"running_task_count":-1}}}`
+		},
+		"a fractional count": func(e *env) {
+			e.scaleBody[tokenA] = `{"data":{"attributes":{"unclaimed_task_count":0,"running_task_count":0.5}}}`
+		},
+		"no token file": func(e *env) { os.Remove(e.p.classes[0].tokenFile) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t, runnerA1, runnerA2)
@@ -376,17 +389,16 @@ func TestNoRunnerPresentAsksNothing(t *testing.T) {
 	}
 }
 
-func TestOtherNamesOfTheCounts(t *testing.T) {
+func TestOnlyTheExactCountsAreRead(t *testing.T) {
 	for name, tc := range map[string]struct {
 		body string
 		want int // latched runners of class a
 	}{
-		"running_tasks 0":                    {`{"data":{"attributes":{"running_tasks":0,"unclaimed_tasks":3}}}`, 0},
-		"running_tasks 1":                    {`{"data":{"attributes":{"running_tasks":1}}}`, 1},
-		"running_runner_tasks 0":             {`{"data":{"attributes":{"running_runner_tasks":0}}}`, 0},
-		"running_task_count 2.0":             {`{"data":{"attributes":{"running_task_count":2.0}}}`, 1},
-		"the largest of several":             {`{"data":{"attributes":{"running_tasks":0,"running_task_total":3}}}`, 1},
-		"an attribute that is no task count": {`{"data":{"attributes":{"running_tasks":0,"agents_running":7}}}`, 0},
+		"nothing runs":           {`{"data":{"attributes":{"running_task_count":0,"unclaimed_task_count":3}}}`, 0},
+		"one runs":               {`{"data":{"attributes":{"running_task_count":1,"unclaimed_task_count":0}}}`, 1},
+		"a whole number as 2.0":  {`{"data":{"attributes":{"running_task_count":2.0,"unclaimed_task_count":0}}}`, 1},
+		"other attributes":       {`{"data":{"type":"scale","attributes":{"running_task_count":0,"unclaimed_task_count":0,"agents_running":7,"running_tasks":9}}}`, 0},
+		"a name that is similar": {`{"data":{"attributes":{"running_tasks":0,"unclaimed_task_count":0}}}`, 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t, runnerA1)

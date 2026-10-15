@@ -13,9 +13,13 @@
 #   checks    no class token in a runner container (files, environ and cmdline, as root), its spec or its log; one claim per container; 403 for a
 #             container that is not a runner (either network); the proxy is hardened (non-root, read-only, no capabilities), healthy through the
 #             healthcheck of its image, and logs no token
-#   restart   idle runners are present at a restart WITH state: they may claim afterwards (only a runner that claimed stays refused)
+#   restart   idle runners are present at a restart WITH state: they may claim afterwards (only an address that claimed stays refused, and it is
+#             released once DNS has not listed it for 30 s)
 #   endjob    the proxy is down when the jobs end, and for a while after it: whether the runner reports the end of the job once the proxy is back
-#   lost      the state file is gone but its marker is not, and the API says that tasks run: every runner present is refused
+#   savefail  the proxy cannot write its state when an idle runner claims: the runner does not get its task (503), the proxy removes state.json
+#             and keeps the marker, and the start after that is the fail-safe one: the API says that tasks run, so every runner present is refused
+#   lost      the state file is gone but its marker is not, and the API says that tasks run: every runner present is refused. The refused
+#             runners keep polling and do not exit (the proxy answers 403, not 401: the runner does not exit on a 401 either, see docs/operations.md)
 #   unknown   the same, and the scale call fails: the proxy fails safe, every runner present is refused
 #   fresh     the whole state directory is empty again (a first start) and no task runs: the idle runners present may claim
 # Usage: proxy.sh        Env: TIMEOUT=240, JOB_S=60 (seconds a job runs)
@@ -230,9 +234,11 @@ i_def=$(cont intruder-default)
 i_java=$(cont intruder-java)
 code_def=$(claim_code "$i_def")
 code_java=$(claim_code "$i_java")
+body_def=$(probe "$i_def" curl -s -m 5 -X POST -H "Authorization: Bearer $PLACEHOLDER" "http://token-proxy:8080$CLAIM" || true)
 raw=$(probe "$c_def" python3 -c 'import socket; socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)' > /dev/null 2>&1 && echo allowed || echo denied)
 echo "RESULT test=proxy phase=claims intruder on_default_network=$code_def on_java_network=$code_java raw_socket_runner_as_root=$raw reached_upstream=$(($(upstream_claims) - before))"
 [[ $code_def == 403 && $code_java == 403 && $(upstream_claims) == "$before" ]] || fail "a claim from a container that is not a runner was not refused"
+[[ $body_def == "claim refused" ]] || fail "the 403 body is not the generic one: $body_def"
 [[ $raw == denied ]] || fail "root in a runner container can open a raw socket: runners.yaml no longer drops NET_RAW, so the source address can be spoofed"
 
 # the proxy: hardened, healthy, quiet
@@ -270,7 +276,8 @@ idle() { polled_from "$1" tasks.linux-default && polled_from "$2" tasks.linux-ja
 wait_for 120 idle "$nip_def" "$nip_java" || fail "the new containers do not poll"
 restart_proxy
 echo "RESULT test=proxy phase=restart idle_runners_present=2 state=\"$state_line\""
-[[ $state_line == *"state restored"* && $state_line == *"tasks.linux-default: 0 runner(s) have claimed"* && $state_line == *"tasks.linux-java: 0 runner(s) have claimed"* ]] || fail "the restart did not restore an empty latch: $state_line"
+# the containers of the jobs that ended have left, but their addresses stay latched until DNS has not listed them for 30 s: they are in the state
+[[ $state_line == *"state restored"* ]] || fail "the restart did not restore its state: $state_line"
 end1=$(jobs_ended step/end)
 clean1=$(jobs_ended task/event/cleanup)
 release
@@ -278,6 +285,11 @@ claimed_both() { claimed_from "$1" tasks.linux-default && claimed_from "$2" task
 wait_for "$TIMEOUT" claimed_both "$nip_def" "$nip_java" || fail "the idle runners that were present at a restart with state could not claim"
 hold
 echo "RESULT test=proxy phase=restart idle_runners_claimed_after_the_restart=yes"
+if [[ $nip_def != "$ip_def" && $nip_java != "$ip_java" ]]; then   # the addresses of the old containers are released after 30 s without DNS
+  old_released() { [[ $(count "$(plog_now)" "released $ip_def (tasks.linux-default)") -ge 1 && $(count "$(plog_now)" "released $ip_java (tasks.linux-java)") -ge 1 ]]; }
+  wait_for 90 old_released || fail "the addresses of the containers that left were not released"
+  echo "RESULT test=proxy phase=restart addresses_of_the_old_containers_released=yes"
+fi
 [[ $(claim_code "$n_def") == 403 ]] || fail "a runner that claimed after the restart could claim twice"
 
 # ---------------------------------------------------------------------------------------------
@@ -301,6 +313,45 @@ wait_for "$TIMEOUT" new_containers "$n_def" "$n_java" || fail "no new containers
 lip_def=$(ip_of "$n_def")
 lip_java=$(ip_of "$n_java")
 wait_for 120 idle "$lip_def" "$lip_java" || fail "the replacement runners do not poll"
+# savefail: the state cannot be written when the idle runners claim (a directory in the place of the temporary file of the state)
+echo "RESULT test=proxy phase=savefail idle_runners_present=2"
+tasks_before=$(($(tasks_run linux-default) + $(tasks_run linux-java)))
+claims_before=$(upstream_claims)
+vol sh -c "mkdir -p $state_dir/state.json.tmp && touch $state_dir/state.json.tmp/x"
+release
+# the first claim reaches the API, and its latch cannot be saved: it fails, and the task is not handed to the runner. The other claim is
+# refused without reaching the API (503), because no task is handed out while the state cannot be written
+not_saved() {
+  local log failed gated
+  log=$(plog_now)
+  failed=$(count "$log" "the task is not handed to the runner")
+  gated=$(count "$log" "refused: the state cannot be written")
+  [[ $failed -ge 1 && $((failed + gated)) -ge 2 ]]
+}
+wait_for 60 not_saved || fail "the claims of the idle runners were not failed although the state could not be written"
+hold
+[[ $(upstream_claims) -ge $((claims_before + 1)) ]] || fail "the claim did not reach the API: the phase tests nothing"
+vol test ! -e "$state_dir/state.json" || fail "a failed save left state.json, which is behind the latches in memory"
+vol test -e "$state_dir/.initialized" || fail "a failed save removed the state marker"
+unhealthy() { [[ $(probe "$i_def" curl -s -m 5 -o /dev/null -w '%{http_code}' http://token-proxy:8080/healthz || true) == 503 ]]; }
+wait_for 20 unhealthy || fail "the proxy that cannot write its state does not report unhealthy"
+sleep 5
+[[ $(($(tasks_run linux-default) + $(tasks_run linux-java))) -eq $tasks_before ]] || fail "a runner got a task although its latch could not be saved"
+echo "RESULT test=proxy phase=savefail runners_got_a_task=no state_json_removed=yes marker_kept=yes proxy_health=503"
+proxy_stop
+vol rm -rf "$state_dir/state.json.tmp"
+api_running 2   # two tasks run, as far as the API says
+proxy_start
+echo "RESULT test=proxy phase=savefail state=\"$state_line\""
+[[ $state_line == *"state lost"* && $state_line == *"tasks.linux-default: CircleCI reports 2 running task(s)"* ]] || fail "the start after a failed save was not the fail-safe one: $state_line"
+refused_now() { [[ $(count "$(plog_now)" "claim from $1 refused: this runner has already claimed") -ge 1 ]]; }
+refused_both() { refused_now "$1" && refused_now "$2"; }
+wait_for 60 refused_both "$lip_def" "$lip_java" || fail "a proxy that started after a failed save did not refuse the runners present"
+echo "RESULT test=proxy phase=savefail idle_runners_refused_after_the_next_start=yes"
+
+# ---------------------------------------------------------------------------------------------
+# lost: the state file is gone, its marker is not, and the API says that tasks run
+# ---------------------------------------------------------------------------------------------
 vol rm -f "$state_dir/state.json"
 vol test -e "$state_dir/.initialized" || fail "the state marker is missing"
 api_running 2   # two tasks run, as far as the API says
@@ -309,11 +360,15 @@ echo "RESULT test=proxy phase=lost state=\"$state_line\""
 [[ $state_line == *"state lost"* && $state_line == *"tasks.linux-default: CircleCI reports 2 running task(s)"* ]] || fail "a state without its file was not treated as lost, with the API's count: $state_line"
 claims2=$(upstream_claims)
 release
-refused_now() { [[ $(count "$(plog_now)" "claim from $1 refused: this runner has already claimed") -ge 1 ]]; }
-refused_both() { refused_now "$1" && refused_now "$2"; }
 wait_for 60 refused_both "$lip_def" "$lip_java" || fail "a proxy that lost its state while tasks run did not refuse the runners present"
 [[ $(upstream_claims) == "$claims2" ]] || fail "a claim reached the API through a proxy that lost its state"
 echo "RESULT test=proxy phase=lost idle_runners_refused=yes reached_upstream=0"
+# a refused runner keeps its container and polls on: it does not exit at the refusal (nor would it at a 401)
+refusals=$(count "$(plog_now)" "claim from $lip_def refused")
+sleep 12
+[[ $(dk inspect -f '{{.State.Status}}' "$n_def") == running && $(dk inspect -f '{{.State.Status}}' "$n_java") == running ]] || fail "a refused runner exited"
+[[ $(count "$(plog_now)" "claim from $lip_def refused") -gt $refusals ]] || fail "a refused runner does not poll on"
+echo "RESULT test=proxy phase=lost refused_runners_keep_polling=yes"
 
 # ---------------------------------------------------------------------------------------------
 # unknown: the scale call fails (a first start again): fail safe

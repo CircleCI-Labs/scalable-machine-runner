@@ -139,6 +139,6 @@ The helper checks the node, starts Swarm, creates the secrets, and deploys the s
 ## Next
 
 - [Install on Linux with Docker Swarm](install-linux.md): the same steps by hand, RHEL, and the release verification.
-- [Resource Classes](resource-classes.md): add classes (`linux-java` and `linux-hardened` are in `linux/stack/classes-extra.yaml`), and change sizes and replica counts.
+- [Resource Classes](resource-classes.md): add classes, and change sizes and replica counts. `linux-java` and `linux-hardened` are in `linux/stack/classes-extra.yaml`. A class is a service, its token secret `<service>-token` and its network, and the secret and the network are also listed on `token-proxy`, which finds its classes in its secrets: there is no variable to set.
 - [Security](security.md): choose between the default and the hardened class before you give a class to a team.
 - [Operations](operations.md): pin or roll back the runner version, rotate tokens, and run the cluster.

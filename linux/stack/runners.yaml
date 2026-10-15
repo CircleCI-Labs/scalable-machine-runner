@@ -233,7 +233,7 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
-      start_period: 10s
+      start_period: 30s   # a start asks CircleCI which runners hold a task, for all classes at once, for 25 s at most, before the proxy listens
     logging:
       driver: local
       options: {max-size: 20m, max-file: "3"}

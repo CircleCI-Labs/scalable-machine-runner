@@ -274,7 +274,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 40s   # a start asks CircleCI which runners hold a task, for all classes at once, for 25 s at most, before the proxy listens
     volumes:
       - type: volume
         source: proxy-state

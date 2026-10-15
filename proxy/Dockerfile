@@ -35,6 +35,6 @@ COPY --from=build /out/machine-runner-swarm-proxy /machine-runner-swarm-proxy
 COPY --from=build --chown=65534:65534 /out/state /state
 USER 65534:65534
 EXPOSE 8080
-HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 CMD ["/machine-runner-swarm-proxy", "-healthcheck"]
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 CMD ["/machine-runner-swarm-proxy", "-healthcheck"]
 ENTRYPOINT ["/machine-runner-swarm-proxy"]
 CMD ["-state-dir", "/state"]

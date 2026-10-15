@@ -92,6 +92,7 @@ Describe 'the stack files' {
         # the class tokens are the secrets of the proxy only: the proxy takes a class for every secret <service>-token that it holds
         $proxy | Should -Match '(?m)^      - source: windows-default-token\r?\n        target: windows-default-token'
         $proxy | Should -Not -Match 'MACHINE_RUNNER_SWARM_PROXY_CLASS_|(?m)^    environment:|runner-placeholder' -Because 'a class is a secret <service>-token of the proxy, and nothing else'
+        $proxy | Should -Match '(?m)^      start_period: (?:[4-9][0-9]|[0-9]{3,})s' -Because 'a start probes CircleCI for up to 25 s before the proxy listens'
     }
 
     It 'add the class of an add-on stack file to the token proxy with its secret and nothing else' {

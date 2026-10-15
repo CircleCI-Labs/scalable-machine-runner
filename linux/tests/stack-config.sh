@@ -161,6 +161,7 @@ else
     echo "  token-proxy: no class variable and no placeholder secret: the proxy takes a class for every secret <service>-token that it holds (its secrets and networks are all that a class needs)"
     problems=$((problems + 1))
   fi
+  check token-proxy 'a start_period of 30 s or more (a start probes CircleCI for up to 25 s before the proxy listens)' '^      start_period: ([3-9][0-9]|[0-9]{3,})s$'
   m=$(awk '/^    secrets:$/ { f = 1; next } /^    [a-z]/ { f = 0 } f && /^      - source: /' <<< "$block" | wc -l)
   if [[ $m -ne ${#proxied[@]} ]]; then
     echo "  token-proxy: $m secret(s), expected ${#proxied[@]} (the token of every proxied class, and no other secret)"

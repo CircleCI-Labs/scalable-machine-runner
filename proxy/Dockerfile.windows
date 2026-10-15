@@ -27,6 +27,6 @@ LABEL org.opencontainers.image.title="machine-runner-swarm-proxy" `
 COPY machine-runner-swarm-proxy.exe C:/machine-runner-swarm-proxy.exe
 USER ContainerAdministrator
 EXPOSE 8080
-HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 CMD ["C:\\machine-runner-swarm-proxy.exe", "-healthcheck"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=40s --retries=3 CMD ["C:\\machine-runner-swarm-proxy.exe", "-healthcheck"]
 ENTRYPOINT ["C:\\machine-runner-swarm-proxy.exe"]
 CMD ["-state-dir", "C:\\state"]

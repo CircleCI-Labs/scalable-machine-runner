@@ -20,9 +20,10 @@
 # (exit 80 for a bad value, 1 for a missing config file).
 #
 # Environment: MACHINE_RUNNER_SWARM_JOB_USER  default circleci (created with uid 2001 if missing)
-#              MACHINE_RUNNER_SWARM_JOB_SUDO  default true; false removes the job user's sudo rights in this container and
-#                                             steps jobs down with setpriv --no-new-privs, even when the image has sudo:
-#                                             Swarm ignores no-new-privileges, so a setuid binary could otherwise still elevate
+#              MACHINE_RUNNER_SWARM_JOB_SUDO  default true; false steps jobs down with setpriv --no-new-privs, even when the image has
+#                                             sudo, and edits no file: the kernel flag is inherited by everything the job starts and
+#                                             cannot be cleared, so sudo, su and any other setuid binary cannot raise the job user to
+#                                             root. Swarm ignores no-new-privileges, so the flag comes from the step-down itself
 #              MACHINE_RUNNER_SWARM_REQUIRE_MICROVM  default false; true exits 80 unless this container runs in a Kata Containers
 #                                             microVM (microvm.yaml sets it: a node that silently uses runc must not run those classes),
 #                                             and downloads the runner into the container (see above)
@@ -125,21 +126,15 @@ juid=$(id -u "$job")
 jgid=$(id -g "$job")
 jhome=$(getent passwd "$job" | cut -d: -f6)
 
-# MACHINE_RUNNER_SWARM_JOB_SUDO=false: no sudo group membership, no sudoers rule naming the user, its groups or ALL.
-# sudo -l then has to agree, otherwise the container does not start (e.g. a rule through an alias).
-if [ "$sudo_ok" = false ]; then
-  sed -i -E "/^(sudo|wheel|admin):/{s/([:,])$job(,|\$)/\1\2/;s/:,/:/;s/,\$//}" /etc/group
-  pat="^[[:space:]]*($job|%$(id -Gn "$job" | sed 's/ /|%/g')|#$juid|ALL)[[:space:],]"
-  for f in /etc/sudoers /etc/sudoers.d/*; do
-    if [ -f "$f" ]; then sed -i -E "/$pat/d" "$f"; fi
-  done
-  if has sudo; then
-    case $(LC_ALL=C sudo -n -l -U "$job" 2>&1) in
-      *"not allowed to run sudo"*) ;;
-      *) die "could not remove every sudo right of $job; check /etc/sudoers and /etc/sudoers.d" ;;
-    esac
-  fi
-fi
+# The runner (uid 2000) cannot remove files the job user created, so its cleanup of the working directory
+# fails ("failed to remove working directory"); a single-task container is thrown away anyway.
+export CIRCLECI_RUNNER_CLEANUP_WORK_DIR="${CIRCLECI_RUNNER_CLEANUP_WORK_DIR:-false}"
+# The runner writes the task agent, the job user runs it and owns the working directory.
+export CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY="${CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY:-/var/lib/circleci-runner/agent}"
+export CIRCLECI_RUNNER_WORK_DIR="${CIRCLECI_RUNNER_WORK_DIR:-/var/opt/circleci/workdir}"
+install -d -m 0755 -o 2000 -g 2000 "$CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY"
+install -d -m 0750 -o "$juid" -g "$jgid" "$CIRCLECI_RUNNER_WORK_DIR"
+install -d -m 0755 -o "$juid" -g "$jgid" /var/opt/circleci   # the parent too: the working directory is recreated
 
 # The runner may sudo to the job user only. PATH comes from the image (not secure_path) and the
 # image's environment variables survive the step-down (JAVA_HOME, LANG, proxies), but never the token.
@@ -150,27 +145,24 @@ if [ "$step" = sudo ]; then
     echo 'Defaults:#2000 !secure_path'
     echo "Defaults:#2000 env_keep += \"CIRCLECI_RUNNER_NAME $keep\""
     echo "#2000 ALL=($job) NOPASSWD: ALL"
-    if [ "${created:-}" = yes ] && [ "$sudo_ok" = true ]; then echo "$job ALL=(ALL) NOPASSWD: ALL"; fi
+    if [ "${created:-}" = yes ]; then echo "$job ALL=(ALL) NOPASSWD: ALL"; fi
   } > /etc/sudoers.d/90-circleci-runner
   chmod 0440 /etc/sudoers.d/90-circleci-runner
   CIRCLECI_RUNNER_COMMAND_PREFIX=$(printf '["sudo","-niHu","%s","--"]' "$job")
 else
+  # The task agent runs with the environment of the runner, so the setpriv prefix removes what must not reach a job: the runner settings
+  # (CIRCLECI_RUNNER_*, among them the API URL and the prefix itself) and the settings of this stack (MACHINE_RUNNER_SWARM_*), as sudo does
+  # with its reset environment. CIRCLECI_RUNNER_NAME stays (the task agent shows it). What the image sets (JAVA_HOME, LANG, proxies) stays.
+  unset_args=
+  for v in $(env | sed -n -E 's/^((CIRCLECI_RUNNER|MACHINE_RUNNER_SWARM)_[A-Za-z0-9_]*)=.*/\1/p') CIRCLECI_RUNNER_COMMAND_PREFIX; do
+    case $v in CIRCLECI_RUNNER_NAME) ;; *) unset_args="$unset_args\"-u\",\"$v\"," ;; esac
+  done
   nnp_arg=
   if [ "$nnp" = yes ]; then nnp_arg='"--no-new-privs",'; fi
-  CIRCLECI_RUNNER_COMMAND_PREFIX=$(printf '["setpriv","--reuid=%s","--regid=%s","--init-groups","--inh-caps=-all","--ambient-caps=-all",%s"--","env","HOME=%s","USER=%s","LOGNAME=%s"]' \
-    "$juid" "$jgid" "$nnp_arg" "$jhome" "$job" "$job")
+  CIRCLECI_RUNNER_COMMAND_PREFIX=$(printf '["setpriv","--reuid=%s","--regid=%s","--init-groups","--inh-caps=-all","--ambient-caps=-all",%s"--","env",%s"HOME=%s","USER=%s","LOGNAME=%s"]' \
+    "$juid" "$jgid" "$nnp_arg" "$unset_args" "$jhome" "$job" "$job")
 fi
 export CIRCLECI_RUNNER_COMMAND_PREFIX
-
-# The runner (uid 2000) cannot remove files the job user created, so its cleanup of the working directory
-# fails ("failed to remove working directory"); a single-task container is thrown away anyway.
-export CIRCLECI_RUNNER_CLEANUP_WORK_DIR="${CIRCLECI_RUNNER_CLEANUP_WORK_DIR:-false}"
-# The runner writes the task agent, the job user runs it and owns the working directory.
-export CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY="${CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY:-/var/lib/circleci-runner/agent}"
-export CIRCLECI_RUNNER_WORK_DIR="${CIRCLECI_RUNNER_WORK_DIR:-/var/opt/circleci/workdir}"
-install -d -m 0755 -o 2000 -g 2000 "$CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY"
-install -d -m 0750 -o "$juid" -g "$jgid" "$CIRCLECI_RUNNER_WORK_DIR"
-install -d -m 0755 -o "$juid" -g "$jgid" /var/opt/circleci   # the parent too: the working directory is recreated
 
 # Docker-build pattern: let the job user use a bind-mounted host Docker socket, unless it is root's.
 sock=/var/run/docker.sock

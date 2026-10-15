@@ -58,6 +58,8 @@ EOF
 echo "JOB uid=$(id -u) user=$(id -un) home=$HOME"
 echo "JOB caps=$(grep -E '^Cap(Prm|Eff|Amb)' /proc/self/status | tr '\n\t' '  ')"
 echo "JOB token=${CIRCLECI_RUNNER_API_AUTH_TOKEN:-unset} java=${JAVA_HOME:-unset} name=${CIRCLECI_RUNNER_NAME:-unset}"
+# the settings of the runner and of the stack: only the runner name may reach the job
+echo "JOB settings=$(env | cut -d= -f1 | grep -E '^(CIRCLECI_RUNNER|MACHINE_RUNNER_SWARM)_' | grep -vx CIRCLECI_RUNNER_NAME | tr '\n' ' ')"
 echo "JOB path=$PATH"
 echo "JOB no_new_privs=$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' /proc/self/status)"
 # a setuid-root binary (the test makes a copy of setpriv): its effective uid is root's unless the kernel ignores the setuid bit
@@ -325,6 +327,7 @@ dist_flip() { ln -s "versions/$1" /opt/machine-runner-swarm/.current.new && mv -
   [[ $output == *'CIRCLECI_RUNNER_COMMAND_PREFIX=["sudo","-niHu","circleci","--"]'* ]]
   [[ $output == *"JOB uid="*" user=circleci home=/home/circleci"* ]]
   [[ $output == *"JOB token=unset java=/opt/test-jdk name=unit-1"* ]]
+  [[ $output == *"JOB settings="$'\n'* ]]
   [[ $output == *"JOB caps=CapPrm: 0000000000000000 CapEff: 0000000000000000 CapAmb: 0000000000000000"* ]]
   [[ $output == *"RUNNER uid=2000"*"CapEff: 0000000000000000 CapAmb: 0000000000000000"* ]]
   [[ $output == *"opt_swarm_writable=no"* ]]
@@ -343,12 +346,19 @@ dist_flip() { ln -s "versions/$1" /opt/machine-runner-swarm/.current.new && mv -
   [[ $out != *"(root)"* ]] && [[ $out != *"(ALL"* ]]
 }
 
-@test "setpriv step-down (no sudo in the image): no capabilities, no sudo; the runner keeps only setuid/setgid" {
+@test "setpriv step-down (no sudo in the image): no capabilities, no sudo, no runner or stack settings; the runner keeps only setuid/setgid" {
   need setpriv
+  export JAVA_HOME=/opt/test-jdk CIRCLECI_RUNNER_NAME=unit-2 CIRCLECI_RUNNER_API_URL=http://token-proxy:8080 MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.13
   PATH=$(path_without sudo) STUB_JOB=1 run ep
   [ "$status" -eq 0 ]
   [[ $output == *"stepdown=setpriv"* ]]
   [[ $output == *'"setpriv","--reuid='* ]]
+  # the prefix unsets the settings by name (it cannot glob), and the job sees none of them, but the image's variables and the runner name
+  [[ $output == *'"-u","CIRCLECI_RUNNER_API_URL"'* ]]
+  [[ $output == *'"-u","MACHINE_RUNNER_SWARM_RUNNER_VERSION"'* ]]
+  [[ $output != *'"-u","CIRCLECI_RUNNER_NAME"'* ]]
+  [[ $output == *"JOB token=unset java=/opt/test-jdk name=unit-2"* ]]
+  [[ $output == *"JOB settings="$'\n'* ]]
   [[ $output == *"JOB uid="*" user=circleci home=/home/circleci"* ]]
   [[ $output == *"JOB caps=CapPrm: 0000000000000000 CapEff: 0000000000000000 CapAmb: 0000000000000000"* ]]
   [[ $output == *"JOB sudo=no"* ]]
@@ -370,63 +380,37 @@ dist_flip() { ln -s "versions/$1" /opt/machine-runner-swarm/.current.new && mv -
 # ---------------------------------------------------------------------------------------------
 # MACHINE_RUNNER_SWARM_JOB_SUDO=false (hardened)
 # ---------------------------------------------------------------------------------------------
-@test "hardened: removes the job user's sudo rights, keeps everyone else's, and still steps down" {
+@test "hardened: edits no sudo file and no group: sudo is still configured for the job user, and unusable under no-new-privs" {
   need sudo
+  need setpriv
   mkuser deploy
+  mkdir -p /tmp/swarm-test
   {
     echo 'circleci ALL=(ALL) NOPASSWD: ALL'
     echo 'deploy ALL=(ALL) NOPASSWD: ALL'
-    echo 'Defaults:circleci !requiretty'
+    echo 'User_Alias ADMINS = circleci'
+    echo 'ADMINS ALL=(ALL) NOPASSWD: ALL'
+    echo '%sudo ALL=(ALL) NOPASSWD: ALL'
   } > /etc/sudoers.d/60-test
   chmod 0440 /etc/sudoers.d/60-test
+  grep -q '^sudo:' /etc/group || echo 'sudo:x:3999:' >> /etc/group
+  sed -i "s/^\(sudo:[^:]*:[^:]*:\)\(.*\)$/\1circleci/" /etc/group
+  cp /etc/group /tmp/swarm-test/group.before
+  cp /etc/sudoers.d/60-test /tmp/swarm-test/sudoers.before
   MACHINE_RUNNER_SWARM_JOB_SUDO=false STUB_JOB=1 run ep
   [ "$status" -eq 0 ]
-  [[ $output == *"JOB sudo=no"* ]]
+  # no file was edited: the kernel flag is the mechanism, not a rewrite of the image's sudo configuration
+  [ "$(cat /tmp/swarm-test/sudoers.before)" = "$(cat /etc/sudoers.d/60-test)" ]
+  [ "$(grep '^sudo:' /etc/group)" = "$(grep '^sudo:' /tmp/swarm-test/group.before)" ]   # the entrypoint adds its own accounts, and nothing else
+  [[ $(sudo -n -l -U circleci 2>&1) == *"NOPASSWD: ALL"* ]]
+  # and the job cannot use any of it
   [[ $output == *"JOB uid="*" user=circleci"* ]]
-  [[ $output == *"JOB config=denied"* ]]
-  grep -q '^deploy ALL' /etc/sudoers.d/60-test
-  grep -q '^Defaults:circleci' /etc/sudoers.d/60-test
-  [[ $(sudo -n -l -U circleci 2>&1) == *"not allowed to run sudo"* ]]
-  [[ $(sudo -n -l -U deploy 2>&1) == *"may run the following commands"* ]]
-}
-
-@test "hardened: group memberships (sudo, wheel, admin), rules by uid (#n) and for ALL are removed too" {
-  need sudo
-  for g in sudo wheel admin; do
-    grep -q "^$g:" /etc/group || echo "$g:x:$((3900 + ${#g})):" >> /etc/group
-  done
-  mkuser circleci 1234 2>/dev/null || true
-  for g in sudo wheel admin; do sed -i "s/^\($g:[^:]*:[^:]*:\)\(.*\)$/\1circleci/" /etc/group; done
-  {
-    echo '%sudo ALL=(ALL) NOPASSWD: ALL'
-    echo '%wheel ALL=(ALL) NOPASSWD: ALL'
-    echo "#$(id -u circleci) ALL=(ALL) NOPASSWD: ALL"
-    echo 'ALL ALL=(ALL) NOPASSWD: /bin/true'
-  } > /etc/sudoers.d/62-more
-  chmod 0440 /etc/sudoers.d/62-more
-  MACHINE_RUNNER_SWARM_JOB_SUDO=false STUB_JOB=1 run ep
-  [ "$status" -eq 0 ]
+  [[ $output == *"JOB no_new_privs=1"* ]]
   [[ $output == *"JOB sudo=no"* ]]
-  groups=" $(id -Gn circleci) "
-  [[ $groups != *" sudo "* ]] && [[ $groups != *" wheel "* ]] && [[ $groups != *" admin "* ]]
+  [[ $output == *"JOB config=denied"* ]]
 }
 
-@test "hardened: exit 80 when a right cannot be removed (a rule through an alias, or a user list)" {
-  need sudo
-  printf 'User_Alias ADMINS = circleci\nADMINS ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/64-alias
-  chmod 0440 /etc/sudoers.d/64-alias
-  MACHINE_RUNNER_SWARM_JOB_SUDO=false run ep
-  [ "$status" -eq 80 ]
-  [[ $output == *"could not remove every sudo right"* ]]
-  [[ $output != *"ARGS="* ]]
-  rm -f /etc/sudoers.d/64-alias
-  printf 'other,circleci ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/65-list
-  chmod 0440 /etc/sudoers.d/65-list
-  MACHINE_RUNNER_SWARM_JOB_SUDO=false run ep
-  [ "$status" -eq 80 ]
-}
-
-@test "hardened: without sudo in the image there is nothing to remove" {
+@test "hardened: an image without sudo works too" {
   need setpriv
   PATH=$(path_without sudo) MACHINE_RUNNER_SWARM_JOB_SUDO=false STUB_JOB=1 run ep
   [ "$status" -eq 0 ]
@@ -449,6 +433,9 @@ dist_flip() { ln -s "versions/$1" /opt/machine-runner-swarm/.current.new && mv -
   [[ $output == *"JOB no_new_privs=1"* ]]
   [[ $output == *"JOB sudo=no"* ]]
   [[ $output == *"JOB caps=CapPrm: 0000000000000000 CapEff: 0000000000000000 CapAmb: 0000000000000000"* ]]
+  # neither the runner settings nor the stack settings reach the job (the runner name does)
+  [[ $output == *"JOB settings="$'\n'* ]]
+  [[ $output == *'"-u","MACHINE_RUNNER_SWARM_JOB_SUDO"'* ]]
   # the setuid-root copy of setpriv stays the job user (2001 or the image's circleci uid), not root
   [[ $output == *"JOB suid_euid="* ]]
   [[ $output != *"JOB suid_euid=0"* ]]

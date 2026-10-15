@@ -279,14 +279,6 @@ A hardened class (`MACHINE_RUNNER_SWARM_JOB_SUDO=false`) exits with code 80 and 
 
 **Fix.** Add the packages in a derived image. Refer to [What an image needs](images.md#what-an-image-needs).
 
-### Error: could not remove every sudo right
-
-A hardened class exits with code 80 and `could not remove every sudo right of <user>; check /etc/sudoers and /etc/sudoers.d`.
-
-**Cause.** The image grants sudo to the job user in a way that the entrypoint cannot remove. The entrypoint deletes only the rules whose first entry is the user, one of its groups, its numeric ID, or `ALL`. A rule that comes through a user alias, or from a list where the user is not first, such as `other,circleci ALL=...`, stays. The container refuses to start rather than run with sudo.
-
-**Fix.** Remove the rule in a derived image, or use an image that does not grant sudo.
-
 ### Error: failed to remove working directory, permission denied
 
 Every task fails. The runner log shows `failed to remove working directory before starting task` or `failed to remove working directory while cleaning up task`, each with `permission denied`. A `could not clean up task` line with the same error has the same cause.
@@ -321,7 +313,7 @@ Every `sudo` call in a job prints `unable to send audit message`.
 
 `apt-get install` fails with `Permission denied`, or `sudo` reports that the user may not run sudo.
 
-**Cause.** The hardened class has no sudo, by design.
+**Cause.** The hardened class steps jobs down with `setpriv --no-new-privs`, so `sudo` cannot raise the job user, by design.
 
 **Fix.** Build the tools into the image. Refer to [Bring your own image](images.md#linux-bring-your-own-image).
 

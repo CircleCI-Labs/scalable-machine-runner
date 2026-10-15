@@ -12,11 +12,13 @@
 #   linux-default, job WITHOUT using sudo   secret file, runner environment and own environment: denied
 #   linux-default, job WITH sudo            REPORTED. Root (sudo) can read the secret file, so the default
 #                                           class cannot protect the token
-#   linux-hardened                          denied everywhere, and sudo itself is unusable
+#   linux-hardened                          denied for a job that does not use sudo
 #   linux-hardened, through the step-down   the job runs the way the runner starts it (the entrypoint's setpriv
 #                                           prefix, from the runner's own environment): NoNewPrivs is set, so a
-#                                           setuid-root binary stays the job user and cannot reach the token.
-#                                           Swarm ignores no-new-privileges; the prefix supplies it
+#                                           setuid-root binary stays the job user and cannot reach the token, and
+#                                           sudo (still configured: the entrypoint edits no file) and su cannot elevate.
+#                                           Swarm ignores no-new-privileges; the prefix supplies it. The job sees no
+#                                           CIRCLECI_RUNNER_* or MACHINE_RUNNER_SWARM_* variable except the runner name
 #   control (no step-down)                  the same setuid-root binary run without the flag DOES reach the token
 #   control (root)                          the probe CAN see the sentinel, so "denied" is meaningful
 #
@@ -92,10 +94,11 @@ echo "RESULT test=token control user=root secret_file=$(kv secret_file "$control
 read -r hard_c hard_pid <<< "$(wait_runner linux-hardened)"
 hard_runner_user=$(idocker "$SWARM_TEST_MGR" exec "$hard_c" stat -c %U "/proc/$hard_pid")
 out_hard=$(printf 'RP=%s\nSENTINEL=%s\n%s\n' "$hard_pid" "$SENTINEL_TOKEN" "$probe" | cexec "$hard_c" circleci sh -s)
-hard_hostmsg=$(idocker "$SWARM_TEST_MGR" exec "$hard_c" sh -c 'LC_ALL=C sudo -n -l -U circleci 2>&1 | head -n 1')
+# The entrypoint edits no sudo file: the image's rule for the job user is still there, and no-new-privs is what makes it useless.
+hard_sudoers=$(idocker "$SWARM_TEST_MGR" exec "$hard_c" sh -c 'LC_ALL=C sudo -n -l -U circleci 2>&1' | tr '\n' ' ')
 echo "RESULT test=token class=linux-hardened job=circleci runner_user=$hard_runner_user"
-echo "RESULT test=token class=linux-hardened: secret_file=$(kv secret_file "$out_hard") runner_environ=$(kv runner_environ "$out_hard") own_environment=$(kv own_environment "$out_hard") sudo=$(kv sudo "$out_hard") opt_swarm_writable=$(kv opt_swarm_writable "$out_hard")"
-echo "       sudo -l -U circleci: $hard_hostmsg"
+echo "RESULT test=token class=linux-hardened: secret_file=$(kv secret_file "$out_hard") runner_environ=$(kv runner_environ "$out_hard") own_environment=$(kv own_environment "$out_hard") opt_swarm_writable=$(kv opt_swarm_writable "$out_hard") (a plain docker exec has no no-new-privs flag: sudo=$(kv sudo "$out_hard"), see the step-down below)"
+echo "       sudo -l -U circleci: $hard_sudoers"
 
 # --- linux-hardened: setuid binaries ---------------------------------------------------------
 # Swarm ignores no-new-privileges, and the hardened class keeps SETUID and SETGID in its bounding set for the
@@ -118,6 +121,7 @@ echo "whoami=$(id -un)"
 echo "uid=$(id -u)"
 echo "no_new_privs=$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' /proc/self/status)"
 echo "cap_eff=$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status)"
+echo "settings=$(env | cut -d= -f1 | grep -E '^(CIRCLECI_RUNNER|MACHINE_RUNNER_SWARM)_' | grep -vx CIRCLECI_RUNNER_NAME | tr '\n' ' ')"
 echo "suid_euid=$(/tmp/suid-setpriv --dump | sed -n 's/^euid:[[:space:]]*//p')"
 echo "suid_secret_file=$(sees /tmp/suid-setpriv --reuid=2000 --regid=2000 --clear-groups -- cat $secret)"
 echo "secret_file=$(sees cat $secret)"
@@ -131,7 +135,7 @@ out_nnp=$(printf 'SENTINEL=%s\n%s\n' "$SENTINEL_TOKEN" "$suid_probe" | idocker "
   --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid -- $prefix_words sh -s)
 # Without the step-down (docker exec -u circleci: no no-new-privs flag): what a setuid-root bug would give.
 out_nonnp=$(printf 'SENTINEL=%s\n%s\n' "$SENTINEL_TOKEN" "$suid_probe" | cexec "$hard_c" circleci sh -s)
-echo "RESULT test=token class=linux-hardened through_step_down: user=$(kv whoami "$out_nnp") no_new_privs=$(kv no_new_privs "$out_nnp") cap_eff=$(kv cap_eff "$out_nnp") suid_euid=$(kv suid_euid "$out_nnp") suid_secret_file=$(kv suid_secret_file "$out_nnp") secret_file=$(kv secret_file "$out_nnp") sudo=$(kv sudo "$out_nnp") su=$(kv su "$out_nnp") setuid_binaries_in_image=$(kv setuid_binaries "$out_nnp")"
+echo "RESULT test=token class=linux-hardened through_step_down: user=$(kv whoami "$out_nnp") no_new_privs=$(kv no_new_privs "$out_nnp") cap_eff=$(kv cap_eff "$out_nnp") suid_euid=$(kv suid_euid "$out_nnp") suid_secret_file=$(kv suid_secret_file "$out_nnp") secret_file=$(kv secret_file "$out_nnp") sudo=$(kv sudo "$out_nnp") su=$(kv su "$out_nnp") setuid_binaries_in_image=$(kv setuid_binaries "$out_nnp") settings_in_the_job_env=\"$(kv settings "$out_nnp")\""
 echo "RESULT test=token class=linux-hardened control_without_no_new_privs: no_new_privs=$(kv no_new_privs "$out_nonnp") suid_euid=$(kv suid_euid "$out_nonnp") suid_secret_file=$(kv suid_secret_file "$out_nonnp") (what a setuid-root bug would reach without the flag)"
 
 # --- assertions ------------------------------------------------------------------------------
@@ -143,7 +147,7 @@ echo "RESULT test=token class=linux-hardened control_without_no_new_privs: no_ne
 [[ $(kv opt_swarm_writable "$out_def") == no && $(kv opt_swarm_writable "$out_hard") == no ]] || fail "a job can write /opt/machine-runner-swarm"
 [[ $(kv secret_file "$out_hard") == denied && $(kv runner_environ "$out_hard") == denied && $(kv own_environment "$out_hard") == denied ]] ||
   fail "linux-hardened: a job can reach the token"
-[[ $(kv sudo "$out_hard") == unusable* && $hard_hostmsg == *"not allowed to run sudo"* ]] || fail "linux-hardened: the job user can still use sudo"
+[[ $hard_sudoers == *"NOPASSWD: ALL"* ]] || fail "linux-hardened: the sudo rule of the job user was removed, but no-new-privs is meant to be the mechanism ($hard_sudoers)"
 [[ $(kv sudo "$out_def") == works ]] || fail "linux-default: the job user has no sudo (expected passwordless sudo by default)"
 
 [[ $(kv no_new_privs "$out_nnp") == 1 && $(kv cap_eff "$out_nnp") == 0000000000000000 ]] || fail "linux-hardened: the job does not run with no-new-privs and no capabilities"
@@ -151,6 +155,7 @@ echo "RESULT test=token class=linux-hardened control_without_no_new_privs: no_ne
   fail "linux-hardened: a setuid-root binary run by the job user became root"
 [[ $(kv suid_secret_file "$out_nnp") == denied && $(kv secret_file "$out_nnp") == denied ]] || fail "linux-hardened: a setuid binary reached the token"
 [[ $(kv sudo "$out_nnp") == unusable && $(kv su "$out_nnp") == unusable ]] || fail "linux-hardened: sudo or su works for the job user"
+[[ -z $(kv settings "$out_nnp") ]] || fail "linux-hardened: runner or stack settings reach the job ($(kv settings "$out_nnp"))"
 [[ $(kv no_new_privs "$out_nonnp") == 0 && $(kv suid_euid "$out_nonnp") == 0 && $(kv suid_secret_file "$out_nonnp") == READABLE ]] ||
   fail "the setuid control did not reach the token without the flag: the probe is blind"
 
@@ -159,4 +164,4 @@ if [[ $(kv sudo_secret_file "$out_def") == READABLE ]]; then
 else
   finding="UNEXPECTED: sudo did not expose the token in the default class; update the docs"
 fi
-pass "no sudo: denied; hardened: denied, sudo unusable, and a setuid-root binary stays the job user under no-new-privs (control without the flag reaches the token); finding: $finding"
+pass "no sudo: denied; hardened: denied, and under no-new-privs sudo and su are unusable and a setuid-root binary stays the job user (control without the flag reaches the token), with no runner or stack setting in the job; finding: $finding"

@@ -90,6 +90,13 @@
       "groupName": "CI images"
     },
     {
+      "description": "The base images of the token proxy image (distroless static in proxy/Dockerfile, the Nano Server digests of ci/Build-ProxyImage.ps1) are inside what users run. A new digest is a fix, so that it makes a release: with the default ci(deps) type cliff.toml skips it, and the published image keeps stale base layers until an unrelated feat or fix lands. This rule comes after 'CI images' and before 'Go toolchain', which still wins for the golang builder image.",
+      "matchDatasources": ["docker"],
+      "matchFileNames": ["proxy/**", "ci/Build-ProxyImage.ps1"],
+      "groupName": "proxy image bases",
+      "semanticCommitType": "fix"
+    },
+    {
       "description": "The tools that the CI jobs download. Most come with a SHA-256 value (see the checksum rule below).",
       "matchManagers": ["custom.regex"],
       "matchDatasources": ["github-releases", "pypi", "node-version", "go"],

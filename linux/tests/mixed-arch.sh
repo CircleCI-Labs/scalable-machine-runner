@@ -236,7 +236,9 @@ check_install() {
   [[ ${SHA[$v/amd64]} != "${SHA[$v/arm64]}" ]] || fail "the amd64 and the arm64 tarball of $v are the same file"
   [[ $(docker exec "$n" cat "$d/VERSION") == "$v" ]] || fail "$n: VERSION of $v"
   [[ -z $(docker exec "$n" find "$vol" ! -type l \( ! -user root -o -perm /022 \)) ]] || fail "$n: a file of the volume is not root-owned or is group/world writable"
-  dist_logs "$n" | grep -q "downloading circleci-runner $v linux/$a\$" || fail "$n: its distributor did not download the $a build of $v"
+  # the log in a variable first: grep -q ends at its first match, the producer of a pipe then dies of SIGPIPE, and pipefail reports that
+  local log; log=$(dist_logs "$n")
+  grep -q "downloading circleci-runner $v linux/$a\$" <<< "$log" || fail "$n: its distributor did not download the $a build of $v"
 }
 
 # ---------------------------------------------------------------------------------------------

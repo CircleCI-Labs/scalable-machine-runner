@@ -15,8 +15,8 @@
 #   --releasable  true when a commit of the push would make a release (ci/changed-files.sh --releasable). Only main looks at
 #                 it. Without it the answer is true.
 #
-# Environment: CIRCLE_BRANCH, and E2E_RUNNER_TOKEN_LINUX and E2E_RUNNER_TOKEN_WINDOWS (only present with the
-# context). Token values are tested for presence and never printed.
+# Environment: CIRCLE_BRANCH, CIRCLE_PULL_REQUEST (the pull request of the push, when it has one), and E2E_RUNNER_TOKEN_LINUX and
+# E2E_RUNNER_TOKEN_WINDOWS (only present with the context). Token values are tested for presence and never printed.
 #
 # Rules (docs/ci.md, "When things run, and the setup gate"):
 #   e2e branch   main or smr-swarm/*: the only branches that may use the e2e tokens
@@ -33,6 +33,8 @@
 #   publish      branch main, and not docs-only: the jobs that push the token proxy image to Docker Hub (sha-<12> only) run, with the
 #                context scalable-machine-runner-dockerhub. No other branch, a pull request included, can reach it. It does not need the
 #                e2e tokens (the image of main is published whatever the e2e says), and the release requires the publication
+#   pull-request CIRCLE_PULL_REQUEST is the address of a GitHub pull request: the job docs-site-comment runs (it holds the context that can
+#                comment on a pull request, and no other job does)
 #   docs-only    --changed lists at least one path and every path is documentation (docs/, site/, *.md, but not
 #                docs/microvm.md, which linux/tests/microvm.sh reads), --full is false, and on main no commit of the push
 #                would make a release (cliff.toml: a `fix(docs):` commit releases, a `docs:` commit does not). It
@@ -85,7 +87,7 @@ if [ "${scan}" = true ]; then
     echo "docs-only:   false"
     echo "publish:     false"
   } >&2
-  jq -n -c '{"full-suite": false, "windows": false, "proxy-image": false, "microvm": false, "e2e-linux": false, "e2e-windows": false, "release": false, "strict": false, "publish": false, "docs-only": false, "security-scan": true}'
+  jq -n -c '{"full-suite": false, "windows": false, "proxy-image": false, "microvm": false, "e2e-linux": false, "e2e-windows": false, "release": false, "strict": false, "publish": false, "pull-request": false, "docs-only": false, "security-scan": true}'
   exit 0
 fi
 
@@ -133,6 +135,11 @@ else
   echo "release:     false (only main with both e2e tokens releases)" >&2
   echo "strict:      false (a missing publishing credential skips the publication with a message)" >&2
 fi
+
+# A push whose branch has a pull request (CircleCI sets CIRCLE_PULL_REQUEST only when the pull request exists at the time of the push)
+pull_request=false
+if [[ "${CIRCLE_PULL_REQUEST:-}" =~ ^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$ ]]; then pull_request=true; fi
+echo "pull-request: ${pull_request} (${CIRCLE_PULL_REQUEST:-this push has no pull request})" >&2
 
 # The changed paths, one per line (ci/changed-files.sh). Empty when they are not known.
 changed=()
@@ -203,5 +210,5 @@ fi
 
 jq -n -c --argjson full "${full}" --argjson win_suite "${windows_suite}" --argjson proxy_image "${proxy_image}" --argjson microvm "${microvm}" \
   --argjson linux "${linux}" --argjson windows "${windows}" --argjson release "${release}" --argjson strict "${strict}" \
-  --argjson publish "${publish}" --argjson docs "${docs_only}" \
-  '{"full-suite": $full, "windows": $win_suite, "proxy-image": $proxy_image, "microvm": $microvm, "e2e-linux": $linux, "e2e-windows": $windows, "release": $release, "strict": $strict, "publish": $publish, "docs-only": $docs, "security-scan": false}'
+  --argjson publish "${publish}" --argjson pr "${pull_request}" --argjson docs "${docs_only}" \
+  '{"full-suite": $full, "windows": $win_suite, "proxy-image": $proxy_image, "microvm": $microvm, "e2e-linux": $linux, "e2e-windows": $windows, "release": $release, "strict": $strict, "publish": $publish, "pull-request": $pr, "docs-only": $docs, "security-scan": false}'

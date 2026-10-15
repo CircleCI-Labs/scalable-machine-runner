@@ -23,17 +23,19 @@ rows=0
 # the rule and checked on every row: publish (main, not docs-only, not a scan), strict (main with both e2e tokens, a docs-only change included)
 # and the three heavy suites windows, proxy-image and microvm (all on when the changed files are not known; all off for a docs-only change or a scan).
 # HEAVY (a global, "windows proxy-image microvm") replaces the last three when the row gives changed files.
+# PULL (a global) is the CIRCLE_PULL_REQUEST of the push; the last value, pull-request, is true when it is a GitHub pull request address.
 # GATE_ARGS (a global) adds arguments to the call.
 GATE_ARGS=()
 HEAVY=
+PULL=
 expect() {
   local name=$1 branch=$2 e2e=$3 full=$4 tl=$5 tw=$6 want=$7 got out
   rows=$((rows + 1))
   [ "$(wc -w <<< "$want")" -ne 4 ] || want="$want false false"
-  out=$(CIRCLE_BRANCH=$branch E2E_RUNNER_TOKEN_LINUX=$tl E2E_RUNNER_TOKEN_WINDOWS=$tw "$gate" --e2e "$e2e" --full "$full" "${GATE_ARGS[@]}" 2>"$err") || {
+  out=$(CIRCLE_BRANCH=$branch CIRCLE_PULL_REQUEST=$PULL E2E_RUNNER_TOKEN_LINUX=$tl E2E_RUNNER_TOKEN_WINDOWS=$tw "$gate" --e2e "$e2e" --full "$full" "${GATE_ARGS[@]}" 2>"$err") || {
     echo "FAIL ${name}: the gate exited non-zero"; cat "$err"; failed=$((failed + 1)); return
   }
-  got=$(jq -r '[.["full-suite"], .["e2e-linux"], .["e2e-windows"], .release, .["docs-only"], .["security-scan"], .publish, .strict, .windows, .["proxy-image"], .microvm] | map(tostring) | join(" ")' <<< "$out")
+  got=$(jq -r '[.["full-suite"], .["e2e-linux"], .["e2e-windows"], .release, .["docs-only"], .["security-scan"], .publish, .strict, .windows, .["proxy-image"], .microvm, .["pull-request"]] | map(tostring) | join(" ")' <<< "$out")
   # publish: main, and neither a docs-only change nor a scan (the last two values of want), whatever the tokens and the e2e flags say
   pub=false
   if [ "$branch" = main ] && [ "$(awk '{ print $5 $6 }' <<< "$want")" = falsefalse ]; then pub=true; fi
@@ -41,7 +43,9 @@ expect() {
   if [ "$branch" = main ] && [ "$e2e" = true ] && [ -n "$tl" ] && [ -n "$tw" ] && [ "$(awk '{ print $6 }' <<< "$want")" = false ]; then strict=true; fi
   heavy=${HEAVY:-"true true true"}
   if [ -z "$HEAVY" ] && [ "$(awk '{ print $5 $6 }' <<< "$want")" != falsefalse ]; then heavy="false false false"; fi
-  want="$want $pub $strict $heavy"
+  pr=false
+  if [[ "$PULL" =~ ^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$ ]] && [ "$(awk '{ print $6 }' <<< "$want")" != true ]; then pr=true; fi
+  want="$want $pub $strict $heavy $pr"
   if [ "$got" != "$want" ]; then
     echo "FAIL ${name}: branch='${branch}' e2e=${e2e} full=${full} ${GATE_ARGS[*]:-} -> '${got}', want '${want}'"
     failed=$((failed + 1))
@@ -139,6 +143,22 @@ GATE_ARGS=(--changed "$changed")
 printf 'docs/ci.md\n' > "$changed"
 expect "main: --releasable not given counts as true" main       true   false  "$T"   "$T"     "true true true true"
 GATE_ARGS=()
+
+# a pull request: the address that CircleCI puts in CIRCLE_PULL_REQUEST (docs-site-comment runs). Nothing else counts
+PULL=https://github.com/CircleCI-Labs/scalable-machine-runner/pull/2
+expect "a pull request on a feature branch"       feature/x            false  false  ""     ""       "false false false false"
+expect "a pull request on main (a merge queue?)"  main                 true   false  "$T"   "$T"     "true true true true"
+PULL=https://example.com/o/r/pull/2
+expect "a pull request address of another host"   feature/x            false  false  ""     ""       "false false false false"
+PULL=https://github.com/o/r/pull/
+expect "a pull request address with no number"    feature/x            false  false  ""     ""       "false false false false"
+PULL="https://github.com/o/r/pull/2 and more"
+expect "a pull request address with a tail"       feature/x            false  false  ""     ""       "false false false false"
+PULL=https://github.com/o/r/pull/2
+GATE_ARGS=(--scan true)
+expect "a scan ignores the pull request"         feature/x            false  false  ""     ""       "false false false false false true"
+GATE_ARGS=()
+PULL=
 
 # security-scan: the workflow of the schedule. Nothing of the ci workflow runs, on any branch, with or without tokens, with --full
 GATE_ARGS=(--scan true)

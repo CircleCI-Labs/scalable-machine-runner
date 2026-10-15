@@ -4,10 +4,15 @@
 #
 #   site/preview-comment.sh
 #
+# The job docs-site-comment runs it, and no other job does: it is the one job with the context scalable-machine-runner-pr-comments, so
+# the token is in no step of the docs build. The build job (docs-site-build) hands the address over in a workspace.
+#
 # Environment:
 #   GITHUB_PR_COMMENT_TOKEN   from the context scalable-machine-runner-pr-comments (a fine-grained token with Pull requests:
 #                             read and write, for this repository only). Without it the script does nothing and says nothing.
 #   CIRCLE_PULL_REQUEST       the pull request of the build (CircleCI sets it when the branch has one). Without it, no comment.
+#   PREVIEW_DIR               a directory with preview-url.txt and job-url.txt, written by the job that built the preview. Without it the
+#                             address is the one of this job (site/preview.sh url), for a run in the job that built it
 #   CIRCLE_PROJECT_USERNAME, CIRCLE_PROJECT_REPONAME, CIRCLE_SHA1, CIRCLE_BUILD_URL, CIRCLE_WORKFLOW_JOB_ID
 #   GITHUB_API_URL            the API (default https://api.github.com), for the test
 #
@@ -41,9 +46,15 @@ gh_api() {
   printf 'header = "Authorization: Bearer %s"\n' "${GITHUB_PR_COMMENT_TOKEN}" | curl "${args[@]}" "${api}${path}"
 }
 
-preview=$("${here}/preview.sh" url) || skip "no preview address"
+if [ -n "${PREVIEW_DIR:-}" ]; then
+  preview=$(cat "${PREVIEW_DIR}/preview-url.txt" 2> /dev/null) && [ -n "${preview}" ] || skip "no preview address in ${PREVIEW_DIR}"
+  build_job=$(cat "${PREVIEW_DIR}/job-url.txt" 2> /dev/null || true)
+else
+  preview=$("${here}/preview.sh" url) || skip "no preview address"
+  build_job=${CIRCLE_BUILD_URL:-}
+fi
 sha=${CIRCLE_SHA1:-unknown}
-jq -n --arg marker "${marker}" --arg url "${preview}" --arg sha "${sha:0:7}" --arg job "${CIRCLE_BUILD_URL:-}" \
+jq -n --arg marker "${marker}" --arg url "${preview}" --arg sha "${sha:0:7}" --arg job "${build_job}" \
   '{body: ($marker + "\n**Docs preview** of " + $sha + ": " + $url + "\n\nBuilt by the CircleCI job " + $job +
     ". The artifacts expire (30 days by default), and the link needs access to the CircleCI project. Search and the diagrams may not work from the artifacts.")}' \
   > "${tmp}/body.json"

@@ -82,6 +82,22 @@ else
   echo "FAIL the comment body: $body"; failed=$((failed + 1))
 fi
 
+# the address comes from the job that built the preview (docs-site-comment is a job of its own)
+echo '[]' > "$FAKE_GET"
+mkdir "$tmp/preview"
+echo "https://output.circle-artifacts.com/output/job/aaaa/artifacts/0/docs-site-preview/index.html" > "$tmp/preview/preview-url.txt"
+echo "https://circleci.com/gh/o/r/41" > "$tmp/preview/job-url.txt"
+PREVIEW_DIR="$tmp/preview" run "the address of the build job is the one in the comment" 0 "$list
+$post" "$sentinel" "$pr"
+body=$(jq -r .body "$FAKE_LOG.body.POST")
+rows=$((rows + 1))
+if grep -qF 'job/aaaa/artifacts/0/docs-site-preview/index.html' <<< "$body" && grep -qF 'https://circleci.com/gh/o/r/41' <<< "$body" && ! grep -qF '3df8fe81' <<< "$body"; then
+  echo "ok   the comment names the build job, not the comment job"
+else
+  echo "FAIL the comment body: $body"; failed=$((failed + 1))
+fi
+PREVIEW_DIR="$tmp/nonexistent" run "no preview address in the directory: skipped, nothing is posted" 0 "" "$sentinel" "$pr"
+
 echo '[{"id": 7, "body": "an ordinary comment"}, {"id": 555, "body": "<!-- scalable-machine-runner-docs-preview -->\nold"}, {"id": 556, "body": "<!-- scalable-machine-runner-docs-preview -->\nolder"}]' > "$FAKE_GET"
 run "a comment with the marker exists: it is updated, nothing is posted" 0 "$list
 PATCH /repos/o/r/issues/comments/555" "$sentinel" "$pr"

@@ -46,6 +46,12 @@ parameters:
     type: boolean
     default: false
     description: linux-microvm, the one job on the Android machine image. Same rule as windows.
+  pull-request:
+    type: boolean
+    default: false
+    description: >
+      The push has a pull request (CIRCLE_PULL_REQUEST, which the setup phase reads). It switches docs-site-comment on, the one job with the
+      context that can comment on a pull request.
   strict:
     type: boolean
     default: false
@@ -1209,7 +1215,8 @@ jobs:
             fi
             # A change of documentation only runs the lint jobs and the docs site build. `process` leaves the expression filters
             # in the compiled config, so read them from the source: a job of ci with no filter must be a lint job or the docs
-            # site build, and every other filter is `not pipeline.parameters.docs-only` or a parameter that the setup gate
+            # site build (and docs-site-comment, which a docs pull request needs most: its filter is the parameter pull-request),
+            # and every other filter is `not pipeline.parameters.docs-only` or a parameter that the setup gate
             # turns off for a docs-only change (full-suite, windows, proxy-image, microvm, e2e-linux, e2e-windows, release, publish),
             # alone or with `and not pipeline.parameters.publish` (the jobs that the publish variants replace on main). A new job
             # without a filter would otherwise run on every docs pull request.
@@ -1221,7 +1228,7 @@ jobs:
                "pipeline.parameters.proxy-image and not pipeline.parameters.publish",
                "pipeline.parameters.full-suite and not pipeline.parameters.publish"] as $gated
               | map(if type == "string" then {key: ., value: {}} else to_entries[0] end)
-              | map(select(.key | startswith("lint-") or . == "docs-site-build" | not))
+              | map(select(.key | startswith("lint-") or . == "docs-site-build" or . == "docs-site-comment" | not))
               | map(select((.value.filters // "") | IN($gated[]) | not))
               | map(.key)
               | if length > 0
@@ -1251,7 +1258,7 @@ jobs:
             # jobs. A job that nothing else requires and that the lock does not list is missing,
             # unless it is one of the optional jobs named here.
             yq -o=json '.workflows.ci.jobs' /tmp/compiled.yml | jq -r '
-              ["linux-mixed-arch", "proxy-image-edge"] as $optional
+              ["linux-mixed-arch", "proxy-image-edge", "docs-site-comment"] as $optional
               | map(if type == "string" then {key: ., value: {}} else to_entries[0] end) as $jobs
               | ($jobs | map(select(.key == "release"))[0].value.requires[0]) as $gate
               | ($jobs | map(select(.key == $gate))[0].value.requires) as $required
@@ -1304,10 +1311,10 @@ jobs:
     description: >
       The docs site builds and its links work: site/stage.sh, hugo --minify and site/check.sh. The release requires it.
       The site is stored as one artifact, docs-site.tgz. Then a preview of it, with relative URLs, is stored as the
-      artifacts docs-site-preview (site/preview.sh), and its address is printed in the job output, kept in
-      docs-site/preview-url.txt, and, when the context scalable-machine-runner-pr-comments holds a
-      GITHUB_PR_COMMENT_TOKEN, posted as ONE comment on the pull request (site/preview-comment.sh). Without the
-      token the comment is skipped, and nothing else changes. The publication is the job docs-site-publish, of its own workflow.
+      artifacts docs-site-preview (site/preview.sh), and its address is printed in the job output and kept in
+      docs-site/preview-url.txt, which docs-site-comment posts on the pull request. The job has NO context: no token is in the
+      environment of Hugo, lychee, the Go modules or the scripts of site/, and an API pipeline (full: true) is never refused for a
+      context. The publication is the job docs-site-publish, of its own workflow.
     docker:
       - image: cimg/go:1.27.2@sha256:d370371192063607c1237351759d8ab0c49f5e37ab7c3bd7553b09c8b62247d5
     resource_class: small
@@ -1334,9 +1341,28 @@ jobs:
           name: The address of the docs preview (open it from the pull request, or from the Artifacts tab of this job)
           command: |
             echo "Docs preview: $(cat /tmp/docs-site/preview-url.txt)"
+            echo "${CIRCLE_BUILD_URL:-}" > /tmp/docs-site/job-url.txt
+      # docs-site-comment reads the address from here
+      - persist_to_workspace:
+          root: /tmp/docs-site
+          paths: [preview-url.txt, job-url.txt]
+
+  docs-site-comment:
+    description: >
+      Posts, or updates, ONE comment with the address of the docs preview on the pull request (site/preview-comment.sh). It is the only job with the
+      context scalable-machine-runner-pr-comments, which holds GITHUB_PR_COMMENT_TOKEN (a token that can only comment on pull requests), and it runs
+      only for a push that has a pull request (the parameter pull-request). It is optional: the release does not wait for it (lint-circleci lists it),
+      without the context or the variable it posts nothing, and a failed call never fails it.
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+    resource_class: small
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/docs-site
       - run:
           name: Comment the address on the pull request (only with GITHUB_PR_COMMENT_TOKEN; never fails the job)
-          command: site/preview-comment.sh
+          command: PREVIEW_DIR=/tmp/docs-site site/preview-comment.sh
 
   docs-site-publish:
     description: >
@@ -1522,10 +1548,14 @@ workflows:
       - lint-docs-links
       - lint-docs-mermaid
       - lint-circleci
-      # The context holds GITHUB_PR_COMMENT_TOKEN, a token that can only comment on pull requests. It is optional: without the
-      # context or the variable the job posts no comment (docs/ci.md, "Docs site previews").
-      - docs-site-build:
+      # The build has no context. docs-site-comment has the one that holds GITHUB_PR_COMMENT_TOKEN, a token that can only comment on pull
+      # requests, and runs for a pull request only. It is optional: without the context or the variable the job posts no comment
+      # (docs/ci.md, "Docs site previews").
+      - docs-site-build
+      - docs-site-comment:
           context: [scalable-machine-runner-pr-comments]
+          requires: [docs-site-build]
+          filters: pipeline.parameters.pull-request
       - e2e-simulation:
           filters: not pipeline.parameters.docs-only
       - proxy-test:

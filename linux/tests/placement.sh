@@ -106,8 +106,6 @@ wait_for "$TIMEOUT" default_running_on any 2 || fail "linux-default did not retu
 echo "RESULT test=placement step=default_returns_without_labels replicas=2"
 
 # 6. the token proxy: a manager by default, with no label, and a pin by label
-PROXY_IMAGE=$(sed -n 's/^    image: \(alpine:3\.[0-9]*\).*$/\1/p' "$stack_dir/runners.yaml")
-for n in "$SWARM_TEST_MGR" "$SWARM_TEST_WRK"; do dind_load "$n" "$PROXY_IMAGE"; done
 proxy_node() { idocker "$SWARM_TEST_MGR" service ps --filter desired-state=running --format '{{.Node}}' "${STACK}_token-proxy" | head -n 1; }
 make_override "$work/ov.yaml" "linux-default 0" "linux-docker-build 0" "token-proxy 1"
 deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml docker-build.yaml

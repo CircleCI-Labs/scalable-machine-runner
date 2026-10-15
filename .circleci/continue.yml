@@ -93,32 +93,36 @@ parameters:
     description: >
       The weekly security scan: the workflow security-scan runs, and the workflows ci and docs-site do not.
 
+# The machine images are dated tags, not `current`: CircleCI promotes a new `current` every three months, and an image that rotates under an
+# unrelated pull request turns it red (and the microVM job silently needs the Android image to keep nested virtualization). 2026.05.1 is
+# the release that `current` pointed to when the pipeline was measured (docs/ci.md, "Pinned versions"). Move all four by hand, together, and run
+# a full pipeline (`full: true`) on the branch that does it.
 executors:
   linux-vm:
     machine:
-      image: ubuntu-2604:current
+      image: ubuntu-2604:2026.05.1
     resource_class: medium
   linux-vm-xlarge:
     machine:
-      image: ubuntu-2604:current
+      image: ubuntu-2604:2026.05.1
     resource_class: xlarge
   linux-arm:
     machine:
-      image: ubuntu-2604:current
+      image: ubuntu-2604:2026.05.1
     resource_class: arm.medium
   # The Android machine image is the one CircleCI image with nested virtualization (/dev/kvm): docs/ci.md#linux-microvm.
   linux-kvm:
     machine:
-      image: android:current
+      image: android:2026.05.1
     resource_class: large.gen2
   windows-2022:
     machine:
-      image: windows-server-2022-gui:current
+      image: windows-server-2022-gui:2026.05.1
       shell: powershell.exe -ExecutionPolicy Bypass
     resource_class: windows.medium
   windows-2025:
     machine:
-      image: windows-server-2025-gui:current
+      image: windows-server-2025-gui:2026.05.1
       shell: powershell.exe -ExecutionPolicy Bypass
     resource_class: windows.medium
 
@@ -697,7 +701,7 @@ jobs:
           command: docker run --rm --entrypoint psql swarm-ci/example:ci --version
       - trivy:
           image: swarm-ci/example:ci
-          base: cimg/base:2026.10
+          base: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
           report: example
       - store_artifacts:
           path: /tmp/reports

@@ -159,6 +159,21 @@ build() {
     grep -qF "MACHINE_RUNNER_SWARM_PROXY_IMAGE:-${pin}}" "${pinned}" || die "could not pin the token proxy image in ${os}/stack/runners.yaml"
   done
   say "Bundle ${name}"
+  # What the bundle holds: the user-facing files, without the tests and the pages about this repository's own pipeline and release.
+  local -a paths=(README.md LICENSE SECURITY.md docs examples linux windows ':(exclude)linux/tests' ':(exclude)windows/tests' ':(exclude)docs/ci.md' ':(exclude)docs/releasing.md')
+  # The pages that ship link to the ones that do not: those links become links to GitHub at the tag (ci/bundle-links.py, which stops on a link
+  # that is dead in the repository too). The rewritten pages are added in place of the originals.
+  local -a relinked=() links_add=() links_excl=()
+  local p dir
+  mapfile -t relinked < <(python3 "${ci_dir}/bundle-links.py" --repo "${CIRCLE_PROJECT_USERNAME:-CircleCI-Labs}/${CIRCLE_PROJECT_REPONAME:-scalable-machine-runner}" \
+    --tag "${version}" --out "${out}/links" --extra VERSION --extra CHANGELOG.md -- "${paths[@]}")
+  for p in "${relinked[@]}"; do
+    dir=$(dirname "${p}")
+    if [ "${dir}" = . ]; then links_add+=("--prefix=${name}/"); else links_add+=("--prefix=${name}/${dir}/"); fi
+    links_add+=("--add-file=${out}/links/${p}")
+    links_excl+=(":(exclude)${p}")
+  done
+  say "${#relinked[@]} page(s) of the bundle link to files that it does not hold: those links point to GitHub at ${version}"
   for fmt in tar.gz zip; do
     local -a add=() excl=()
     for os in linux windows; do
@@ -167,10 +182,9 @@ build() {
       excl+=(":(exclude)${os}/stack/runners.yaml")
     done
     # --add-file puts a file under the last --prefix before it; the tracked files get the last --prefix of all
-    git archive --format="${fmt}" "${add[@]}" --prefix="${name}/" \
+    git archive --format="${fmt}" "${add[@]}" "${links_add[@]}" --prefix="${name}/" \
       --add-file="${out}/VERSION" --add-file="${out}/CHANGELOG.md" -o "${out}/${name}.${fmt}" HEAD -- \
-      README.md LICENSE SECURITY.md docs examples linux windows \
-      ':(exclude)linux/tests' ':(exclude)windows/tests' ':(exclude)docs/ci.md' ':(exclude)docs/releasing.md' "${excl[@]}"
+      "${paths[@]}" "${excl[@]}" "${links_excl[@]}"
   done
   (cd "${out}" && sha256sum "${name}.tar.gz" "${name}.zip" | tee SHA256SUMS)
 }

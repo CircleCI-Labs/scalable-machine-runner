@@ -105,7 +105,9 @@ Each release bumps it, in a commit before the release:
 
 A user then gets the new runner by deploying the new release: the pin is part of the release, and a deploy of the new stack files moves the distributor to it. A user who sets the variable keeps what they set.
 
-The bundles come from `git archive`, so only tracked files ship. They leave out `linux/tests/`, `windows/tests/`, `docs/ci.md`, `docs/releasing.md`, `ci/`, and `.circleci/`: the pages about this repository's own pipeline and release are for maintainers.
+The bundles come from `git archive`, so only tracked files ship. They leave out `linux/tests/`, `windows/tests/`, `docs/ci.md`, `docs/releasing.md`, `CONTRIBUTING.md`, `ci/`, `.circleci/`, `proxy/` and `site/`: the pages about this repository's own pipeline and release are for maintainers.
+
+The pages that ship still link to some of those files. `ci/bundle-links.py` turns every relative link from a page of the bundle to a tracked file that the bundle leaves out into a link to that file on GitHub at the tag of the release (`https://github.com/<owner>/<repo>/blob/vX.Y.Z/...`), and the release job adds the rewritten pages in place of the originals. It stops the release when a link is dead in the repository too. `ci/tests/bundle-links.sh` tests it on a throwaway repository and on this one, in `lint-circleci`, so a new page that links to `docs/ci.md` does not need a special case.
 
 ### How the signature works
 

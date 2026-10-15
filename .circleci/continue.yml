@@ -1292,6 +1292,7 @@ jobs:
             ci/tests/preview-comment.sh
             ci/tests/signature-ref.sh
             ci/tests/require-credentials.sh
+            ci/tests/bundle-links.sh
       - run:
           name: The release job requires every other job (docs/releasing.md)
           command: |

@@ -18,8 +18,9 @@ This page is for maintainers. A CircleCI job makes every release of this reposit
 1. The pipeline has one workflow, `ci`. With those parameters it runs all lint jobs, the Linux jobs, the Windows Server 2022 and 2025 jobs, and the e2e jobs on Linux and Windows. Expression filters on the parameters (`filters: pipeline.parameters.release` on the release job, and similar ones on the Windows 2025 and e2e jobs) switch the jobs in and out, so no job runs twice.
 1. The `release` job requires every other job of the workflow. If one job fails, nothing is released. Fix the problem, then use **Rerun workflow from failed**. The release job runs once everything has passed.
 1. The `release` job runs in the serial group `<project slug>/release`, so two quick merges cannot race for the same version. A newer pipeline whose release job waits in the group makes the release job of an older pipeline skip. The newer one releases both changes.
-1. `ci/release.sh` checks that every Swarm config of the stack files is named after the content of its file (`ci/config-names.sh`), and stops when a name is stale. Then it finds the next version, makes the notes, pins the token proxy version in the stack files, builds the bundles and the proxy binaries, signs `SHA256SUMS`, verifies the signature, and creates the GitHub release. The release creates the tag at the commit of the pipeline.
-1. When the job will publish (`GITHUB_TOKEN` is set), `ci/release.sh` also records the release in the Deploys view of CircleCI: component `machine-runner-swarm`, environment `github-releases`, version the tag. The deploy ends as `SUCCESS`, or as `FAILED` when any step of the script fails ([Deploys](ci.md#deploys)).
+1. `ci/release.sh` checks that every Swarm config of the stack files is named after the content of its file (`ci/config-names.sh`), and stops when a name is stale. Then it finds the next version, makes the notes, reads the digest of the token proxy image that the pipeline of the commit pushed and pins it in the stack files, builds the bundles, signs `SHA256SUMS`, verifies the signature, verifies the signature of the image and gives it its release tags, and creates the GitHub release. The release creates the tag at the commit of the pipeline.
+1. When the job will publish (`GITHUB_TOKEN` and the Docker Hub credentials are set, and the image of the commit is on Docker Hub), `ci/release.sh` also records the release in the Deploys view of CircleCI: component `machine-runner-swarm`, environment `github-releases`, version the tag; and the tags of the image: component `token-proxy-image`, environment `docker-hub`, version `X.Y.Z`. Each deploy ends as `SUCCESS`, or as `FAILED` when any step of the script fails ([Deploys](ci.md#deploys)).
+1. **A release needs the image of its commit.** The job `proxy-image-publish` of the same pipeline pushes it (`sha-<12 characters>`) and the release requires that job. Without `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` in the context `scalable-machine-runner-dockerhub`, the pipeline stays green and publishes nothing: the image jobs say that nothing was pushed, and the release job builds the bundle, stores it as an artifact, and does not create the GitHub release, because a bundle that names an image tag that does not exist would be broken.
 
 Pipelines of other branches never release, and neither do tag pipelines.
 
@@ -62,15 +63,30 @@ git-cliff writes the notes of the new version for the body of the GitHub release
 |---|---|
 | `machine-runner-swarm-<version>.tar.gz` | `README.md`, `LICENSE`, `SECURITY.md`, `VERSION`, the generated `CHANGELOG.md`, `docs/`, `examples/`, `linux/` and `windows/` |
 | `machine-runner-swarm-<version>.zip` | The same files, for Windows users |
-| `machine-runner-swarm-proxy_linux_amd64`, `_linux_arm64`, `_linux_ppc64le`, `_linux_s390x`, `_windows_amd64`, `_windows_arm64` | The static token proxy binaries, one for every platform of CircleCI's runner manifest, built by `ci/build-proxy.sh` with the release version (`ci/build-proxy.sh --assets` lists them, and `ci/release.sh` uploads that list). The runner distributors of the stack download the one of their architecture from the release and verify it against `SHA256SUMS` |
-| `SHA256SUMS` | The SHA-256 checksum of both bundles and of the six proxy binaries |
+| `SHA256SUMS` | The SHA-256 checksum of both bundles |
 | `SHA256SUMS.sigstore.json` | The cosign bundle: signature, certificate, and transparency log entry |
 
-### The token proxy in a release
+### The token proxy image
 
-The stack files in the repository carry `MACHINE_RUNNER_SWARM_PROXY_VERSION: ${MACHINE_RUNNER_SWARM_PROXY_VERSION:-unreleased}` in the settings of the distributor (`linux/stack/runners.yaml` and `windows/stack/runners.yaml`). `ci/release.sh` builds the proxy binaries with `ci/build-proxy.sh` and the version of the release, and puts the stack files of the bundle into the archive with `unreleased` replaced by that version. The distributors of a bundle therefore download `machine-runner-swarm-proxy_<os>_<arch>` and `SHA256SUMS` from the release `v<version>` of this repository, which is the release that the bundle came from.
+The token proxy is a published image, `ccilabs/machine-runner-swarm-proxy` on Docker Hub, not a release asset. One tag is a manifest list that covers `linux/amd64`, `arm64`, `ppc64le` and `s390x`, and Windows Server 2022 and 2025 (`windows/amd64`). The pipeline builds and tests it in every run, and pushes it from `main` only:
 
-A checkout of the repository (`git clone`, Download ZIP) keeps `unreleased`, and the distributors resolve it to the **latest published release** of this repository: they read its tag from the GitHub API (`releases/latest`, which skips drafts and pre-releases) and install the proxy of that release, looking again at every check interval. Until the first release is published there is nothing to resolve, and the distributor logs that, installs no proxy, and keeps the runner. Tests and CI serve the binary of the checkout from a local mirror (`publish_proxy` in `linux/tests/lib.sh`, and the e2e host).
+| Event | Tags pushed |
+|---|---|
+| A pull request or a branch | None: the image is built and tested, never pushed |
+| A merge to `main` | `edge` and `sha-<12 characters of the commit>` |
+| A release (`ci/release.sh` on `main`, the version `vX.Y.Z` that git-cliff computes) | `X.Y.Z` (immutable), `X.Y`, `X` and `latest`, on the digest of that commit's `sha-<12>` image: nothing is rebuilt |
+
+`X.Y.Z` never moves: a release that finds `X.Y.Z` on another digest stops. `X.Y`, `X` and `latest` move only when the release is the newest of its minor line, its major line, and of all, so finishing an old release late moves nothing else. Three helper tags, `sha-<12>-linux`, `sha-<12>-windows-ltsc2022` and `sha-<12>-windows-ltsc2025`, hold the parts that the jobs push first; pull the other tags.
+
+How it is made, in the order of the pipeline (`ci/proxy-image.sh`, `ci/Build-ProxyImage.ps1`):
+
+1. `proxy-image-linux` builds `proxy/Dockerfile` for the four Linux platforms with buildx and QEMU, and runs each image: it reports its version, runs as 65534 with a read-only root and no capabilities, takes a token file and a state volume, and becomes healthy. `proxy-image-windows-ltsc2022` and `-ltsc2025` build `proxy/Dockerfile.windows` from the `windows/amd64` binary of `proxy-test` on the Windows machine executors and run it the same way. `ci/tests/proxy-image.sh` runs the publication against a registry of its own. Windows on Arm has no machine executor, so there is no `windows/arm64` image ([install-windows.md](install-windows.md#the-token-proxy-image)).
+1. On `main` (the pipeline parameter `publish`), the publish variants of those jobs run instead, with the context `scalable-machine-runner-dockerhub`: they push `sha-<12>-linux`, `sha-<12>-windows-ltsc2022` and `sha-<12>-windows-ltsc2025`. Then `proxy-image-publish` joins the three with `crane index append` into one manifest list, tags it `sha-<12>` and `edge` (not `edge` when a newer commit is on `main`), checks that every platform is in it, and signs every digest keyless with the CircleCI OIDC token, as `ci/release.sh` signs `SHA256SUMS`. It records a deploy of `token-proxy-image` in `docker-hub` with the version `sha-<12>` ([Deploys](ci.md#deploys)).
+1. The release job pins the digest of `sha-<12>` in the stack files of the bundle (`MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`), checks the signature, and adds the four release tags.
+
+**The credentials.** The context `scalable-machine-runner-dockerhub` holds `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token that can push to the repository), and is restricted to `main` ([Docker Hub context](ci.md#the-docker-hub-context)). Without both values every push step builds, tests, prints `NOT PUSHED` with the reason, and passes, so the pipeline stays green.
+
+A checkout keeps the default `ccilabs/machine-runner-swarm-proxy:edge`, which Renovate does not manage (it is a tag with no digest). A release bundle carries its own digest. Users verify the image with cosign ([Verify the token proxy image](security.md#verify-the-token-proxy-image)).
 
 ### Bump the runner version
 
@@ -160,24 +176,25 @@ Rerunning a pipeline from before a later release does not release again, because
 
 ## Pinned tools
 
-The job installs its tools in `ci/release.sh install-tools`. Each download is checked against a SHA-256 value in the script, and the job image is pinned by digest. Each tool has its version and its SHA-256 value in two variables of the function, and a `# renovate:` comment above the version.
+The job installs its tools in `ci/release.sh install-tools`. Each download is checked against a SHA-256 value in the script (cosign and crane, which the image jobs use too, are in `ci/tools.sh`), and the job image is pinned by digest. Each tool has its version and its SHA-256 value in two variables of the function, and a `# renovate:` comment above the version.
 
 | Tool | Version | Source of the SHA-256 value |
 |---|---|---|
 | git-cliff | 2.14.2 | The `.sha512` file of the release, and a local `sha256sum` |
 | cosign | 3.1.3 | `cosign_checksums.txt` of the release |
+| crane | 0.22.1 | `checksums.txt` of the release (the Linux x86_64 archive) |
 | gh | 2.102.0 | `gh_2.102.0_checksums.txt` of the release |
 | Go | 1.27.2 | The download page of go.dev, next to the archive |
 | `cimg/base` | 2026.10 | The digest in `.circleci/continue.yml` |
 
-[Renovate](ci.md#pinned-versions) opens a pull request for a new version and changes the version only. The pull request has the label `checksum` and fails on the checksum until you replace the SHA-256 value in the same branch. To update a tool by hand, change its version and its SHA-256 value together in `install_tools`, and then run the steps in [Try it locally](#try-it-locally). To update the image, follow [Pinned versions](ci.md#pinned-versions). A Renovate pull request for the Go toolchain also moves the `golang` and `cimg/go` images, so the proxy binaries of the release use the same Go as `proxy-test`.
+[Renovate](ci.md#pinned-versions) opens a pull request for a new version and changes the version only. The pull request has the label `checksum` and fails on the checksum until you replace the SHA-256 value in the same branch. To update a tool by hand, change its version and its SHA-256 value together in `install_tools` (cosign and crane: in `ci/tools.sh`), and then run the steps in [Try it locally](#try-it-locally). To update the image, follow [Pinned versions](ci.md#pinned-versions). A Renovate pull request for the Go toolchain also moves the `golang` and `cimg/go` images, so the proxy binaries of the release use the same Go as `proxy-test`.
 
 ## Try it locally
 
-Everything except publishing and signing runs on a workstation. Install the three tools, or run the script in the job image:
+Everything except publishing and signing runs on a workstation. Install the tools, or run the script in the job image:
 
 ```bash
-ci/release.sh install-tools          # git-cliff, cosign, gh into ~/.local/bin, and Go into ~/.local/go
+ci/release.sh install-tools          # git-cliff, cosign, crane, gh into ~/.local/bin, and Go into ~/.local/go
 RELEASE_SKIP_SIGN=1 ci/release.sh    # the files are in /tmp/release; nothing is signed or published
 ```
 
@@ -185,5 +202,5 @@ To check that the release job requires every job of the workflow, as `lint-circl
 
 ```bash
 circleci config process .circleci/continue.yml \
-  --pipeline-parameters '{full-suite: true, e2e-linux: true, e2e-windows: true, release: true}'
+  --pipeline-parameters '{full-suite: true, e2e-linux: true, e2e-windows: true, release: true, publish: true}'
 ```

@@ -5,7 +5,7 @@
 #   ci/linux-smoke.sh
 #
 # 1. linux/setup.sh --check and --swarm-init (twice: idempotent).
-# 2. The shipped stack, deployed with linux/setup.sh --deploy and a made-up token. Nothing is installed by hand: the runner-distributor
+# 2. The shipped stack (runners.yaml and the add-on classes-extra.yaml), deployed with linux/setup.sh --deploy and a made-up token. Nothing is installed by hand: the runner-distributor
 #    service downloads the runner that the stack pins (the newest release that CI tests) from CircleCI's real manifest, verifies it and flips the link. Then:
 #      - the volume is root-owned, holds the record of the binary, and the runner runs, unmodified, in a stock cimg image through
 #        the read-only mount; the entrypoint refuses to start without a runner name (exit 80);
@@ -72,7 +72,11 @@ printf '%s' "machine-runner-swarm-placeholder" | sudo "${setup}" --secret runner
 proxy_image=machine-runner-swarm-proxy:smoke
 log "building the token proxy image ${proxy_image} from proxy/"
 docker build --quiet --tag "${proxy_image}" "${repo}/proxy" > /dev/null || log "building the token proxy image failed"
-check setup-deploy sudo env "MACHINE_RUNNER_SWARM_PROXY_IMAGE=${proxy_image}" "${setup}" --deploy
+# The shipped runners.yaml has the class linux-default. The classes that the checks below need, linux-hardened and linux-java, are in the add-on
+# classes-extra.yaml, deployed with it (the stack files of the earlier layout had them all in runners.yaml: then there is no add-on to deploy).
+deploy_files=(--stack-file "${repo}/linux/stack/runners.yaml")
+if [ -f "${repo}/linux/stack/classes-extra.yaml" ]; then deploy_files+=(--stack-file "${repo}/linux/stack/classes-extra.yaml"); fi
+check setup-deploy sudo env "MACHINE_RUNNER_SWARM_PROXY_IMAGE=${proxy_image}" "${setup}" --deploy "${deploy_files[@]}"
 # The shipped sizes (2 CPUs and 4 GB each) do not fit one CI VM: shrink what the test needs, as an
 # operator would on a small host, and stop what it does not.
 docker service update --detach --replicas 1 --reserve-cpu 0.1 --reserve-memory 64m "${stack}_linux-default" > /dev/null

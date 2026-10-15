@@ -100,16 +100,19 @@ $ docker service ps runners_token-proxy
 $ docker service logs --tail 30 runners_token-proxy
 ```
 
-The proxy answers `GET /healthz` with 200 when every class has a usable token file. Swarm runs the check every 10 seconds, shows `healthy` in `docker ps` on the node, and restarts the task after 3 failures. The log has one line for each event, and never a token:
+The proxy answers `GET /healthz` with 200 when every class has a usable token file. Swarm runs the check every 10 seconds, shows `healthy` in `docker ps` on the node, and restarts the task after 3 failures. A start can take up to 25 seconds before the proxy listens (it asks CircleCI about every class at once, then gives up on a class that does not answer), so the check has a `start_period` of 30 seconds on Linux and 40 on Windows. The log has one line for each event, and never a token:
 
 | Log line | Meaning |
 |---|---|
-| `listening on :8080, upstream <host>, classes tasks.linux-default,...` | The proxy started, with the classes it serves. A class that is missing here is a class whose runners get 403 |
+| `listening on :8080, upstream <host>, classes tasks.linux-default,...` | The proxy started, with the classes it serves: one for every secret `<service>-token` that it holds. A class that is missing here is a class whose runners get 403, and its secret is not mounted in `token-proxy` (or is not named `<service>-token`) |
 | `claim from <ip> (tasks.<service>): upstream status 204` | A runner polled and there was no task. Normal, about every 5 seconds for each idle runner |
 | `claim from <ip> (tasks.<service>): upstream status 200` | A claim returned a task, and the runner at that address cannot claim again |
-| `released <ip> (tasks.<service>)` | The container is gone, and a new container on that address can claim |
+| `released <ip> (tasks.<service>)` | DNS has not listed the address for 30 seconds in a row: the container is gone, and a new container on that address can claim |
 | `claim from <ip> refused: not a runner of any class (tasks.<service> lists [...], ...)` | A container that is not a runner of a configured class, or a runner that DNS does not list yet. The line names what DNS lists for every class, so compare the address with it. Look for a class that you added without adding it to the proxy, or for a container that does not belong on a class network |
 | `claim from <ip> refused: this runner has already claimed a task` | A second claim from one container. After a proxy restart every runner that was idle gets this until Swarm replaces it. Refer to [Restart the proxy](#restart-the-proxy) |
+| `claim from <ip> refused: too many claims` | One container sent more than 2 claims a second (answer 429). A runner claims about every 5 seconds, so this is not a runner that works |
+| `state: cannot write it: ...`, and `claim from <ip> refused: the state cannot be written` | The proxy cannot save its state (the volume `proxy-state` is full or gone). A claim that has already been answered by CircleCI gets 503 instead of its task, the proxy removes `state.json` and reports unhealthy, and Swarm restarts it after 3 failed checks. Refer to [When the proxy cannot save its state](#when-the-proxy-cannot-save-its-state) |
+| `poll: cannot resolve the runners, no latch is released: ...` | Swarm DNS fails. No latch is released while it fails (at most one line a minute) |
 | `claim from <ip> (tasks.<service>): upstream status 401` | CircleCI rejects the class token. The token was deleted, or the secret holds another class's token. Refer to [The runner log shows 401](troubleshooting.md#the-runner-log-shows-401) |
 | `upstream error: ...` | The node of the proxy cannot reach `runner.circleci.com`. The runners get 502 |
 | `cannot resolve the runners`, or `token file` | Swarm DNS or a class secret is unavailable. The runners get 503 |
@@ -122,13 +125,15 @@ A restart is safe at any time, on the same node. The proxy keeps the addresses o
 
 | Log line at start | State |
 |---|---|
-| `state restored; <class>: N runner(s) have claimed and stay refused; the others may claim` | The normal case: the state was read, and N runners of that class have claimed |
+| `state restored; <class>: N runner(s) have claimed and stay refused; the others may claim` | The normal case: the state was read, and N addresses of that class have claimed. All N stay refused, also those that Swarm DNS does not list at that moment (an empty or partial answer right after a restart), until DNS has not listed them for 30 seconds in a row |
 | `no state (a first start); <class>: CircleCI reports 0 running tasks, ...: the N runner(s) present may claim` | `proxy-state` was empty, and CircleCI says that no task of the class runs, so no runner present can be holding one |
 | `no state (a first start); <class>: CircleCI reports M running task(s), ...: failing safe, latching the N runner(s) present` | `proxy-state` was empty, and tasks of the class run: the proxy cannot tell which runners hold them, so it refuses every runner present until Swarm replaces it |
 | `...: CircleCI does not say how many tasks run (<error>): failing safe, latching the N runner(s) present` | The same, because the call to CircleCI failed or its answer had no count of running tasks |
 | `state lost; ...` and `no state directory; ...` | The marker is there but the state file is not (damaged or removed), or the proxy has no state directory at all: the same decision for every class, from what CircleCI says |
 
-**With no state the proxy asks CircleCI.** For each class that has runners present, it calls `GET /api/v3/runner/scale` on the runner API with the token of that class, up to three times. The answer holds the number of running and unclaimed tasks in `data.attributes`. With no running task, the runners present may claim. With a running task, or when the call fails, the proxy latches every runner of that class present, so a runner that already holds a job cannot claim a second one. A refused runner gets 403 (`this runner has already claimed a task`) until it recycles: at its idle timeout (1 hour in the shipped files), or at once with the command below. A runner that is running a job is not affected, and a runner that starts after the proxy is allowed. A class that is new to the state (you added it with an add-on stack file) is treated the same way.
+**With no state the proxy asks CircleCI.** For each class that has runners present, it calls `GET /api/v3/runner/scale` on the runner API with the token of that class, up to three times, for all classes at once and within 25 seconds in all. The answer must hold `data.attributes.running_task_count` and `data.attributes.unclaimed_task_count`, each a whole number of 0 or more. With no running task, the runners present may claim. With a running task, or when the call fails, is late, or answers anything else, the proxy latches every runner of that class present, so a runner that already holds a job cannot claim a second one. A refused runner gets 403 (`this runner has already claimed a task`) until it recycles: at its idle timeout (1 hour in the shipped files), or at once with the command below.
+
+**Why 403, and not 401.** A refused runner keeps its container and polls again until its idle timeout. It was tested whether an answer of 401 would make the runner exit at once, so that Swarm replaces it with a container on a new address: the real runner 3.1.13, in single-task mode against the fake API, answers a 401 on a claim, and a 403, in the same way. It logs the error, claims again about every 5 seconds, and exits 0 only when its idle timeout ends (checked with an idle timeout of 5 minutes and 61 claims, all answered 401). The proxy therefore keeps 403, and replacing the idle runners is the command below, or a shorter `CIRCLECI_RUNNER_IDLE_TIMEOUT`. A runner that is running a job is not affected, and a runner that starts after the proxy is allowed. A class that is new to the state (you added it with an add-on stack file) is treated the same way.
 
 Replace the idle runners of a class at once with:
 
@@ -142,7 +147,13 @@ A busy replica finishes its job before Swarm replaces it. Restart the proxy for 
 $ docker service update --force runners_token-proxy
 ```
 
+A stop (this command, a deploy, or a node that shuts down) lets the claims in flight finish, for 8 seconds at most, before the proxy exits: a claim that CircleCI has answered, and that is saved, reaches its runner. The default grace of Swarm is 10 seconds.
+
 The proxy runs from its image, so a restart does not change its version: the same tag or digest as before, unless the tag has moved since (`edge` moves with every merge to the main branch). [Upgrade the token proxy](#upgrade-the-token-proxy) says how to change the image on purpose.
+
+#### When the proxy cannot save its state
+
+The proxy saves a runner's address before it hands the task to the runner. If the save fails (the volume `proxy-state` is full, read-only or gone), it does not hand the task over: the runner gets 503, and it stays refused (403) from then on, and every other claim gets 503 without reaching CircleCI. The proxy also deletes `state.json`, so that no restart can read a state that is behind, and reports unhealthy. CircleCI has already allocated that one task to the runner, which never runs it, so the job waits for CircleCI to give up on it: rerun the job if it does not. Swarm restarts the proxy after 3 failed health checks, and, because the state file is gone, the restart takes the same path as a lost state: it asks CircleCI, and refuses every runner of a class that has running tasks. Mend the volume (free space, or fix the mount) before or right after: the proxy refuses to start when it cannot write its state directory, and it writes the whole state again with the next claim or poll that succeeds.
 
 #### Where the proxy runs, and when it moves
 
@@ -501,7 +512,7 @@ Swarm secrets are immutable. To rotate a token, create a second secret and swap 
    unset TOKEN
    ```
 
-3. Swap the secrets in the service. On Linux, for a single-task class, swap it in the proxy. Keep the `target`, so that the variable of the proxy stays valid:
+3. Swap the secrets in the service. On Linux, for a single-task class, swap it in the proxy. Keep the `target`: the proxy names a class after the file `<service>-token`, and a new name makes a new class that no runner belongs to:
 
    ```console
    $ docker service update \

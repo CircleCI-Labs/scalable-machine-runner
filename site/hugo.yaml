@@ -86,9 +86,10 @@ params:
   banner:
     # The banner cannot be dismissed: custom.css hides the close button, and custom/banner.html renders the text.
     # A new key shows the banner again to visitors who closed an old one.
-    key: labs-disclaimer
+    key: labs-disclaimer-main
     message: >-
       **CircleCI Labs project.** Not an official CircleCI product and not supported by CircleCI Support.
+      These pages follow main: the pages of a release are in docs/ of its bundle.
 
   navbar:
     displayTitle: true

@@ -142,6 +142,15 @@ body {
   font-weight: 600;
 }
 
+/* "docs/" in the banner: plain text on the dark band, with no box of its own */
+.cci-banner-code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
 /* ---------- Header ---------- */
 
 .hextra-nav-container-blur {

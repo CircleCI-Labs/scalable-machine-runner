@@ -56,7 +56,7 @@ Each [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/r
 
 The bundle has a top-level `VERSION` file with the release number and a `CHANGELOG.md` with the notes of every release.
 
-A release is the recommended source, because its stack files name the token proxy image of that release by tag and digest. A `git clone` of the default branch or a "Download ZIP" works too: the stack files there name the image tag `edge`, the latest commit of the main branch. Refer to [The token proxy image](#the-token-proxy-image).
+A release is the recommended source, because its stack files name the token proxy image of that release by tag and digest. A `git clone` of a tag or of the default branch, or a "Download ZIP", works too: the stack files there name the image tag `latest`, which only a release moves and which is not a pin. Refer to [The token proxy image](#the-token-proxy-image).
 
 ### The token proxy image
 
@@ -66,11 +66,11 @@ The token proxy is the one container that holds your class tokens ([The token pr
 |---|---|
 | `X.Y.Z` | The image of a release. It never changes: pin this one |
 | `X.Y`, `X` | The newest release of that minor or major line |
-| `latest` | The newest release |
-| `edge` | The latest commit of the main branch. It is the default of the stack files in a checkout, and moves with every merge |
-| `sha-<12 characters>` | The image of one commit of the main branch |
+| `latest` | The newest release. It is the default of the stack files in a checkout, and only a release moves it |
+| `edge` | The newest commit of the main branch that passed the end-to-end tests. Use it to test `main`, not to run jobs that matter |
+| `sha-<12 characters>` | The image of one commit of the main branch, published before its tests have run |
 
-The stack file reads the image from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. A release bundle has the default `ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>` (the tag, and the digest that Docker pulls), a checkout has `ccilabs/machine-runner-swarm-proxy:edge`. To use another image, set the variable in the environment of `docker stack deploy`: a digest for a pin, a registry of your own for an air gap, or a local build for development.
+The stack file reads the image from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. A release bundle has the default `ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>` (the tag, and the digest that Docker pulls), a checkout has `ccilabs/machine-runner-swarm-proxy:latest`. To use another image, set the variable in the environment of `docker stack deploy`: a digest for a pin, a registry of your own for an air gap, or a local build for development.
 
 ```bash
 # development: build the image from the checkout, and name it
@@ -102,6 +102,14 @@ CircleCI signs `SHA256SUMS` with the OIDC token of the CircleCI job that makes t
      --certificate-oidc-issuer "https://oidc.circleci.com"
    ```
 
+1. Check the ref in the certificate. The identity is the same for every branch, and a job of any branch can sign with it, so the certificate must also say that the job ran for `refs/heads/main`. `cosign` has no flag for that extension, so the command reads it: the long hex string is the OID `1.3.6.1.4.1.57264.1.14` followed by the value `refs/heads/main`, and the pattern starts on a byte boundary. It prints `signed for refs/heads/main`.
+
+   ```bash
+   jq -r '.verificationMaterial | (.certificate // .x509CertificateChain.certificates[0]).rawBytes' SHA256SUMS.sigstore.json | base64 -d \
+     | od -An -v -tx1 | tr -d ' \n' | grep -Eq '^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' \
+     && echo "signed for refs/heads/main" || echo "NOT signed for refs/heads/main: do not use this release"
+   ```
+
 1. Check the bundle against `SHA256SUMS`. The command prints `OK` for the file you downloaded and skips the other bundle.
 
    ```bash
@@ -111,7 +119,7 @@ CircleCI signs `SHA256SUMS` with the OIDC token of the CircleCI job that makes t
 Do not use a bundle if a command fails. Refer to the notes below to understand the values.
 
 - The identity is the CircleCI project (`7bbdbb66-...`) and the pipeline definition (`8b2a66db-...`) that run this repository's pipeline. The issuer `https://oidc.circleci.com` is the CircleCI OIDC issuer. Sigstore records every signature in a public transparency log.
-- The identity does not name a branch. To see which branch the job ran for, read the source repository ref in the certificate. The last line of the output ends with the ref, and a release comes from `refs/heads/main`.
+- The identity does not name a branch, which is why the ref check above exists. To see the ref of a certificate, print it. The last line of the output ends with the ref, and a release comes from `refs/heads/main`.
 
   ```bash
   jq -r '.verificationMaterial.certificate.rawBytes' SHA256SUMS.sigstore.json | base64 -d \
@@ -281,7 +289,7 @@ This command is the whole install. The service `runner-distributor` starts on ev
    ID             NAME                        MODE         REPLICAS   IMAGE
    ...            runners_linux-default       replicated   2/2        cimg/base:2026.10
    ...            runners_runner-distributor  global       1/1        alpine:3
-   ...            runners_token-proxy         replicated   1/1        ccilabs/machine-runner-swarm-proxy:edge
+   ...            runners_token-proxy         replicated   1/1        ccilabs/machine-runner-swarm-proxy:...
    ```
 
    The distributor shows one task for each Linux node, so `1/1` on a single node and `3/3` on three.

@@ -149,7 +149,7 @@ $ docker service update --force runners_token-proxy
 
 A stop (this command, a deploy, or a node that shuts down) lets the claims in flight finish, for 8 seconds at most, before the proxy exits: a claim that CircleCI has answered, and that is saved, reaches its runner. The default grace of Swarm is 10 seconds.
 
-The proxy runs from its image, so a restart does not change its version: the same tag or digest as before, unless the tag has moved since (`edge` moves with every merge to the main branch). [Upgrade the token proxy](#upgrade-the-token-proxy) says how to change the image on purpose.
+The proxy runs from its image, so a restart does not change its version: the same tag or digest as before, unless the tag has moved since (`latest` moves with a release, `edge` with a merge to the main branch that passed the end-to-end tests). [Upgrade the token proxy](#upgrade-the-token-proxy) says how to change the image on purpose.
 
 #### When the proxy cannot save its state
 
@@ -465,11 +465,11 @@ A link cannot be replaced in one step on Windows, so for a moment `current` does
 
 ### Upgrade the token proxy
 
-The token proxy is the image `ccilabs/machine-runner-swarm-proxy`, and the service `token-proxy` (Windows: `token-proxy-windows`) reads it from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. The tags are `X.Y.Z` (a release, which never moves), `X.Y`, `X`, `latest`, `edge` (the latest commit of the main branch) and `sha-<12 characters>` ([The token proxy image](install-linux.md#the-token-proxy-image)). The default of a release bundle is its own release, by tag and digest. A checkout defaults to `edge`.
+The token proxy is the image `ccilabs/machine-runner-swarm-proxy`, and the service `token-proxy` (Windows: `token-proxy-windows`) reads it from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. The tags are `X.Y.Z` (a release, which never moves), `X.Y`, `X`, `latest` (the newest release), `edge` (the newest commit of the main branch that passed the end-to-end tests, for testing main) and `sha-<12 characters>` ([The token proxy image](install-linux.md#the-token-proxy-image)). The default of a release bundle is its own release, by tag and digest. A checkout defaults to `latest`, which only a release moves.
 
 - **Upgrade with the release.** Deploy the stack files of the new release ([Upgrade to a new release of this repository](#upgrade-to-a-new-release-of-this-repository)). They name the new image.
 - **Pin a digest.** Run the proxy from `ccilabs/machine-runner-swarm-proxy@sha256:<digest>`, set in the environment of every `docker stack deploy`. A digest never changes, and it is the only pin that a re-pushed tag cannot move. Read the digest of a release in its notes and in the bundle (`grep MACHINE_RUNNER_SWARM_PROXY_IMAGE stack/runners.yaml`), or with `docker buildx imagetools inspect ccilabs/machine-runner-swarm-proxy:<version>`, and check the signature before you trust it ([Verify the token proxy image](security.md#verify-the-token-proxy-image)).
-- **Change the image of the running service.** `docker service update --image <image> runners_token-proxy`. Swarm stops the old proxy and starts the new one (`stop-first`: a second proxy would allow a second claim), so the runners cannot claim for the few seconds of the change, and every runner that has claimed stays refused ([Restart the proxy](#restart-the-proxy)). Record the change in your deploy, so that the next deploy does not undo it. A tag such as `edge` is resolved to a digest when you deploy: run `docker stack deploy` again to pick up a newer one.
+- **Change the image of the running service.** `docker service update --image <image> runners_token-proxy`. Swarm stops the old proxy and starts the new one (`stop-first`: a second proxy would allow a second claim), so the runners cannot claim for the few seconds of the change, and every runner that has claimed stays refused ([Restart the proxy](#restart-the-proxy)). Record the change in your deploy, so that the next deploy does not undo it. A tag such as `latest` is resolved to a digest when you deploy: run `docker stack deploy` again to pick up a newer one.
 - **Roll back.** Deploy the previous digest or version the same way.
 
 An air-gapped site mirrors the image: `docker pull`, then `docker tag` and `docker push` to your registry (`docker buildx imagetools create --tag <your registry>/<name>:<tag> ccilabs/machine-runner-swarm-proxy:<version>` keeps every platform), and `MACHINE_RUNNER_SWARM_PROXY_IMAGE=<your registry>/<name>:<tag>`. Keep the signature with it: `cosign copy` copies the image with its signature.

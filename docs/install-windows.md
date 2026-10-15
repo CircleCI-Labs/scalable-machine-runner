@@ -83,6 +83,15 @@ CircleCI signs the file `SHA256SUMS` of each release with the OIDC token of the 
      --certificate-oidc-issuer "https://oidc.circleci.com"
    ```
 
+1. Check the ref in the certificate. The identity is the same for every branch, and a job of any branch can sign with it, so the certificate must also say that the job ran for `refs/heads/main`. `cosign` has no flag for that extension, so the command reads it: the long hex string is the OID `1.3.6.1.4.1.57264.1.14` followed by the value `refs/heads/main`, and the pattern starts on a byte boundary. It stops with an error when the ref differs.
+
+   ```powershell
+   $material = (Get-Content -Raw -LiteralPath SHA256SUMS.sigstore.json | ConvertFrom-Json).verificationMaterial
+   if ($material.certificate) { $cert = $material.certificate.rawBytes } else { $cert = $material.x509CertificateChain.certificates[0].rawBytes }
+   $hex = -join ([Convert]::FromBase64String($cert) | ForEach-Object { $_.ToString('x2') })
+   if ($hex -notmatch '^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e') { throw 'NOT signed for refs/heads/main: stop' }
+   ```
+
 1. Compare the checksum of the bundle with the line in `SHA256SUMS`.
 
    ```powershell
@@ -146,7 +155,7 @@ Run these steps in an elevated PowerShell on every host. Do them before you star
    docker pull mcr.microsoft.com/windows/servercore:ltsc2022
    ```
 
-   On the host that runs the token proxy (a manager, by default), pull its image too: `docker pull ccilabs/machine-runner-swarm-proxy:edge`, or the image that you build ([The token proxy image](#the-token-proxy-image)).
+   On the host that runs the token proxy (a manager, by default), pull its image too: `docker pull ccilabs/machine-runner-swarm-proxy:latest`, or the image that you build ([The token proxy image](#the-token-proxy-image)).
 
 ## 3. Start Swarm and label the node
 

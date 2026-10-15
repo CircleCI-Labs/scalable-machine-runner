@@ -166,7 +166,7 @@ A floating value (`3.1`, `3`, `current`) cannot have such a list, because the ve
 
 ### The token proxy image
 
-The token proxy is not installed by the distributor: it is the image `ccilabs/machine-runner-swarm-proxy` of Docker Hub, which Swarm pulls. Its integrity rests on the image digest, not on a volume. A release bundle names the image by tag and digest (`ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`), so Docker pulls exactly the image that the release pipeline pushed, whatever happens to the tag later. A checkout names the tag `edge`, which moves with every merge to the main branch: pin a digest for anything that matters ([Upgrade the token proxy](operations.md#upgrade-the-token-proxy)).
+The token proxy is not installed by the distributor: it is the image `ccilabs/machine-runner-swarm-proxy` of Docker Hub, which Swarm pulls. Its integrity rests on the image digest, not on a volume. A release bundle names the image by tag and digest (`ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`), so Docker pulls exactly the image that the release pipeline pushed, whatever happens to the tag later. A checkout names the tag `latest`, which only a release moves and which is not a digest: pin a digest for anything that matters ([Upgrade the token proxy](operations.md#upgrade-the-token-proxy)).
 
 Every digest that the pipeline pushes is signed, and the pipeline checks the signature of the image again before it gives the image its release tags. The Linux index (four platforms), each Windows image (Server 2022 and 2025) and the manifest list that joins them are signed separately, so you can verify the list that you name or the image of one platform. The image runs as the user 65534 (Windows: `ContainerAdministrator`, because a Windows volume has no user mapping), and the state of the proxy is the only thing it writes.
 
@@ -180,7 +180,17 @@ cosign verify ccilabs/machine-runner-swarm-proxy:<version> \
   --certificate-oidc-issuer "https://oidc.circleci.com"
 ```
 
-The command prints the verified claims as JSON when the project and the pipeline definition above signed the image. Compare the digest in its output with the one in your stack file. A tag from a commit that is not a release (`edge`, `sha-<12 characters>`) verifies the same way. The identity does not name a branch: only the main branch pushes the image, and a release comes from there. The notes of every release name the image of that release.
+The command prints the verified claims as JSON when the project and the pipeline definition above signed the image. Compare the digest in its output with the one in your stack file. A tag from a commit that is not a release (`edge`, `sha-<12 characters>`) verifies the same way. The identity does not name a branch, and a job of any branch can sign with it, so also check the ref in the certificates: the extension `1.3.6.1.4.1.57264.1.14` must be `refs/heads/main`, for every signature of the digest. `cosign` has no flag for that extension, so the command reads it, with the same pattern as [Verify a release](install-linux.md#verify-a-release) (the OID, then the value `refs/heads/main`, from a byte boundary):
+
+```bash
+cosign download signature ccilabs/machine-runner-swarm-proxy:<version> \
+  | jq -r '.verificationMaterial | (.certificate // .x509CertificateChain.certificates[0]).rawBytes' \
+  | while read -r cert; do printf '%s' "$cert" | base64 -d | od -An -v -tx1 | tr -d ' \n' \
+    | grep -Eq '^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' \
+    || { echo "NOT signed for refs/heads/main: do not use this image"; exit 1; }; done && echo "every signature is for refs/heads/main"
+```
+
+The notes of every release name the image of that release.
 
 ### What remains
 

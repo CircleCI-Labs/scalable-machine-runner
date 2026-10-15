@@ -82,7 +82,7 @@ The runner log contains `403 (Forbidden)` for the claim, and the log of `runners
 
 **Fix.**
 
-- `not a runner of any class`: the class is not in the proxy (a new class needs its variable, network, and secret under `token-proxy`; refer to [Define a class](resource-classes.md#define-a-class)), the proxy is not on the network of the class, or the claim comes from a container that is not a runner.
+- `not a runner of any class`: the class is not in the proxy (a new class needs its secret `<service>-token` and, on Linux, its network under `token-proxy`; refer to [Define a class](resource-classes.md#define-a-class)), the proxy is not on the network of the class, or the claim comes from a container that is not a runner.
 - `this runner has already claimed a task`: the proxy restarted while the runner was idle, or the proxy moved to another node and started with the state `latch` or a lost state. The runner retries every 5 seconds until it is replaced, at its idle timeout. Replace it now with `docker service update --force --update-parallelism 0 runners_<service>`. Refer to [Restart the proxy](operations.md#restart-the-proxy) and [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves).
 
 ### The runner log shows x509 certificate errors

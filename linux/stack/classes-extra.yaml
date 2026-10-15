@@ -70,11 +70,9 @@ x-runner: &runner
     - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}
 
 services:
-  # Adds the classes to the token proxy of runners.yaml (stack files merge networks, secrets and variables by name).
+  # Adds the classes to the token proxy of runners.yaml: the proxy serves a class for every secret <service>-token that it holds, so a
+  # class needs its secret and its network there, and nothing else (stack files merge networks and secrets by name).
   token-proxy:
-    environment:
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_JAVA: linux-java=/run/secrets/linux-java-token
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_HARDENED: linux-hardened=/run/secrets/linux-hardened-token
     secrets:
       - {source: linux-java-token, target: linux-java-token, uid: "65534", gid: "65534", mode: 0400}
       - {source: linux-hardened-token, target: linux-hardened-token, uid: "65534", gid: "65534", mode: 0400}

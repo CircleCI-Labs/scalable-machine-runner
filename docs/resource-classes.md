@@ -21,7 +21,7 @@ To add a class:
    ```
 
 2. In your copy of the stack file, copy the service `linux-default` under another name and change the values in the table below.
-3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#4-create-the-secrets) or [Create the secrets on Windows](install-windows.md#4-create-the-secrets). On Linux, a single-task class also needs three lines in the existing `token-proxy` service, as in the example below: its network, its secret, and one variable.
+3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#4-create-the-secrets) or [Create the secrets on Windows](install-windows.md#4-create-the-secrets). On Linux, a single-task class also needs two lines in the existing `token-proxy` service, as in the example below: its network and its secret. The proxy serves a class for every secret `<service>-token` that it holds, and finds the runners of the class as `tasks.<service>`.
 4. Deploy your copy again, with the same set of `-c` files as before. Swarm creates the new service and leaves unchanged services alone.
 
    ```console
@@ -69,9 +69,6 @@ Second, the class goes into the proxy, which has the key `token-proxy:` once in 
 
 ```yaml
   token-proxy:
-    environment:
-      # ... the variables of the classes that are there
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_PYTHON: linux-python=/run/secrets/linux-python-token
     secrets:
       # ... the secrets of the classes that are there
       - {source: linux-python-token, target: linux-python-token, uid: "65534", gid: "65534", mode: 0400}
@@ -88,11 +85,11 @@ secrets:
   linux-python-token: {external: true}
 ```
 
-The runner service inherits the placeholder secret and the proxy URL from `*runner` and `*env`. Restart the proxy after you add a class, so that it picks the class up: `docker service update --force runners_token-proxy`, then replace the idle runners as in [Restart the proxy](operations.md#restart-the-proxy). A class that the proxy does not serve gets 403 on every claim, and the proxy log says `not a runner of any class`.
+The runner service inherits the placeholder secret and the proxy URL from `*runner` and `*env`. A deploy that adds the secret of a class changes the secrets of `token-proxy`, so Swarm replaces the proxy task, and the new proxy finds the class from its secret files when it starts. What the runners see during that restart is in [Restart the proxy](operations.md#restart-the-proxy). A class that the proxy does not serve gets 403 on every claim, and the proxy log says `not a runner of any class`.
 
 Use `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` with the capability settings of `linux-hardened` in `linux/stack/classes-extra.yaml` for a hardened class. Refer to [Concepts](concepts.md#users-and-the-runner-token-on-linux).
 
-To keep a class in a stack file of its own, as the add-on files do, write `token-proxy` there with only the additions (the variable, the secret and the network): Swarm merges the files by name. An anchor does not reach into another file, so repeat the settings of `*runner`, `*env`, `*restart`, `*update` and `*placement` in it, or copy the file `classes-extra.yaml` and change it. The anchor `*runner` brings the keys that a Linux class needs for the runner: `user: "0"`, `entrypoint: ["/circleci-runner-entrypoint"]`, the config `entrypoint`, the placeholder secret `runner-placeholder-token` (the token proxy holds the class token), and the volume `runner-bin` mounted read-only. A service written without the anchor repeats them:
+To keep a class in a stack file of its own, as the add-on files do, write `token-proxy` there with only the additions (the secret and the network): Swarm merges the files by name. An anchor does not reach into another file, so repeat the settings of `*runner`, `*env`, `*restart`, `*update` and `*placement` in it, or copy the file `classes-extra.yaml` and change it. The anchor `*runner` brings the keys that a Linux class needs for the runner: `user: "0"`, `entrypoint: ["/circleci-runner-entrypoint"]`, the config `entrypoint`, the placeholder secret `runner-placeholder-token` (the token proxy holds the class token), and the volume `runner-bin` mounted read-only. A service written without the anchor repeats them:
 
 ```yaml
 services:
@@ -120,7 +117,7 @@ volumes:
 
 The name of the config carries the first 12 hex digits of the SHA-256 of the file, because a Swarm config cannot change. Refer to [Upgrade to a new release of this repository](operations.md#upgrade-to-a-new-release-of-this-repository). The shipped add-on files repeat the top-level `configs:` and `volumes:`, so each of them also loads alone.
 
-On Windows, copy a service such as `windows-default` in your copy of `windows\stack\runners.yaml`, with its two mounts of the volume `runner-bin` (`subpath: current` and `subpath: 'git\current'`) and the top-level `volumes: runner-bin`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks. A single-task Windows class also needs the same lines in `token-proxy-windows` as the Linux example shows (its variable `MACHINE_RUNNER_SWARM_PROXY_CLASS_<NAME>` with the file `C:\ProgramData\Docker\secrets\<service>-token`, and its secret with that target; there are no networks), and reads the placeholder secret `runner-placeholder-token`.
+On Windows, copy a service such as `windows-default` in your copy of `windows\stack\runners.yaml`, with its two mounts of the volume `runner-bin` (`subpath: current` and `subpath: 'git\current'`) and the top-level `volumes: runner-bin`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks. A single-task Windows class also needs the same lines in `token-proxy-windows` as the Linux example shows (its secret, with the target `<service>-token`; there are no networks and no variable), and reads the placeholder secret `runner-placeholder-token`.
 
 ## Size the limits
 

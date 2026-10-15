@@ -102,7 +102,7 @@ On each node:
 2. Open the ports in [Inter-node ports](#inter-node-ports).
 3. Run the join command.
 
-Nothing else is installed on the node. The `runner-distributor` service is `global`, so Swarm starts it on the new node by itself, and it installs the runner into the volume `runner-bin` of that node. A runner container that Swarm starts there first waits up to 120 seconds for it.
+Nothing else is installed on the node. The `runner-distributor` service is `global`, so Swarm starts it on the new node by itself, and it installs the runner into the volume `runner-bin` of that node (it skips a node with the label `machine-runner-swarm.microvm=true`: the microVM classes download their own runner, [MicroVM jobs](microvm.md#the-runner-in-a-vm)). A runner container that Swarm starts there first waits up to 120 seconds for it.
 
 ### Arm nodes
 

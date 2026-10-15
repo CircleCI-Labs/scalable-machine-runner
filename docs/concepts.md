@@ -158,9 +158,9 @@ Containers are not a virtual machine boundary. Read [Security](security.md) befo
 
 ## The runner distributor on Linux
 
-The Linux services use stock images such as `cimg/base`, and the image holds none of the runner. The service `runner-distributor` puts the runner on every Linux node, so nothing is installed on a node by hand. `docker stack deploy` is the whole install, and it is the only upgrade path.
+The Linux services use stock images such as `cimg/base`, and the image holds none of the runner. The service `runner-distributor` puts the runner on every Linux node that runs the classes of `runners.yaml`, so nothing is installed on a node by hand. `docker stack deploy` is the whole install, and it is the only upgrade path.
 
-- **The service.** `runner-distributor` is a `global` service, so it runs on every Linux node, on a Docker-build node too, and on a node that joins later. It runs the stock `alpine:3` image, pinned by digest. Its script, `linux/stack/runner-distributor.sh`, is a Swarm config.
+- **The service.** `runner-distributor` is a `global` service, so it runs on every Linux node, on a Docker-build node too, and on a node that joins later, except a microVM node (`machine-runner-swarm.microvm=true`): the microVM classes download their own runner into each VM ([MicroVM jobs](microvm.md#the-runner-in-a-vm)). It runs the stock `alpine:3` image, pinned by digest. Its script, `linux/stack/runner-distributor.sh`, is a Swarm config.
 - **The volume.** The distributor writes to `runner-bin`, a named volume that exists once on every node. Each version has a directory `versions/<version>` with `bin/circleci-runner`, `SHA256`, `VERSION`, and `TARBALL`. The link `current` points to the active version and moves with one atomic rename. The file `history` lists the versions in the order they were active.
 - **The runner services.** Every class mounts `runner-bin` read-only at `/opt/machine-runner-swarm`. The entrypoint is another Swarm config, mounted at `/circleci-runner-entrypoint` with the mode `0555`, and it starts as root. A job cannot change either of them.
 - **Not the token proxy.** The distributor installs the runner only. The token proxy is an image that Swarm pulls: refer to [The token proxy](#the-token-proxy).

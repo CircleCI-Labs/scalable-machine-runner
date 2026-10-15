@@ -278,7 +278,7 @@ To add the optional classes, pass your copies of their files with more `-c` flag
 $ docker stack deploy -c deploy/runners.yaml -c deploy/persistent.yaml runners
 ```
 
-This command is the whole install. The service `runner-distributor` starts on every Linux node, also on a node that joins later. It downloads the runner of CircleCI (the exact version that the stack file pins, the newest that CI tests), checks its SHA-256 against the values that the stack file carries for that version, and puts it in the volume `runner-bin` of the node. The service `token-proxy` pulls its image from Docker Hub. A runner container that starts first waits up to 120 seconds for it. To deploy with other distributor settings, for example a floating version such as `3.1` (which also needs `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest`, because the SHA-256 list of the stack file names the pinned version only), set them as variables of this command. A host with `sudo` drops the environment, so write `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest docker stack deploy ...`, or run the command as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+This command is the whole install. The service `runner-distributor` starts on every Linux node, also on a node that joins later (not on a microVM node: its classes download their own runner). It downloads the runner of CircleCI (the exact version that the stack file pins, the newest that CI tests), checks its SHA-256 against the values that the stack file carries for that version, and puts it in the volume `runner-bin` of the node. The service `token-proxy` pulls its image from Docker Hub. A runner container that starts first waits up to 120 seconds for it. To deploy with other distributor settings, for example a floating version such as `3.1` (which also needs `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest`, because the SHA-256 list of the stack file names the pinned version only), set them as variables of this command. A host with `sudo` drops the environment, so write `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest docker stack deploy ...`, or run the command as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
 ## Verify the deployment
 
@@ -292,7 +292,7 @@ This command is the whole install. The service `runner-distributor` starts on ev
    ...            runners_token-proxy         replicated   1/1        ccilabs/machine-runner-swarm-proxy:...
    ```
 
-   The distributor shows one task for each Linux node, so `1/1` on a single node and `3/3` on three.
+   The distributor shows one task for each Linux node (a microVM node has none), so `1/1` on a single node and `3/3` on three.
 
 2. Check the tasks of a service. A task in the `Running` state is a runner that polls CircleCI.
 

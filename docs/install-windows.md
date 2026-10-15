@@ -192,7 +192,7 @@ The optional classes need one more label each. Add it to the nodes that run them
 
 ## 4. Create the secrets
 
-Create one secret for each service you deploy, including each optional class except the persistent one. The secret is a runner config file and holds only the token. The token proxy mounts these secrets, and the runners never see them:
+Create one secret for each service you deploy, including each optional class, the persistent one too (`windows-persistent-token`: `persistent.yaml` declares it as external, so the deploy fails without it). The secret is a runner config file and holds only the token. The token proxy mounts the secrets of the proxied classes, and those runners never see them. The persistent class is the exception ([The persistent class](security.md#the-persistent-class)). Every secret has this format:
 
 ```yaml
 api:

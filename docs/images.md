@@ -6,7 +6,7 @@ page-description: Run the runner in stock Linux and Windows images with a read-o
 
 # Images
 
-This repository publishes no images. The stack files run stock images and mount the runner into them, so the image of a class is the environment that its jobs see. This page describes the stock Linux images, the stock Windows image, and how to bring your own image on each OS.
+This repository publishes no class images. (It publishes one image, the token proxy, which holds the class tokens and is no environment for a job: [The token proxy image](install-linux.md#the-token-proxy-image).) The stack files run stock images and mount the runner into them, so the image of a class is the environment that its jobs see. This page describes the stock Linux images, the stock Windows image, and how to bring your own image on each OS.
 
 ## Linux: stock images with the mounted runner
 

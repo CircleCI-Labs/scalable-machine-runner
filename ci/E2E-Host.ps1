@@ -100,6 +100,15 @@ function Invoke-TreeKill($Process) {
     }
 }
 function Get-EvidencePath([string] $Probe) { Join-Path $evidenceDir "$Probe.$wf" }
+function Read-EvidenceStatus([string] $Path) {
+    # The first line of the status file of a probe, or $null while the probe still writes it (Windows refuses a read of a file that the
+    # job of the probe has open: "being used by another process"). The caller looks again at the next turn.
+    try {
+        $line = Get-Content -LiteralPath $Path -TotalCount 1 -ErrorAction Stop
+        if ($line) { return $line.Trim() }
+    } catch { Write-Verbose "status not readable yet: $($_.Exception.Message)" }
+    return $null
+}
 function Get-EvidenceField([string] $Path, [string] $Name) {
     $line = Get-Content -Path $Path -ErrorAction SilentlyContinue | Where-Object { $_ -like "$Name=*" } | Select-Object -First 1
     if ($line) { return $line.Substring($Name.Length + 1) }
@@ -290,11 +299,13 @@ function Wait-Probe([string] $Probe, [int] $DiesBefore, [datetime] $Start) {
         }
         if (Test-TokenRejected) { Exit-WithFailure 'the runner token was rejected (401). Rotate E2E_RUNNER_TOKEN_WINDOWS in the context.' }
         if ((Test-Path $ev) -and (Test-Path "$ev.status")) {
-            $st = (Get-Content -LiteralPath "$ev.status" -TotalCount 1).Trim()
-            Write-E2ELog "probe ${Probe}: result=$(Get-EvidenceField $ev 'result') residue=$(Get-EvidenceField $ev 'residue') status=$st"
-            if ((Get-EvidenceField $ev 'result') -ne 'pass') { Exit-WithFailure "probe $Probe reported a failure (see its job log)" }
-            if ($st -ne 'passed') { Exit-WithFailure "probe job $Probe did not pass (status: $st); see its job log" }
-            break
+            $st = Read-EvidenceStatus "$ev.status"
+            if ($null -ne $st) {
+                Write-E2ELog "probe ${Probe}: result=$(Get-EvidenceField $ev 'result') residue=$(Get-EvidenceField $ev 'residue') status=$st"
+                if ((Get-EvidenceField $ev 'result') -ne 'pass') { Exit-WithFailure "probe $Probe reported a failure (see its job log)" }
+                if ($st -ne 'passed') { Exit-WithFailure "probe job $Probe did not pass (status: $st); see its job log" }
+                break
+            }
         }
         $dies = Get-DieCount
         if ($dies -gt $DiesBefore -and -not (Test-Path $ev)) {

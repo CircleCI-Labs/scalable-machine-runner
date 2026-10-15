@@ -62,7 +62,10 @@ Keep jobs off managers when you can. A container breakout on a manager exposes t
 $ docker node update --availability drain <manager name>
 ```
 
-On a single-node Swarm the only node is a manager and runs the replicas. Never use the Docker socket classes (pattern A) there. Refer to [Docker Builds](docker-builds.md).
+> [!WARNING]
+> **The token proxy needs a node that is not drained.** `token-proxy` runs on a manager by default (`node.role == manager`), and a drained node takes no task. If you drain every manager, the proxy stays `Pending` (`no suitable node`) and no runner can claim a job, with no other error: the runners only log 502 or a refused connection to `token-proxy`. The same happens when the managers are Linux hosts and the proxy is the Windows one (`token-proxy-windows` also defaults to a manager, and a Windows task cannot run on a Linux manager), and when a Windows-only swarm has no Windows manager. Keep one manager undrained for the proxy, or pin the proxy to a worker with the label `machine-runner-swarm.proxy=true` ([Labels used by this repository](#labels-used-by-this-repository)). A proxy on a worker still holds every class token, so choose a node that runs no jobs.
+
+On a single-node Swarm the only node is a manager and runs the replicas, and with it the proxy. Never use the Docker socket classes (pattern A) there. Refer to [Docker Builds](docker-builds.md).
 
 ## Create the swarm
 

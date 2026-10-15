@@ -610,6 +610,8 @@ $ docker node update --availability active <node name>
 
 Tasks do not move back to the node by themselves. Single-task replicas restart after every job, so new tasks spread over the nodes again within a short time. Patch managers one at a time, so the cluster keeps its quorum. Refer to [Managers and quorum](multi-node.md#managers-and-quorum).
 
+Draining the node that runs `token-proxy` moves the proxy to another node that matches its placement, and its state stays behind ([Where the proxy runs, and when it moves](#where-the-proxy-runs-and-when-it-moves)). Draining every manager, or the only node that can run it, leaves the proxy `Pending` and stops every claim: keep one node undrained for it ([the warning in Multi-Node Clusters](multi-node.md#managers-and-quorum)).
+
 ### Stop a busy Windows container
 
 On Linux, a stop lets the running job finish. On Windows, stopping a busy container from outside kills its job after about 5 seconds.

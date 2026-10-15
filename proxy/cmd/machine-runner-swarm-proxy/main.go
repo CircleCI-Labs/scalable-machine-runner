@@ -529,6 +529,26 @@ func checkHealth(listen string) int {
 	return 0
 }
 
+// serve runs srv on ln until ctx is done, then shuts it down within grace, and returns only after that: a claim that CircleCI has
+// answered and that is latched must reach its runner before the process exits.
+func serve(ctx context.Context, srv *http.Server, ln net.Listener, grace time.Duration) error {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), grace)
+		defer cancel()
+		if srv.Shutdown(sctx) != nil {
+			srv.Close()
+		}
+	}()
+	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	<-done
+	return nil
+}
+
 func main() {
 	var cf classFlags
 	flag.Var(&cf, "class", "SERVICE=TOKEN-FILE: the runner service of one resource class (tasks.<service> is resolved) and the file with its token, bare or a runner config with auth_token (repeatable; also "+classEnvPrefix+"* variables)")
@@ -585,20 +605,16 @@ func main() {
 		}
 	}()
 	srv := &http.Server{Addr: *listen, Handler: p, ReadHeaderTimeout: 10 * time.Second}
-	go func() {
-		<-ctx.Done()
-		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if srv.Shutdown(sctx) != nil {
-			srv.Close()
-		}
-	}()
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		log.Fatal(err)
+	}
 	var names []string
 	for _, c := range classes {
 		names = append(names, c.dns)
 	}
 	log.Printf("machine-runner-swarm-proxy %s listening on %s, upstream %s, classes %s", version, *listen, u.Host, strings.Join(names, ","))
-	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+	if err := serve(ctx, srv, ln, 8*time.Second); err != nil {
 		log.Fatal(err)
 	}
 }

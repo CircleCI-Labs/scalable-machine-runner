@@ -221,7 +221,7 @@ Dragonball is the built-in VMM of runtime-rs and works with the same steps. It s
 
 ## What is tested
 
-`linux/tests/microvm.sh` runs two Docker-in-Docker nodes with KVM, the real stack files `runners.yaml` and `microvm.yaml`, the real entrypoint, a distributor on the runc node and a test mirror that serves the runner and the token proxy, and the real runner against a fake API. It skips when `/dev/kvm` is missing. It checks:
+`linux/tests/microvm.sh` runs two Docker-in-Docker nodes with KVM, the real stack files `runners.yaml` and `microvm.yaml`, the real entrypoint, a distributor on the runc node, a test mirror that serves the runner, the token proxy image built from `proxy/`, and the real runner against a fake API. It skips when `/dev/kvm` is missing. It checks:
 
 - The classes stay pending until a node has the label. The forwarder and the proxy run on the runc node, together with the distributor, and the Kata node runs no distributor and has no `runner-bin` volume.
 - The guest kernel differs from the node kernel, `/proc/cmdline` names `kata-containers`, and `/etc/resolv.conf` is the node file and read-only.

@@ -142,7 +142,7 @@ A busy replica finishes its job before Swarm replaces it. Restart the proxy for 
 $ docker service update --force runners_token-proxy
 ```
 
-The proxy runs the binary that the distributor installed behind `proxy/current` in `runner-bin` when Swarm creates its container. A new `MACHINE_RUNNER_SWARM_PROXY_VERSION` therefore reaches it at its next restart, and so does a newer release that a checkout picked up (`unreleased` is the latest published release, looked at at every check interval). A binary that differs from its record stops the start (`does not match its SHA-256 record`).
+The proxy runs from its image, so a restart does not change its version: the same tag or digest as before, unless the tag has moved since (`edge` moves with every merge to the main branch). [Upgrade the token proxy](#upgrade-the-token-proxy) says how to change the image on purpose.
 
 #### Where the proxy runs, and when it moves
 
@@ -301,12 +301,10 @@ The settings are variables of `docker stack deploy`. They apply to the distribut
 | `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often a floating version asks the manifest again, and how often the distributor verifies the installed copy of a pin. A number of seconds, or a number with `s`, `m`, `h`, or `d` |
 | `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `https://circleci-binary-releases.s3.amazonaws.com/circleci-runner` | Where `manifest.json` and the tarballs are. Set it for a [mirror](#run-the-downloads-from-a-mirror) |
 | `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | Empty | A comma-separated list of the SHA-256 values of the tarballs that may be installed, for every architecture of your nodes. It replaces the value of the manifest. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) |
-| `MACHINE_RUNNER_SWARM_PROXY_VERSION` | The release that you downloaded (a checkout: `unreleased`) | The release `v<version>` of this repository whose `machine-runner-swarm-proxy_linux_<arch>` the distributor installs, next to the runner. `ci/release.sh` writes the version of the release into the default of the stack files in the bundle, so a release needs no setting. In a checkout (`git clone`, Download ZIP) the default is `unreleased`, which means the **latest published release** of this repository: the distributor reads its tag from `MACHINE_RUNNER_SWARM_PROXY_LATEST_URL`, installs that proxy, and looks again at every check interval. With no release published yet it logs that, installs no proxy, and the `token-proxy` service waits |
-| `MACHINE_RUNNER_SWARM_PROXY_LATEST_URL` | `https://api.github.com/repos/CircleCI-Labs/scalable-machine-runner/releases/latest` | What `unreleased` asks: JSON with the `tag_name` of the latest release. GitHub answers 60 requests per hour for each address without a token, which is far more than one request per node and day. Set it for a mirror |
-| `MACHINE_RUNNER_SWARM_PROXY_BASE_URL` | `https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download` | Where `v<version>/machine-runner-swarm-proxy_linux_<arch>` and `v<version>/SHA256SUMS` are. Set it for a mirror of the release files |
-| `MACHINE_RUNNER_SWARM_PROXY_SHA256` | Empty | A comma-separated list of the SHA-256 values of the proxy binaries that may be installed (one for each architecture of your nodes). The binary must equal its line in `SHA256SUMS` and, with this list, one of the values |
 
-The architectures are those of CircleCI's manifest, found with `uname -m`: `amd64`, `arm64`, `ppc64le` and `s390x`. The runner tarball and the proxy binary of a node are the ones of its own architecture, and a host with another one stops the distributor with `unsupported architecture`.
+The token proxy is not a setting of the distributor: it is an image. [Upgrade the token proxy](#upgrade-the-token-proxy) has its variable.
+
+The architectures are those of CircleCI's manifest, found with `uname -m`: `amd64`, `arm64`, `ppc64le` and `s390x`. The runner tarball of a node is the one of its own architecture, and a host with another one stops the distributor with `unsupported architecture`. The token proxy image has the same four Linux platforms in one tag, so it needs no setting.
 
 A command that sets a variable must reach `docker stack deploy`. A host with `sudo` drops the environment, so pass the variable with `env`, or run the command as a user in the `docker` group. Set the same variables on every later deploy, because a deploy without them sets the defaults again.
 
@@ -428,7 +426,6 @@ The settings are the variables of [the Linux table](#settings-of-the-distributor
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | An exact version is a pin, and the default: the newest that CI tests (`3.1.13` in this release). `3.1`, `3` and `current` float, and the distributor then looks at the manifest again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` (default `24h`): [the version policy](#the-version-policy). `current` stays within `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` (default `3`) |
 | `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | A comma-separated list of the SHA-256 values of the `circleci-runner_windows_<arch>.tar.gz` tarballs that may be installed. It replaces the value of the manifest |
 | `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | A mirror: `manifest.json` and `<version>/circleci-runner_windows_<arch>.tar.gz` below this URL |
-| `MACHINE_RUNNER_SWARM_PROXY_VERSION`, `_PROXY_LATEST_URL`, `_PROXY_BASE_URL`, `_PROXY_SHA256` | The token proxy, as in [the Linux table](#settings-of-the-distributor): the release `v<version>` of this repository whose `machine-runner-swarm-proxy_windows_<arch>` and `SHA256SUMS` the distributor installs (`proxy\versions\<version>`, behind the link `proxy\current`, the last 2 versions kept). `ci/release.sh` pins the default in the bundle, and a checkout (`unreleased`) installs the latest published release |
 | `MACHINE_RUNNER_SWARM_TOOLS_BASE_URL` | A directory URL that holds `PortableGit-<version>-64-bit.7z.exe` (arm64: `-arm64.7z.exe`) and `7zr.exe`, the two downloads that the script pins by SHA-256. Without it they come from GitHub |
 
 The architecture is `amd64` or `arm64`, read from `PROCESSOR_ARCHITECTURE`. CI runs the distributor on amd64 hosts only: the arm64 file names and manifest entries are tested there, and no Windows arm64 host runs the stack in CI.
@@ -448,6 +445,17 @@ docker stack deploy -c deploy\runners.yaml runners
 - **A mirror.** Copy `manifest.json` and the tarballs as for [Linux](#run-the-downloads-from-a-mirror), with `windows` and `amd64` (or `arm64`) in the names, and copy the two pinned Git downloads into the tools directory. The distributor downloads with PowerShell, so an `https` mirror needs a certificate that the stock Server Core image trusts.
 
 A link cannot be replaced in one step on Windows, so for a moment `current` does not exist. A container that Swarm creates in that moment does not start, and Swarm starts the next one after the restart delay of 10 seconds. The window is a few milliseconds long. On a new node, the runner tasks fail in the same way until the first download of the distributor is done. The runner has no start-time check of the binary on Windows, because no entrypoint script exists: the distributor compares the active binary with its record at every check and installs it again when it changed. Refer to [Runner binary integrity on Windows](security.md#runner-binary-integrity-on-windows).
+
+### Upgrade the token proxy
+
+The token proxy is the image `ccilabs/machine-runner-swarm-proxy`, and the service `token-proxy` (Windows: `token-proxy-windows`) reads it from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. The tags are `X.Y.Z` (a release, which never moves), `X.Y`, `X`, `latest`, `edge` (the latest commit of the main branch) and `sha-<12 characters>` ([The token proxy image](install-linux.md#the-token-proxy-image)). The default of a release bundle is its own release, by tag and digest. A checkout defaults to `edge`.
+
+- **Upgrade with the release.** Deploy the stack files of the new release ([Upgrade to a new release of this repository](#upgrade-to-a-new-release-of-this-repository)). They name the new image.
+- **Pin a digest.** Run the proxy from `ccilabs/machine-runner-swarm-proxy@sha256:<digest>`, set in the environment of every `docker stack deploy`. A digest never changes, and it is the only pin that a re-pushed tag cannot move. Read the digest of a release in its notes and in the bundle (`grep MACHINE_RUNNER_SWARM_PROXY_IMAGE stack/runners.yaml`), or with `docker buildx imagetools inspect ccilabs/machine-runner-swarm-proxy:<version>`, and check the signature before you trust it ([Verify the token proxy image](security.md#verify-the-token-proxy-image)).
+- **Change the image of the running service.** `docker service update --image <image> runners_token-proxy`. Swarm stops the old proxy and starts the new one (`stop-first`: a second proxy would allow a second claim), so the runners cannot claim for the few seconds of the change, and every runner that has claimed stays refused ([Restart the proxy](#restart-the-proxy)). Record the change in your deploy, so that the next deploy does not undo it. A tag such as `edge` is resolved to a digest when you deploy: run `docker stack deploy` again to pick up a newer one.
+- **Roll back.** Deploy the previous digest or version the same way.
+
+An air-gapped site mirrors the image: `docker pull`, then `docker tag` and `docker push` to your registry (`docker buildx imagetools create --tag <your registry>/<name>:<tag> ccilabs/machine-runner-swarm-proxy:<version>` keeps every platform), and `MACHINE_RUNNER_SWARM_PROXY_IMAGE=<your registry>/<name>:<tag>`. Keep the signature with it: `cosign copy` copies the image with its signature.
 
 ### Update the images
 

@@ -84,10 +84,10 @@ No. Docker has no macOS containers, so Swarm cannot schedule macOS jobs. Apple's
 |---|---|
 | Linux, Ubuntu LTS, amd64 | Tested in CI, including real jobs |
 | Linux, Ubuntu LTS, arm64 | CI tests that the distributor installs the runner and that the stack starts. It runs real jobs on amd64 only |
-| Linux, ppc64le and s390x | CircleCI publishes the runner for them, and the distributor and the token proxy are built for them. CI emulates both under QEMU and checks that the distributor installs the runner and the proxy of the right architecture. Nothing else runs there in CI |
+| Linux, ppc64le and s390x | CircleCI publishes the runner for them, and the distributor and the token proxy are built for them. CI emulates them under QEMU: the distributor installs the runner of the right architecture, and the token proxy image runs on both. Nothing else runs there in CI |
 | Linux, RHEL 8 and later | Steps documented, not tested in CI |
 | Windows Server 2025 and 2022 | Tested in CI, on amd64 |
-| Windows on arm64 | The distributor and the token proxy are built for it, and CI checks the file names. No Windows arm64 host runs the stack in CI |
+| Windows on arm64 | The distributor is built for it, and CI checks the file names. The token proxy has no `windows/arm64` image ([Windows](install-windows.md#the-token-proxy-image)). No Windows arm64 host runs the stack in CI |
 | Windows Server 2019 | Supported by machine runner 3. Untested here, and the stack files have no label for it |
 | Windows Server 2016 and older | Not compatible with machine runner 3 |
 | macOS | Out of scope |

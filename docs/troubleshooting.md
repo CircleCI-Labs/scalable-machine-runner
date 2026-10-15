@@ -241,13 +241,13 @@ A line reads `runner-distributor: SHA-256 mismatch for circleci-runner_linux_amd
 
 **Fix.** Compare `wanted` with the SHA-256 of the file that you expect, from the `checksums.txt` of the release or from the manifest. Correct the list, the mirror, or the proxy. Never copy the `got` value into the list without checking where the file came from.
 
-### The distributor log says that the token proxy is not installed
+### The token-proxy service does not start: the image cannot be pulled
 
-The log has `runner-distributor: error: the token proxy is not installed: MACHINE_RUNNER_SWARM_PROXY_VERSION is unreleased (a checkout of this repository), which means its latest published release, and <url> returns none`, and the service `runners_token-proxy` waits (`has not installed the proxy`). The runner itself is installed and unaffected.
+`docker service ps runners_token-proxy --no-trunc` (Windows: `runners_token-proxy-windows`) shows `No such image`, `manifest unknown`, `pull access denied`, or `no matching manifest for <platform>`, and the runners get connection errors for `token-proxy`. The distributor and the runner are unaffected.
 
-**Cause.** A `git clone` or a "Download ZIP" has `unreleased` as the proxy version, which means the latest published release of this repository. The distributor asked GitHub for it and got no answer: either this repository has published no release yet, or the node cannot reach `api.github.com` (a proxy or an allow list), or GitHub answered with a rate limit.
+**Cause.** The image is `ccilabs/machine-runner-swarm-proxy` (or what `MACHINE_RUNNER_SWARM_PROXY_IMAGE` names). The usual causes are a node that cannot reach Docker Hub (a proxy or an allow list), a tag that does not exist (a typo, or `edge` before the first publication of the main branch), a local image name such as `machine-runner-swarm-proxy:dev` that exists on another node and not on the node that runs the proxy, and a platform that the tag lacks (Windows on Arm).
 
-**Fix.** Use the bundle of a release, which names its release. Or set `MACHINE_RUNNER_SWARM_PROXY_VERSION` to a release (`0.3.0`) in the environment of `docker stack deploy`. Behind an allow list, add `api.github.com` and `github.com`, or mirror the release files and set `MACHINE_RUNNER_SWARM_PROXY_BASE_URL` and `MACHINE_RUNNER_SWARM_PROXY_LATEST_URL` ([the settings](operations.md#settings-of-the-distributor)). The distributor tries again every 5 minutes.
+**Fix.** Check the name with `docker service inspect runners_token-proxy --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'` and pull it on the node: `docker pull <image>`. Behind an allow list, add Docker Hub ([Egress hosts](security.md#egress-hosts)), or mirror the image and set `MACHINE_RUNNER_SWARM_PROXY_IMAGE` ([Upgrade the token proxy](operations.md#upgrade-the-token-proxy)). A local build must be on the node that the proxy runs on: build it there, or `docker save <image> | ssh <node> docker load`. Swarm tries again by itself.
 
 ### The distributor log shows not adopting it
 

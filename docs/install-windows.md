@@ -34,7 +34,7 @@ The manual steps are short: start or join a swarm, label the node, create the se
 - Docker Engine in Windows-container mode, with the Windows Containers feature. The `Install-DockerCE` script in the `helpful_tools` directory of the [Microsoft Windows Containers repository](https://github.com/microsoft/Windows-Containers) installs both.
 - An elevated Windows PowerShell 5.1 session.
 - A host clock that is synchronized with NTP. TLS to CircleCI fails silently when the clock drifts.
-- Outbound HTTPS access from each host to the hosts in [Egress hosts](security.md#egress-hosts). The distributor needs `circleci-binary-releases.s3.amazonaws.com` for the runner and its manifest, and `github.com` and `release-assets.githubusercontent.com` for Git and 7-Zip. The host needs `mcr.microsoft.com` for the base image. For hosts without internet access, refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
+- Outbound HTTPS access from each host to the hosts in [Egress hosts](security.md#egress-hosts). The distributor needs `circleci-binary-releases.s3.amazonaws.com` for the runner and its manifest, and `github.com` and `release-assets.githubusercontent.com` for Git and 7-Zip. The host needs `mcr.microsoft.com` for the base image, and Docker Hub for the token proxy image. For hosts without internet access, refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 - Disk space for the base image. The `servercore` image is about 2.2 GB compressed. Each container shows 20 GB free on `C:` by default. Add `"storage-opts": ["size=60GB"]` to `C:\ProgramData\docker\config\daemon.json` to raise the limit.
 
 ### Image tags and host builds
@@ -94,6 +94,26 @@ CircleCI signs the file `SHA256SUMS` of each release with the OIDC token of the 
 
 Do not use a bundle if a command fails.
 
+### The token proxy image
+
+The token proxy holds your class tokens ([The token proxy](concepts.md#the-token-proxy)). On Windows it is the image `ccilabs/machine-runner-swarm-proxy` of Docker Hub, which the stack file `token-proxy-windows` pulls when you deploy: a static binary on Nano Server, for `windows/amd64`. The same tag also holds the Linux images, and a manifest list holds one Windows image for Windows Server 2022 and one for Windows Server 2025, so Docker picks the one of the host. Tags, pinning and the signature are the same as on Linux: refer to [The token proxy image](install-linux.md#the-token-proxy-image) and [Verify the token proxy image](security.md#verify-the-token-proxy-image).
+
+The image runs as `ContainerAdministrator`, as the stock Server Core image does: Windows maps no user to a named volume, and `ContainerUser` of Nano Server cannot write to the volume that keeps the state of the proxy.
+
+There is no `windows/arm64` image, because CI has no Windows on Arm host to build and test one on. In a cluster with Windows on Arm nodes, pin the proxy to a `windows/amd64` node with `MACHINE_RUNNER_SWARM_PROXY_PLACEMENT` ([Multi-Node Clusters](multi-node.md)). A cluster of Windows on Arm nodes only needs an image of your own: build the proxy with `GOARCH=arm64`, build `proxy\Dockerfile.windows` on an arm64 host with an arm64 Nano Server image as `--build-arg BASE=`, and name the result with `MACHINE_RUNNER_SWARM_PROXY_IMAGE`.
+
+To use another image, for development or an air gap, set `MACHINE_RUNNER_SWARM_PROXY_IMAGE` in the environment of `docker stack deploy`. A checkout builds it from the source: build the binary on any host with Go, put it in an empty directory, and build on the Windows host whose build matches the base image.
+
+```powershell
+$env:GOOS = 'windows'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
+New-Item -ItemType Directory -Force -Path build | Out-Null
+Push-Location proxy; go build -trimpath -o ..\build\machine-runner-swarm-proxy.exe .\cmd\machine-runner-swarm-proxy; Pop-Location
+docker build -f proxy\Dockerfile.windows -t machine-runner-swarm-proxy:dev build
+$env:MACHINE_RUNNER_SWARM_PROXY_IMAGE = 'machine-runner-swarm-proxy:dev'
+```
+
+The image must be on the node that runs the proxy. A local build exists only where you built it.
+
 ## 1. Create the resource classes
 
 Create a namespace if your organization has none.
@@ -125,6 +145,8 @@ Run these steps in an elevated PowerShell on every host. Do them before you star
    ```powershell
    docker pull mcr.microsoft.com/windows/servercore:ltsc2022
    ```
+
+   On the host that runs the token proxy (a manager, by default), pull its image too: `docker pull ccilabs/machine-runner-swarm-proxy:edge`, or the image that you build ([The token proxy image](#the-token-proxy-image)).
 
 ## 3. Start Swarm and label the node
 

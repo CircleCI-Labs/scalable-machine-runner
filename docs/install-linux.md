@@ -27,7 +27,7 @@ The manual steps come first and use ordinary `docker` commands. Nothing is insta
 - Docker Engine 24 or later, running, with Swarm mode available. Podman cannot run Swarm.
 - Root access, or membership of the `docker` group. Docker and a Swarm join are all that a node needs: no runner, entrypoint, or tool is installed on a node.
 - A node clock that is synchronized with NTP. TLS to CircleCI fails silently when the clock drifts.
-- Outbound HTTPS access from each node to the hosts in [Egress hosts](security.md#egress-hosts), which include the release bucket of CircleCI (the runner download) and a registry that serves the stock image `alpine` (the distributor). No inbound access is required. For nodes without internet access, refer to [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror).
+- Outbound HTTPS access from each node to the hosts in [Egress hosts](security.md#egress-hosts), which include the release bucket of CircleCI (the runner download) and the registries that serve the stock image `alpine` (the distributor) and the token proxy image (Docker Hub). No inbound access is required. For nodes without internet access, refer to [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror).
 - Enough CPU and memory for the services. The shipped file reserves 10 CPUs and 20 GB of memory in total, and replicas that do not fit stay pending.
 
 Membership of the `docker` group is equivalent to root on the node. Limit it to administrators.
@@ -51,13 +51,34 @@ Each [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/r
 |---|---|
 | `machine-runner-swarm-<version>.tar.gz` | The bundle for Linux: the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, without the tests |
 | `machine-runner-swarm-<version>.zip` | The same bundle for Windows |
-| `machine-runner-swarm-proxy_linux_amd64`, `_linux_arm64`, `_linux_ppc64le`, `_linux_s390x`, `_windows_amd64`, `_windows_arm64` | The static token proxy binary for each platform of CircleCI's runner manifest. Refer to [The token proxy](concepts.md#the-token-proxy): the distributor of the stack installs the one of its architecture, so you only download them for an air-gapped mirror |
-| `SHA256SUMS` | The SHA-256 checksum of both bundles and of the proxy binaries |
+| `SHA256SUMS` | The SHA-256 checksum of both bundles |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of `SHA256SUMS` |
 
 The bundle has a top-level `VERSION` file with the release number and a `CHANGELOG.md` with the notes of every release.
 
-A release is the recommended source, because its stack files name the release whose token proxy they install. A `git clone` of the default branch or a "Download ZIP" works too: the stack files there say `unreleased`, which means the latest published release of this repository, so the distributor installs the proxy of that release. It needs a published release, and says so in its log when there is none.
+A release is the recommended source, because its stack files name the token proxy image of that release by tag and digest. A `git clone` of the default branch or a "Download ZIP" works too: the stack files there name the image tag `edge`, the latest commit of the main branch. Refer to [The token proxy image](#the-token-proxy-image).
+
+### The token proxy image
+
+The token proxy is the one container that holds your class tokens ([The token proxy](concepts.md#the-token-proxy)). It is a published image, `ccilabs/machine-runner-swarm-proxy` on Docker Hub, and the stack file pulls it when you deploy. You install nothing for it. It is a static Go binary in a minimal base, runs as a non-root user with a read-only root file system, and one tag covers `linux/amd64`, `linux/arm64`, `linux/ppc64le` and `linux/s390x`, so the node that runs it can have any of them. Windows nodes get the Windows image from the same tag ([Windows](install-windows.md#the-token-proxy-image)).
+
+| Tag | What it is |
+|---|---|
+| `X.Y.Z` | The image of a release. It never changes: pin this one |
+| `X.Y`, `X` | The newest release of that minor or major line |
+| `latest` | The newest release |
+| `edge` | The latest commit of the main branch. It is the default of the stack files in a checkout, and moves with every merge |
+| `sha-<12 characters>` | The image of one commit of the main branch |
+
+The stack file reads the image from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. A release bundle has the default `ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>` (the tag, and the digest that Docker pulls), a checkout has `ccilabs/machine-runner-swarm-proxy:edge`. To use another image, set the variable in the environment of `docker stack deploy`: a digest for a pin, a registry of your own for an air gap, or a local build for development.
+
+```bash
+# development: build the image from the checkout, and name it
+docker build -t machine-runner-swarm-proxy:dev proxy/
+sudo env MACHINE_RUNNER_SWARM_PROXY_IMAGE=machine-runner-swarm-proxy:dev docker stack deploy -c deploy/runners.yaml runners
+```
+
+The image must be on the node that runs the proxy (a manager by default, or the node that you pin it to). A local build exists only on the node where you built it: build it there, or copy it with `docker save machine-runner-swarm-proxy:dev | ssh <node> docker load`. Docker pulls a published image by itself. [Verify the token proxy image](security.md#verify-the-token-proxy-image) shows how to check its signature, and [Upgrade the token proxy](operations.md#upgrade-the-token-proxy) how to change its tag.
 
 ### Verify a release
 
@@ -250,7 +271,7 @@ To add the optional classes, pass your copies of their files with more `-c` flag
 $ docker stack deploy -c deploy/runners.yaml -c deploy/persistent.yaml runners
 ```
 
-This command is the whole install. The service `runner-distributor` starts on every Linux node, also on a node that joins later. It downloads the runner of CircleCI (the exact version that the stack file pins, the newest that CI tests), checks its SHA-256, and puts it in the volume `runner-bin` of the node. A runner container that starts first waits up to 120 seconds for it. To deploy with other distributor settings, for example a floating version such as `3.1`, set them as variables of this command. A host with `sudo` drops the environment, so write `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 docker stack deploy ...`, or run the command as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
+This command is the whole install. The service `runner-distributor` starts on every Linux node, also on a node that joins later. It downloads the runner of CircleCI (the exact version that the stack file pins, the newest that CI tests), checks its SHA-256, and puts it in the volume `runner-bin` of the node. The service `token-proxy` pulls its image from Docker Hub. A runner container that starts first waits up to 120 seconds for it. To deploy with other distributor settings, for example a floating version such as `3.1`, set them as variables of this command. A host with `sudo` drops the environment, so write `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 docker stack deploy ...`, or run the command as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
 ## Verify the deployment
 

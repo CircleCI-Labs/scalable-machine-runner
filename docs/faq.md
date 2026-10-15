@@ -8,7 +8,7 @@ page-description: Answers to common questions about the Docker Swarm runner stac
 
 ## What is this repository?
 
-It is a set of Docker Swarm stack files, a small Linux entrypoint, a Linux service that keeps the runner on every node, optional setup helpers, and documentation. Together they run CircleCI machine runner 3 in containers, with one resource class for each Swarm service and a new container for every job. Refer to [Concepts](concepts.md).
+It is a set of Docker Swarm stack files, a small Linux entrypoint, a Linux service that keeps the runner on every node (except the nodes of the microVM add-on, which have their own copy), optional setup helpers, and documentation. Together they run CircleCI machine runner 3 in containers, with one resource class for each Swarm service and a new container for every job. Refer to [Concepts](concepts.md).
 
 ## Does CircleCI support it?
 

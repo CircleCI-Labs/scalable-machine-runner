@@ -86,7 +86,7 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
    sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml
    ```
 
-   This is the whole install. The service `runner-distributor` starts on every node, downloads the runner of CircleCI, checks its SHA-256, and makes it available to the runner services. A runner container that starts first waits up to 2 minutes for it.
+   This is the whole install. The service `runner-distributor` starts on every Linux node (a node that you label for the microVM add-on is the exception: it has its own copy), downloads the runner of CircleCI, checks its SHA-256, and makes it available to the runner services. A runner container that starts first waits up to 2 minutes for it.
 
 6. Check that the runners are up and connected. `docker stack deploy` does not wait, so the replicas need a minute to start.
 
@@ -134,7 +134,7 @@ A replica that does not fit stays `Pending`. That is not an error: Swarm waits f
 
 ## What you did not do
 
-The helper checks the node, starts Swarm, creates the secrets, and deploys the stack. It does not install Docker, create classes or tokens, edit the stack file, label or join nodes, or build images. It does not install the runner either: the `runner-distributor` service of the stack does that on every node. [Optional: use the setup helper](install-linux.md#optional-use-the-setup-helper) lists each step.
+The helper checks the node, starts Swarm, creates the secrets, and deploys the stack. It does not install Docker, create classes or tokens, edit the stack file, label or join nodes, or build images. It does not install the runner either: the `runner-distributor` service of the stack does that on every Linux node. [Optional: use the setup helper](install-linux.md#optional-use-the-setup-helper) lists each step.
 
 ## Next
 

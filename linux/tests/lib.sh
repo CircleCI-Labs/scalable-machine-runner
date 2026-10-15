@@ -340,6 +340,9 @@ make_override() {
       echo "    environment:"
       echo "      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: \"$MIRROR_URL\""
       echo "      MACHINE_RUNNER_SWARM_RUNNER_VERSION: \"$DIST_VERSION\""
+      # the mirror is plain http and its versions are not the pin of the stack file: trust its manifest, on purpose (DIST_ENV may change both)
+      echo "      MACHINE_RUNNER_SWARM_RUNNER_SHA256: \"manifest\""
+      echo "      MACHINE_RUNNER_SWARM_ALLOW_HTTP: \"true\""
       for kv in "${DIST_ENV[@]:-}"; do [[ -z $kv ]] || echo "      ${kv%%=*}: \"${kv#*=}\""; done
       # DIST_HOLD=1: no node matches, so the distributor does not run (a first deployment before the runner is there)
       [[ -z ${DIST_HOLD:-} ]] || printf '    deploy:\n      placement:\n        constraints: ["node.labels.hold == yes"]\n'

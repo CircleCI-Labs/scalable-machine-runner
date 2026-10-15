@@ -310,7 +310,8 @@ dist_once() { # VOLUME ENV=VALUE...: the distributor script of this checkout in 
   local v=$1 i pat='\[ ok \]'
   [[ -z ${DIST_ONCE_WAIT:-} ]] || pat=$DIST_ONCE_WAIT
   shift
-  local -a envs=(-e "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL")
+  # the test mirror is plain http: the first -e is the lab setting that a test overrides (a later -e wins) to test the https rule itself
+  local -a envs=(-e "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL" -e MACHINE_RUNNER_SWARM_ALLOW_HTTP=true)
   for i in "$@"; do envs+=(-e "$i"); done
   dk "$MGR" rm -f dist-once >/dev/null 2>&1 || true
   dk "$MGR" run -d --name dist-once -v /stack/runner-distributor.sh:/runner-distributor.sh:ro -v "$v":/opt/machine-runner-swarm "${envs[@]}" "$DIST_IMAGE" sh /runner-distributor.sh >/dev/null
@@ -332,12 +333,32 @@ echo "RESULT test=distributor phase=mismatch exit=$dist_rc running=$dist_running
 dist_once bad-pin "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "MACHINE_RUNNER_SWARM_RUNNER_SHA256=$zeros,${PUBLISHED_SHA[$OLD]^^}"   # the list holds one hash that matches, in capitals
 echo "RESULT test=distributor phase=sha256-list accepted_with_the_right_hash_in_the_list=$([[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] && echo yes || echo no)"
 [[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] || fail "a list that contains the right SHA-256 was refused: $dist_log"
+# an http:// mirror is refused unless a SHA-256 list is set (or http is allowed on purpose): the manifest would be the only root of trust, on the wire
+dist_once http-refused "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" MACHINE_RUNNER_SWARM_ALLOW_HTTP=false
+echo "RESULT test=distributor phase=http-mirror exit=$dist_rc without_a_list_or_allow_http=refused"
+[[ $dist_rc -ne 0 && $dist_log == *"the URL must be https://"* ]] || fail "an http:// mirror without a SHA-256 list was accepted: $dist_log"
+[[ -z $(dk "$MGR" run --rm -v http-refused:/v "$DIST_IMAGE" ls -A /v/versions 2>/dev/null) ]] || fail "something was installed from an http:// mirror without a list"
+dist_once http-list "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "MACHINE_RUNNER_SWARM_RUNNER_SHA256=${PUBLISHED_SHA[$OLD]}" MACHINE_RUNNER_SWARM_ALLOW_HTTP=false
+echo "RESULT test=distributor phase=http-mirror with_a_list=$([[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] && echo installed || echo refused)"
+[[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] || fail "an http:// mirror with a SHA-256 list was refused: $dist_log"
+dist_once http-floating "MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1" MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest MACHINE_RUNNER_SWARM_ALLOW_HTTP=false
+[[ $dist_rc -ne 0 && $dist_log == *"the URL must be https://"* ]] || fail "a floating version over http:// was accepted: $dist_log"
+dist_once ftp-refused "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=ftp://mirror.example.com/runner"
+[[ $dist_rc -ne 0 && $dist_log == *"must be an https:// URL"* ]] || fail "an ftp:// mirror was accepted: $dist_log"
+echo "RESULT test=distributor phase=http-mirror floating_over_http=refused ftp=refused"
+# the word manifest is no list: the hash of the manifest is trusted (the way to float), and a stray word is no SHA-256
+dist_once manifest-word "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest
+[[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] || fail "the word manifest did not select the hash of the manifest: $dist_log"
+dist_once bad-word "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" MACHINE_RUNNER_SWARM_RUNNER_SHA256=$zeros,manifest
+[[ $dist_rc -ne 0 && $dist_log == *"not a SHA-256"* ]] || fail "manifest next to a hash was accepted: $dist_log"
+echo "RESULT test=distributor phase=sha256-manifest-word trusted=yes mixed_with_a_hash=refused"
+
 # an exact version match: a pin of 3.1.1 does not accept a binary that reports 3.1.13 (the version line of a prefix is no match)
 mkdir -p "$work/mirror/3.1.1"
 cp "$work/mirror/$NEW/circleci-runner_linux_$ARCH.tar.gz" "$work/mirror/3.1.1/"
 mirror_versions+=(3.1.1)
 mirror_manifest "$OLD"
-dist_once prefix "MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.1"
+dist_once prefix "MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.1" MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest
 echo "RESULT test=distributor phase=exact-version exit=$dist_rc pin=3.1.1 binary_reports=$NEW"
 [[ $dist_rc -ne 0 && $dist_log == *"does not report version 3.1.1"* ]] || fail "a pin of 3.1.1 accepted a binary that reports $NEW: $dist_log"
 [[ -z $(dk "$MGR" run --rm -v prefix:/v "$DIST_IMAGE" ls -A /v/versions) ]] || fail "the binary of $NEW was installed as 3.1.1"
@@ -346,7 +367,7 @@ echo "RESULT test=distributor phase=exact-version exit=$dist_rc pin=3.1.1 binary
 # what a stopped run left (a link, a history that was being cut) is cleaned at the start
 dk "$MGR" volume create flipfail >/dev/null
 dk "$MGR" run --rm -v flipfail:/v "$DIST_IMAGE" sh -c 'mkdir -p /v/current/blocker && : > /v/.current.77 && : > /v/.history.77'
-dist_once flipfail "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD"
+dist_once flipfail "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest
 left=$(dk "$MGR" run --rm -v flipfail:/v "$DIST_IMAGE" ls -A /v | paste -sd, -)
 echo "RESULT test=distributor phase=flip-error exit=$dist_rc left_in_volume=$left"
 [[ $dist_rc -ne 0 && $dist_log == *"cannot move current to versions/$OLD"* && $dist_log != *"[ ok ]"* ]] || fail "a flip that failed was reported as done: $dist_log"

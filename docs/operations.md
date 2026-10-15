@@ -279,12 +279,14 @@ The runner version is operator-pinned, as it is for CircleCI's own runners. The 
 
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | What the nodes run | Does it change by itself |
 |---|---|---|
-| An exact version, `3.1.13` (the default) | That version. The default is the newest runner version that the CI of this repository tests, and each release of this repository bumps it ([how](releasing.md#bump-the-runner-version)) | Never. Once the version is installed, the distributor makes no request for it |
+| An exact version, `3.1.13` (the default) | That version. The default is the newest runner version that the CI of this repository tests, and each release of this repository bumps it ([how](releasing.md#bump-the-runner-version)). The stack file carries the SHA-256 values of its tarballs, so the install does not rest on the manifest | Never. Once the version is installed, the distributor makes no request for it |
 | `3.1` | The newest `3.1.x` of CircleCI's manifest | Yes: at every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` (default 24 hours) |
 | `3` | The newest `3.x.y` of the manifest | Yes, at every check interval |
 | `current` | CircleCI's current release, within `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` (default `3`) | Yes, at every check interval |
 
 The distributor resolves a floating value from the manifest of CircleCI, and asks the manifest again at every check interval **only for a floating value**. An exact pin never changes by itself: a new release of the runner, or of this repository, changes nothing on your nodes until you change the pin or deploy a release that carries a newer one. In a stack file, put a floating value in quotes (`"3.1"`), because YAML reads an unquoted `3.1` as a number, and `3.10` as `3.1`.
+
+**Floating is weaker, and it needs one more setting.** The default pin is checked against the SHA-256 values in the stack file, which come with the release of this repository that you deployed. A floating value cannot have such a list, because the version is not known in advance, so it takes the SHA-256 of each tarball from the `manifest.json` of CircleCI. That file comes from the same release bucket as the tarball, so whoever can change one can change both, and the check then proves only that the download is whole. Set `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest` together with a floating value: the default list names the pinned version only, and the distributor refuses any other tarball. Choose a floating value for a class that may run whatever CircleCI releases, and keep the default pin for the rest.
 
 An upgrade, a pin, and a rollback change the distributor only, whatever the policy is: the runner services never restart.
 
@@ -310,8 +312,9 @@ The settings are variables of `docker stack deploy`. They apply to the distribut
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | An exact version, the newest that CI tests (`3.1.13` in this release) | An exact version pins it. `3.1`, `3` and `current` float: [the version policy](#the-version-policy) |
 | `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` | `3` | The major version that `current` may adopt |
 | `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often a floating version asks the manifest again, and how often the distributor verifies the installed copy of a pin. A number of seconds, or a number with `s`, `m`, `h`, or `d` |
-| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `https://circleci-binary-releases.s3.amazonaws.com/circleci-runner` | Where `manifest.json` and the tarballs are. Set it for a [mirror](#run-the-downloads-from-a-mirror) |
-| `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | Empty | A comma-separated list of the SHA-256 values of the tarballs that may be installed, for every architecture of your nodes. It replaces the value of the manifest. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) |
+| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `https://circleci-binary-releases.s3.amazonaws.com/circleci-runner` | Where `manifest.json` and the tarballs are. Set it for a [mirror](#run-the-downloads-from-a-mirror). It must be an `https://` URL, unless a SHA-256 list is set |
+| `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | The four tarball SHA-256 values of the pinned version (`amd64`, `arm64`, `ppc64le`, `s390x`) | A comma-separated list of the SHA-256 values of the tarballs that may be installed, for every architecture of your nodes. The distributor installs nothing else, whatever the manifest says. A version of your own needs its own values (from the `checksums.txt` of its release), and the word `manifest` means no list: the hash of the manifest is trusted, which is weaker and is what a floating version needs. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) |
+| `MACHINE_RUNNER_SWARM_ALLOW_HTTP` | Not set | `true` accepts an `http://` download base without a SHA-256 list. For a lab: the hash of the manifest then protects nothing against someone on the path |
 
 The token proxy is not a setting of the distributor: it is an image. [Upgrade the token proxy](#upgrade-the-token-proxy) has its variable.
 
@@ -320,13 +323,13 @@ The architectures are those of CircleCI's manifest, found with `uname -m`: `amd6
 A command that sets a variable must reach `docker stack deploy`. A host with `sudo` drops the environment, so pass the variable with `env`, or run the command as a user in the `docker` group. Set the same variables on every later deploy, because a deploy without them sets the defaults again.
 
 ```console
-$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 docker stack deploy -c deploy/runners.yaml runners
-$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 linux/setup.sh --deploy --stack-file deploy/runners.yaml
+$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest docker stack deploy -c deploy/runners.yaml runners
+$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest linux/setup.sh --deploy --stack-file deploy/runners.yaml
 ```
 
 #### What the default does
 
-The default is an exact pin. The distributor reads `manifest.json` once, for the SHA-256 of that version (or uses your `MACHINE_RUNNER_SWARM_RUNNER_SHA256`), downloads the tarball, checks it, extracts the runner, records the SHA-256 of the binary, and moves the link `current` with one atomic rename. When the version is installed and verified, it makes no further request: the check at every interval compares the active binary with its record, and installs the version again only when the binary changed. A new release of the runner reaches your nodes when you change the pin, or when you deploy a release of this repository that carries a newer one.
+The default is an exact pin. The distributor takes the SHA-256 of the tarball from the list in the stack file (your `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, when you set one), so it asks no manifest for it. It downloads the tarball, checks it, extracts the runner, records the SHA-256 of the binary, checks the copy in place again, and moves the link `current` with one atomic rename. Every one of these steps is checked: a full disk or a link that cannot move fails the check, with a line in the log, and does not end in a log line that says `[ ok ]`. When the version is installed and verified, it makes no further request: the check at every interval compares the active binary with its record, and installs the version again only when the binary changed. A new release of the runner reaches your nodes when you change the pin, or when you deploy a release of this repository that carries a newer one.
 
 With a floating value the distributor reads `manifest.json` when it starts and at every check interval, and picks the newest version of the line (`3.1` is the newest `3.1.x`, `3` the newest `3.x.y`). With `current` it finds the version that `current` names by matching the SHA-256 of `current` to a versioned entry of the manifest, and adopts it only when its major version equals `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`. For another major version it logs `not adopting it` and keeps what it has. A new release reaches every node within one check interval, with no redeploy.
 
@@ -340,35 +343,37 @@ A persistent class runs one container for all jobs, so it keeps its version unti
 
 #### Pin a version
 
-An exact version such as `3.1.12` pins that version, and the default is such a pin. The distributor takes its SHA-256 from the manifest, installs it, and never moves to another version by itself. Pin a version when a change of the runner must go through your own change process, and then upgrade by changing the pin, or by taking a newer release of this repository, which bumps its default.
+An exact version such as `3.1.12` pins that version, and the default is such a pin. The distributor installs it and never moves to another version by itself. Pin a version when a change of the runner must go through your own change process, and then upgrade by changing the pin, or by taking a newer release of this repository, which bumps its default. The list `MACHINE_RUNNER_SWARM_RUNNER_SHA256` of the stack file belongs to the default pin, so a pin of your own needs its own values, set in the same command. Take them from the `checksums.txt` of that release of the runner, for every architecture of your nodes:
 
 ```console
-$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.13 docker stack deploy -c deploy/runners.yaml runners
+$ sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 \
+    MACHINE_RUNNER_SWARM_RUNNER_SHA256=<sha256 of amd64>,<sha256 of arm64> \
+    docker stack deploy -c deploy/runners.yaml runners
 ```
 
-A strict organization sets `MACHINE_RUNNER_SWARM_RUNNER_SHA256` too, with the SHA-256 values of the tarballs from the `checksums.txt` of that release. The distributor then installs only a tarball with one of these values, whatever the manifest says. With a floating version, a new release is refused until you update the list, so set the list together with an exact pin.
+The distributor then installs only a tarball with one of these values, whatever the manifest says. Without the list it refuses the tarball (`SHA-256 mismatch`), and the nodes keep the version that runs. To trust the manifest instead, which is weaker ([the version policy](#the-version-policy)), set `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest`. The same applies if you edit the pin in your copy of the stack file: change the default of `MACHINE_RUNNER_SWARM_RUNNER_VERSION` and the default of `MACHINE_RUNNER_SWARM_RUNNER_SHA256` together, in `x-distributor-env` (and in `x-env` of `microvm.yaml`, which downloads the runner itself).
 
-The distributor switches to a version that is installed already without any network access. Use `3.1.12` or later: it fixes the enforcement of `max_run_time`.
+The distributor switches to a version that is installed already without any network access, when the hash list is `manifest` or names that version. Use `3.1.12` or later: it fixes the enforcement of `max_run_time`.
 
 #### Freeze the nodes now
 
-To stop all change at once, pin the version that the nodes run now. That version is installed, so the pin needs no network. Read it first, as in [See what runs](#see-what-runs), and then update the distributor:
+To stop all change at once, pin the version that the nodes run now. That version is installed, so the pin needs no network. Read it first, as in [See what runs](#see-what-runs), and then update the distributor. The list of SHA-256 values belongs to the default pin, so name the hash policy together with the version (`manifest` makes no request for a version that is installed):
 
 ```console
-$ docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 runners_runner-distributor
+$ docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 --env-add MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest runners_runner-distributor
 ```
 
-Set the same value in the environment of your next `docker stack deploy`. A deploy without it sets the default pin of the stack file again.
+Set the same values in the environment of your next `docker stack deploy`. A deploy without them sets the default pin and its list from the stack file again, which undoes the freeze.
 
 #### Roll back
 
-A rollback is a pin of an older version. The distributor keeps the last 3 versions that were active, so a rollback to one of them only moves the link: no download, and no network. A version that was removed is downloaded again.
+A rollback is a pin of an older version. The distributor keeps the last 3 versions that were active, so a rollback to one of them only moves the link: no download, and no network. A version that was removed is downloaded again, and its hash comes from the manifest or from a list that you give. The hash policy goes with the version, because the default list names the pinned version only:
 
 ```console
-$ docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.11 runners_runner-distributor
+$ docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.11 --env-add MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest runners_runner-distributor
 ```
 
-The next container of every runner service runs the old version. Running jobs are not affected. Set the same value in the environment of your next `docker stack deploy`, as for the pin above.
+The next container of every runner service runs the old version. Running jobs are not affected. Set the same values in the environment of your next `docker stack deploy`, as for the pin above.
 
 #### What the distributor keeps
 
@@ -421,7 +426,7 @@ $ sudo env MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/cir
 
 - Copy the tarballs of the architectures that your nodes have (`amd64`, `arm64`, `ppc64le`, `s390x`). With an exact pin, copy that version. With a floating version, copy the versions of its line, and copy `manifest.json` again when you want the nodes to adopt a new release. With `current`, copy the version that `current` names. The command `jq -r '.releases as $r | $r.current.linux.amd64.sha256 as $s | $r | to_entries[] | select(.key | test("^[0-9]")) | select(.value.linux.amd64.sha256 == $s) | .key' mirror/manifest.json` prints that version.
 - The distributor downloads with the `wget` of the stock Alpine image and its CA bundle, so an `https` mirror needs a certificate from a public certificate authority.
-- For plain `http` inside a trusted network, set `MACHINE_RUNNER_SWARM_RUNNER_SHA256` together with a pinned version. The manifest then travels unprotected, and the list keeps it out of the chain.
+- A mirror over plain `http` needs the list `MACHINE_RUNNER_SWARM_RUNNER_SHA256` (the default one, for the pinned version, is enough): the distributor refuses an `http://` base URL without a list, because the manifest would then be the only root of trust and would travel unprotected. With the list, the manifest does not decide what is installed. A floating version over `http` is refused for the same reason. `MACHINE_RUNNER_SWARM_ALLOW_HTTP=true` accepts it anyway, for a lab.
 - The mirror replaces the runner download only. Every runner container still downloads its task agent from `circleci-binary-releases.s3.amazonaws.com`, and every node still pulls the `alpine` image of the distributor from a registry. Refer to [Does it work on hosts without internet access?](faq.md#does-it-work-on-hosts-without-internet-access).
 
 ### Upgrade the runner on Windows
@@ -435,8 +440,8 @@ The settings are the variables of [the Linux table](#settings-of-the-distributor
 | Variable | Effect |
 |---|---|
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | An exact version is a pin, and the default: the newest that CI tests (`3.1.13` in this release). `3.1`, `3` and `current` float, and the distributor then looks at the manifest again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` (default `24h`): [the version policy](#the-version-policy). `current` stays within `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` (default `3`) |
-| `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | A comma-separated list of the SHA-256 values of the `circleci-runner_windows_<arch>.tar.gz` tarballs that may be installed. It replaces the value of the manifest |
-| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | A mirror: `manifest.json` and `<version>/circleci-runner_windows_<arch>.tar.gz` below this URL |
+| `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | A comma-separated list of the SHA-256 values of the `circleci-runner_windows_<arch>.tar.gz` tarballs that may be installed. The default is the two values (`amd64`, `arm64`) of the pinned version, so the pinned install does not rest on the manifest. A version of your own needs its own values, or the word `manifest` (the hash of the manifest is trusted: weaker, and what a floating version needs) |
+| `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | A mirror: `manifest.json` and `<version>/circleci-runner_windows_<arch>.tar.gz` below this URL. It must be an `https://` (or `file://`) URL, unless a SHA-256 list is set. `MACHINE_RUNNER_SWARM_ALLOW_HTTP=true` accepts `http://` for a lab |
 | `MACHINE_RUNNER_SWARM_TOOLS_BASE_URL` | A directory URL that holds `PortableGit-<version>-64-bit.7z.exe` (arm64: `-arm64.7z.exe`) and `7zr.exe`, the two downloads that the script pins by SHA-256. Without it they come from GitHub |
 
 The architecture is `amd64` or `arm64`, read from `PROCESSOR_ARCHITECTURE`. CI runs the distributor on amd64 hosts only: the arm64 file names and manifest entries are tested there, and no Windows arm64 host runs the stack in CI.
@@ -445,12 +450,13 @@ In PowerShell, set the variables in the environment of the shell that runs the d
 
 ```powershell
 $env:MACHINE_RUNNER_SWARM_RUNNER_VERSION = '3.1'
+$env:MACHINE_RUNNER_SWARM_RUNNER_SHA256 = 'manifest'   # a floating version trusts the hash of the manifest: weaker
 docker stack deploy -c deploy\runners.yaml runners
 ```
 
-- **Upgrade.** The default is an exact pin, so the nodes change version only when you change it, or when you deploy a release of this repository that carries a newer one. With `3.1`, `3` or `current`, a new release reaches every node within one check interval, with no redeploy. A deploy without the variable sets the default pin again, so set the same values on every deploy.
-- **Freeze the nodes now.** Pin the version that the nodes run now. It is installed, so the pin needs no network: `docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 runners_runner-distributor-windows`.
-- **Roll back.** Pin an older version. The distributor keeps the last 3 versions that were active, so a rollback to one of them only moves the link, with no network. A version that was removed is downloaded again.
+- **Upgrade.** The default is an exact pin, so the nodes change version only when you change it, or when you deploy a release of this repository that carries a newer one. With `3.1`, `3` or `current` (and `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest`), a new release reaches every node within one check interval, with no redeploy. A deploy without the variables sets the default pin and its SHA-256 list again, so set the same values on every deploy.
+- **Freeze the nodes now.** Pin the version that the nodes run now. It is installed, so the pin needs no network: `docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 --env-add MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest runners_runner-distributor-windows`.
+- **Roll back.** Pin an older version, with the hash policy of that version as on Linux (`manifest`, or its own values). The distributor keeps the last 3 versions that were active, so a rollback to one of them only moves the link, with no network. A version that was removed is downloaded again.
 - **See what runs.** `docker service logs runners_runner-distributor-windows` shows each flip. On the node, `docker run --rm --mount type=volume,source=runners_runner-bin,target=C:\v,readonly mcr.microsoft.com/windows/servercore:ltsc2022 powershell -Command "Get-Content C:\v\history; (Get-Item C:\v\current).Target"` shows the history and the active version.
 - **Replicas that wait for a job** keep the old version until they claim a job or exit after `CIRCLECI_RUNNER_IDLE_TIMEOUT`, which is 1 hour in the stack file. A forced update replaces them at once, but it also stops the containers of the service, which kills a running job after about 5 seconds. Force the update only while the class is idle: `docker service update --force runners_windows-default`.
 - **A mirror.** Copy `manifest.json` and the tarballs as for [Linux](#run-the-downloads-from-a-mirror), with `windows` and `amd64` (or `arm64`) in the names, and copy the two pinned Git downloads into the tools directory. The distributor downloads with PowerShell, so an `https` mirror needs a certificate that the stock Server Core image trusts.
@@ -480,8 +486,10 @@ For a single service, you can also run `docker service update --image <new image
 ### Upgrade to a new release of this repository
 
 1. Read the [changelog](../CHANGELOG.md). Entries marked `[BREAKING]` say what to change.
-2. Compare your stack file with the file of the new release, and merge the differences.
-3. Run `docker stack deploy` with the same set of `-c` files as before, and with the same distributor variables as before.
+2. Compare your stack file with the file of the new release, and merge the differences. Look at the defaults of `x-distributor-env` first: a release bumps the runner version and its `MACHINE_RUNNER_SWARM_RUNNER_SHA256` values together, and your copy keeps the old pair until you merge both.
+3. Decide what the nodes run, and write it down in your copy of the stack file, so that no one has to remember a variable. Take the pin of the new release by merging both defaults, or keep your own pin by setting its two defaults (the version, and the list of SHA-256 values or `manifest`). A pin, a freeze or a rollback that you made only with `docker service update` is not in the file: the next `docker stack deploy` sets the defaults of the file again and undoes it silently.
+4. Run `docker stack deploy` with the same set of `-c` files as before, and with the same distributor variables as before (a variable of the deploy beats the default of the file).
+5. Check what the nodes run: `docker service logs --tail 5 runners_runner-distributor` shows the version that the distributor selected, and [See what runs](#see-what-runs) the version that is active.
 
 The entrypoint and the script of the distributor are Swarm configs, so this command is the whole upgrade. A Swarm config cannot change, so the name of each config carries the first 12 hex digits of the SHA-256 of its file. A release that changes the entrypoint or the script has new names. `docker stack deploy` creates the new config and updates the services that use it: the runner services one replica at a time, as in [Upgrade the runner and images](#upgrade-the-runner-and-images), and the distributor on every node.
 

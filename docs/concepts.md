@@ -172,9 +172,9 @@ The runner services carry no version and no hash. Which version the nodes run is
 
 | Setting | Behavior |
 |---|---|
-| `MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.13` (an exact version, the default: the newest that CI tests) | The distributor pins that version. It never changes by itself, it makes no request once the version is installed, and it switches to an installed version without any network, so a rollback needs no download. A release of this repository bumps the default |
-| `MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1` or `3` | A floating line: the newest `3.1.x`, or the newest `3.x.y`, of CircleCI's manifest. The distributor looks again every 24 hours |
-| `MACHINE_RUNNER_SWARM_RUNNER_VERSION=current` | A floating value: CircleCI's current release, within major version 3. It looks again every 24 hours |
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.13` (an exact version, the default: the newest that CI tests) | The distributor pins that version, and checks the tarball against the SHA-256 values that the stack file carries for it, not against the manifest. It never changes by itself, it makes no request once the version is installed, and it switches to an installed version without any network, so a rollback needs no download. A release of this repository bumps the version and its SHA-256 values together |
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1` or `3`, with `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest` | A floating line: the newest `3.1.x`, or the newest `3.x.y`, of CircleCI's manifest. The distributor looks again every 24 hours, and trusts the hash of the manifest, which is weaker |
+| `MACHINE_RUNNER_SWARM_RUNNER_VERSION=current`, with `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest` | A floating value: CircleCI's current release, within major version 3. It looks again every 24 hours, and trusts the hash of the manifest |
 
 Like machine runner 3 and container runner, the runner version is chosen by the operator: an exact pin by default, a floating value on request. Refer to [The version policy](operations.md#the-version-policy) for the rules, and to [how this compares with machine runner 3, container runner and the orchestrator](operations.md#how-this-compares-with-machine-runner-3-container-runner-and-the-orchestrator).
 

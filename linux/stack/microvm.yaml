@@ -44,7 +44,8 @@ x-env: &env
   MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-3.1.13}
   MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}
   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: ${MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL:-https://circleci-binary-releases.s3.amazonaws.com/circleci-runner}
-  MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}
+  # The SHA-256 of the tarballs of the pin above (amd64, arm64, ppc64le, s390x), as in runners.yaml: keep them equal. manifest trusts the manifest's hash.
+  MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-cc02803cc8367b404a7ceb7810afea23a22526ebc478ac4e8de7c585c9fbfe77,2763ff1d7241ce380cdf88130d60a8a12610811356d5cd7f948e6e853b0daaf3,980b9099a2af792c2cef3e9629907811cf269d12a7a3152464d1c72b619f3f51,743bc959480cf5e172944a29d99425863b8cadfd256c6553f332952393d5f4e8}
 
 x-restart: &restart
   condition: any
@@ -221,5 +222,5 @@ secrets:
 configs:
   # As in runners.yaml (ci/config-names.sh keeps the names in step with the files), so that this file also loads alone.
   entrypoint: {name: machine-runner-swarm-entrypoint-219dd9e6972a, file: circleci-runner-entrypoint}
-  distributor: {name: machine-runner-swarm-distributor-b38c317808d4, file: runner-distributor.sh}
+  distributor: {name: machine-runner-swarm-distributor-eb5990697314, file: runner-distributor.sh}
   microvm-corefile: {external: true}

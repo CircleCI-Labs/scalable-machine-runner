@@ -188,6 +188,9 @@ phase_deploy() {
   done
   for spec in "$@"; do   # a microVM class downloads its own runner: it needs the mirror and the version (an explicit setting of the spec wins)
     case " $spec " in *" MACHINE_RUNNER_SWARM_RUNNER_VERSION="*) given+=("$spec MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL") ;; *) given+=("$spec MACHINE_RUNNER_SWARM_RUNNER_VERSION=$version MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL") ;; esac
+    # the test mirror is plain http and serves versions that are not the pin of the stack file: trust its manifest, on purpose
+    case " $spec " in *" MACHINE_RUNNER_SWARM_RUNNER_SHA256="*) ;; *) given[-1]="${given[-1]} MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest" ;; esac
+    given[-1]="${given[-1]} MACHINE_RUNNER_SWARM_ALLOW_HTTP=true"
   done
   DIST_VERSION=$version
   make_override "$work/ov.yaml" "${given[@]}" "${specs[@]}" "token-proxy $proxy"

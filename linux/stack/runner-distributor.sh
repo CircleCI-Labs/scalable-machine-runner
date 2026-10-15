@@ -9,9 +9,15 @@
 #   MACHINE_RUNNER_SWARM_RUNNER_MAJOR                the major version that current may adopt (default 3)
 #   MACHINE_RUNNER_SWARM_CHECK_INTERVAL              how often to look again (default 24h; seconds, or a number with s, m, h or d). A floating
 #                                                    version asks the manifest again; an exact pin only verifies its installed copy
-#   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL           where manifest.json and <version>/circleci-runner_linux_<arch>.tar.gz live
-#   MACHINE_RUNNER_SWARM_RUNNER_SHA256               optional: acceptable tarball SHA-256 values, separated by commas (every
-#                                                    architecture of the fleet), instead of the hash of the manifest
+#   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL           where manifest.json and <version>/circleci-runner_linux_<arch>.tar.gz live. It must be an
+#                                                    https:// URL (or file://, a local directory), unless a SHA-256 list is set (below)
+#   MACHINE_RUNNER_SWARM_RUNNER_SHA256               the tarball SHA-256 values that may be installed, separated by commas (every architecture
+#                                                    of the fleet). The stack file sets the values of the pinned version, so the default
+#                                                    install does not rest on the hash of the manifest, which comes from the same bucket as the
+#                                                    tarball. The word manifest means no list: the hash of the manifest is trusted, which is
+#                                                    weaker, and the way to float (3.1, 3, current) or to move to a version of your own
+#   MACHINE_RUNNER_SWARM_ALLOW_HTTP                  true accepts an http:// download base without a SHA-256 list (a lab or a test mirror: the
+#                                                    manifest hash then protects nothing against someone on the path)
 # It resolves the version, downloads the tarball when versions/<version> is missing or does not match its record, verifies the
 # tarball SHA-256, extracts circleci-runner, computes the SHA-256 of the binary and records it in versions/<version>/SHA256, and
 # moves the link current to versions/<version> with one atomic rename. Every step is checked (the script runs under set -e, which
@@ -72,11 +78,18 @@ case $u in m) n=$((n * 60)) ;; h) n=$((n * 3600)) ;; d) n=$((n * 86400)) ;; esac
 interval=$n
 [ "$interval" -ge 1 ] || die "MACHINE_RUNNER_SWARM_CHECK_INTERVAL must be at least 1 second"
 [ "$retry" -le "$interval" ] || retry=$interval
-hashes=$(printf '%s' "${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}" | tr 'A-F,' 'a-f ')
+hashes=$(printf '%s' "${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}" | tr 'A-Z,' 'a-z ')
+[ "$hashes" != manifest ] || hashes=   # "manifest": no list, the manifest's hash is trusted
 for h in $hashes; do
-  case $h in *[!0-9a-f]*) die "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h" ;; esac
-  [ ${#h} -eq 64 ] || die "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h"
+  case $h in *[!0-9a-f]*) die "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h (or the word manifest)" ;; esac
+  [ ${#h} -eq 64 ] || die "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h (or the word manifest)"
 done
+case $base in
+  https://* | file://*) ;;   # file:// is a local directory: nobody on the path
+  http://*) [ -n "$hashes" ] || [ "${MACHINE_RUNNER_SWARM_ALLOW_HTTP:-false}" = true ] ||
+      die "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL is $base: without a MACHINE_RUNNER_SWARM_RUNNER_SHA256 list the hash comes from the manifest of that server, so the URL must be https:// (MACHINE_RUNNER_SWARM_ALLOW_HTTP=true accepts it in a lab)" ;;
+  *) die "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL must be an https:// URL, got '$base'" ;;
+esac
 
 fetch() { # URL FILE: three tries (wget, or curl in an image that has no wget)
   local_try=1
@@ -141,7 +154,7 @@ install_version() {
   got=$(sha256sum "$tmp/$tarball" | cut -d' ' -f1)
   case " $2 " in
     *" $got "*) ;;
-    *) log "SHA-256 mismatch for $tarball $v: got $got, wanted $2: refusing to install" >&2; rm -rf "$tmp"; return 1 ;;
+    *) log "SHA-256 mismatch for $tarball $v: got $got, wanted $2: refusing to install (if you changed MACHINE_RUNNER_SWARM_RUNNER_VERSION, set MACHINE_RUNNER_SWARM_RUNNER_SHA256 to the values of that version, or to manifest)" >&2; rm -rf "$tmp"; return 1 ;;
   esac
   echo "$got  $tarball" > "$tmp/TARBALL" || { log "cannot write $tmp/TARBALL" >&2; rm -rf "$tmp"; return 1; }
   tar -xzf "$tmp/$tarball" -C "$tmp/bin" circleci-runner || { log "$tarball has no circleci-runner" >&2; rm -rf "$tmp"; return 1; }

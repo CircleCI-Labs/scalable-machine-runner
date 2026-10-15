@@ -9,7 +9,7 @@ BeforeAll {
     if (-not $env:TEMP) { $env:TEMP = [IO.Path]::GetTempPath() }
     function Use-DistributorEnvironment {
         param([hashtable] $Values = @{})
-        foreach ($n in 'RUNNER_VERSION', 'RUNNER_MAJOR', 'CHECK_INTERVAL', 'DOWNLOAD_BASE_URL', 'RUNNER_SHA256', 'TOOLS_BASE_URL') { Remove-Item "Env:MACHINE_RUNNER_SWARM_$n" -ErrorAction SilentlyContinue }
+        foreach ($n in 'RUNNER_VERSION', 'RUNNER_MAJOR', 'CHECK_INTERVAL', 'DOWNLOAD_BASE_URL', 'RUNNER_SHA256', 'ALLOW_HTTP', 'TOOLS_BASE_URL') { Remove-Item "Env:MACHINE_RUNNER_SWARM_$n" -ErrorAction SilentlyContinue }
         foreach ($k in $Values.Keys) { Set-Item "Env:MACHINE_RUNNER_SWARM_$k" $Values[$k] }
     }
     $script:manifestJson = @{ releases = [ordered]@{
@@ -64,6 +64,28 @@ Describe 'Get-DistributorSetting' {
         $s.Interval | Should -Be 300
         $s.Retry | Should -Be 300
         @($s.Hashes) | Should -Be @(('a' * 64), ('b' * 64))
+    }
+
+    It 'reads the word manifest as no list, so that the hash of the manifest is trusted (the way to float)' {
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = 'manifest' }
+        @((Get-DistributorSetting).Hashes).Count | Should -Be 0
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = 'Manifest' }
+        @((Get-DistributorSetting).Hashes).Count | Should -Be 0
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = ('a' * 64) + ',manifest' }
+        { Get-DistributorSetting } | Should -Throw '*not a SHA-256*'
+    }
+
+    It 'wants an https download base, unless a SHA-256 list is set (or http is allowed on purpose)' {
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; DOWNLOAD_BASE_URL = 'http://mirror.example.com/runner' }
+        { Get-DistributorSetting } | Should -Throw '*must be https://*'
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = 'manifest'; DOWNLOAD_BASE_URL = 'http://mirror.example.com/runner' }
+        { Get-DistributorSetting } | Should -Throw '*must be https://*'
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; RUNNER_SHA256 = ('a' * 64); DOWNLOAD_BASE_URL = 'http://mirror.example.com/runner' }
+        (Get-DistributorSetting).Base | Should -Be 'http://mirror.example.com/runner'
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; ALLOW_HTTP = 'true'; DOWNLOAD_BASE_URL = 'http://mirror.example.com/runner' }
+        (Get-DistributorSetting).Base | Should -Be 'http://mirror.example.com/runner'
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; RUNNER_SHA256 = ('a' * 64); DOWNLOAD_BASE_URL = 'ftp://mirror.example.com/runner' }
+        { Get-DistributorSetting } | Should -Throw '*must be an https:// URL*'
     }
 
     It 'tells an exact pin from the floating values 3.1, 3 and current' -TestCases @(

@@ -206,6 +206,8 @@ services:
     environment:
       MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: "$MIRROR_URL"
       MACHINE_RUNNER_SWARM_RUNNER_VERSION: "$1"
+      MACHINE_RUNNER_SWARM_RUNNER_SHA256: "manifest"   # the manifest of the test mirror, over plain http, on purpose (the default is the pin of the stack file)
+      MACHINE_RUNNER_SWARM_ALLOW_HTTP: "true"
 EOF
   deploy_stack "$MGR" "$work/ov.yaml" runners.yaml classes-extra.yaml   # linux-java and linux-hardened are the classes of classes-extra.yaml
 }
@@ -354,7 +356,7 @@ for a in ppc64le s390x; do
   docker rm -f "$name" > /dev/null 2>&1 || true
   docker volume create "$xvol" > /dev/null
   docker run -d --name "$name" --platform "linux/$a" --network "$net" -v "$stack_dir/runner-distributor.sh:/runner-distributor.sh:ro" -v "$xvol:/opt/machine-runner-swarm" \
-    -e "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL" -e "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$FAKE" \
+    -e "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=$MIRROR_URL" -e "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$FAKE" -e MACHINE_RUNNER_SWARM_ALLOW_HTTP=true \
     "$DIST_IMAGE" sh /runner-distributor.sh > /dev/null
   x_done() { docker logs "$name" 2>&1 | grep -q '\[ ok \] current'; }
   wait_until x_done || { docker logs "$name" 2>&1 | tail -n 8; fail "the distributor did not install the runner for $a under emulation"; }

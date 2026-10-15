@@ -18,8 +18,9 @@
 #   node, also on a node that joins later, and keeps circleci-runner.exe and portable Git for Windows in the per-node volume
 #   runner-bin (windows\runner-distributor.ps1, a Swarm config). The runner version is an exact pin by default (the newest one
 #   that this repository's CI tests, which a release of this repository bumps), so the nodes never change version by themselves.
-#   3.1, 3 or current make it float: the distributor then follows CircleCI's manifest and checks again every 24 hours. Every
-#   class mounts the volume read-only into the unmodified Microsoft Server Core image, twice, with a subpath: current (a link to
+#   3.1, 3 or current make it float (with MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest: a floating version has no list of its own, so
+#   the manifest's hash is trusted, which is weaker): the distributor then follows CircleCI's manifest and checks again every 24 hours.
+#   Every class mounts the volume read-only into the unmodified Microsoft Server Core image, twice, with a subpath: current (a link to
 #   versions\<version>) at C:\machine-runner-swarm, and git\current at C:\Program Files\Git, the path the task agent hard-codes
 #   for tar.exe. Docker resolves the links when it creates a container, so a container keeps the runner and Git it started
 #   with, and a new version reaches the next container (the next job). Which version the nodes run is a setting of the
@@ -161,8 +162,12 @@ x-distributor-env: &distributor-env
   MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}   # how often a floating version asks the manifest again; a pin never does
   # A mirror for an air-gapped site: manifest.json (unchanged) and <version>/circleci-runner_windows_<amd64|arm64>.tar.gz below this URL.
   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: ${MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL:-https://circleci-binary-releases.s3.amazonaws.com/circleci-runner}
-  # Strict sites: the SHA-256 of the tarballs that may be installed (comma-separated), instead of the hash of the manifest.
-  MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-}
+  # The SHA-256 of the tarballs that may be installed (comma-separated). The default is the pin's own, amd64 and arm64 of the version above, so the
+  # pinned install does not rest on the hash of CircleCI's manifest, which comes from the same bucket as the tarball. A release of this repository
+  # bumps the version and these two values together (ci/release.sh: check_runner_pin; docs/releasing.md), as in linux/stack/runners.yaml. Another
+  # version needs its own values from the checksums.txt of its release, or the word manifest, which trusts the manifest's hash (weaker: a floating
+  # 3.1, 3 or current has no other choice). An http:// mirror needs this list, or MACHINE_RUNNER_SWARM_ALLOW_HTTP.
+  MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-d0dd82447266a9dec0f9b31f63b3a276b1dc49121c61284c4e8ca1fa393936da,6a85ea6bb2862ebee3739607b416536e6d5b2f93c867f5d093d0e414e7d6d64e}
   # A mirror of the two pinned Git downloads: a directory URL that holds PortableGit-<version>-64-bit.7z.exe (arm64: -arm64.7z.exe) and 7zr.exe.
   MACHINE_RUNNER_SWARM_TOOLS_BASE_URL: ${MACHINE_RUNNER_SWARM_TOOLS_BASE_URL:-}
   # HTTPS_PROXY: http://proxy.example.com:3128    # for every download of the distributor
@@ -313,7 +318,7 @@ configs:
   # Swarm configs cannot change, so the name carries the first 12 hex digits of the SHA-256 of the file: ci/config-names.sh --write
   # renames it after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
   # distributor, and only the distributor.
-  distributor-windows: {name: machine-runner-swarm-distributor-windows-2de49dee2416, file: runner-distributor.ps1}
+  distributor-windows: {name: machine-runner-swarm-distributor-windows-02eea749a523, file: runner-distributor.ps1}
 
 volumes:
   runner-bin: {}                            # one per node: the runner and Git of that node

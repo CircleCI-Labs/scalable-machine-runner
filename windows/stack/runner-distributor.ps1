@@ -29,9 +29,15 @@
       MACHINE_RUNNER_SWARM_RUNNER_MAJOR       the major version that current may adopt (default 3)
       MACHINE_RUNNER_SWARM_CHECK_INTERVAL     how often to look again (default 24h; seconds, or a number with s, m, h or d). A floating version
                                               asks the manifest again; an exact pin only verifies its installed copy
-      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL  where manifest.json and <version>/circleci-runner_windows_<arch>.tar.gz live
-      MACHINE_RUNNER_SWARM_RUNNER_SHA256      optional: the tarball SHA-256 values that may be installed, separated by commas,
-                                              instead of the hash of the manifest
+      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL  where manifest.json and <version>/circleci-runner_windows_<arch>.tar.gz live. It must be an
+                                              https:// URL (or file://, a local directory), unless a SHA-256 list is set (below)
+      MACHINE_RUNNER_SWARM_RUNNER_SHA256      the tarball SHA-256 values that may be installed, separated by commas (amd64 and arm64). The
+                                              stack file sets the values of the pinned version, so the default install does not rest on the
+                                              hash of the manifest, which comes from the same bucket as the tarball. The word manifest
+                                              means no list: the hash of the manifest is trusted, which is weaker, and the way to float
+                                              (3.1, 3, current) or to move to a version of your own
+      MACHINE_RUNNER_SWARM_ALLOW_HTTP         true accepts an http:// download base without a SHA-256 list (a lab or a test mirror: the
+                                              manifest hash then protects nothing against someone on the path)
       MACHINE_RUNNER_SWARM_TOOLS_BASE_URL     optional: a directory with PortableGit-<version>-64-bit.7z.exe (arm64: -arm64.7z.exe) and 7zr.exe
                                               (default: their GitHub release downloads)
       HTTPS_PROXY                             optional: a proxy for every download
@@ -134,9 +140,16 @@ function Get-DistributorSetting {
     $seconds = ConvertTo-Second $interval
     $base = "$env:MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL"
     if (-not $base) { $base = 'https://circleci-binary-releases.s3.amazonaws.com/circleci-runner' }
-    $hashes = @("$env:MACHINE_RUNNER_SWARM_RUNNER_SHA256" -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    $hashes = @("$env:MACHINE_RUNNER_SWARM_RUNNER_SHA256" -split '[,\s]+' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    if ($hashes.Count -eq 1 -and $hashes[0] -eq 'manifest') { $hashes = @() }   # "manifest": no list, the manifest's hash is trusted
     foreach ($h in $hashes) {
-        if ($h -notmatch '^[0-9a-f]{64}$') { throw "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h" }
+        if ($h -notmatch '^[0-9a-f]{64}$') { throw "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h (or the word manifest)" }
+    }
+    if ($base -notmatch '^(https|file)://') {   # file:// is a local directory (a share that is mounted): nobody on the path
+        if ($base -notmatch '^http://') { throw "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL must be an https:// URL, got '$base'" }
+        if ($hashes.Count -eq 0 -and "$env:MACHINE_RUNNER_SWARM_ALLOW_HTTP" -ne 'true') {
+            throw "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL is ${base}: without a MACHINE_RUNNER_SWARM_RUNNER_SHA256 list the hash comes from the manifest of that server, so the URL must be https:// (MACHINE_RUNNER_SWARM_ALLOW_HTTP=true accepts it in a lab)"
+        }
     }
     $tools = "$env:MACHINE_RUNNER_SWARM_TOOLS_BASE_URL"
     return @{
@@ -297,7 +310,7 @@ function Install-Runner {
     if (-not (Save-Url "$Base/$Version/$($script:Tarball)" $tgz)) { Invoke-TreeRemoval $tmp; return $null }
     $got = Get-Sha256 $tgz
     if (@($Accept) -notcontains $got) {
-        Write-DistributorLog "SHA-256 mismatch for $($script:Tarball) ${Version}: got $got, wanted $($Accept -join ' '): refusing to install"
+        Write-DistributorLog "SHA-256 mismatch for $($script:Tarball) ${Version}: got $got, wanted $($Accept -join ' '): refusing to install (if you changed MACHINE_RUNNER_SWARM_RUNNER_VERSION, set MACHINE_RUNNER_SWARM_RUNNER_SHA256 to the values of that version, or to manifest)"
         Invoke-TreeRemoval $tmp
         return $null
     }

@@ -348,6 +348,17 @@ pin=$(pin_of "$dir/runners.yaml")
 if [[ -f $dir/../../windows/stack/runners.yaml ]]; then
   [[ $(pin_of "$dir/../../windows/stack/runners.yaml") == "$pin" ]] || { echo "  windows/stack/runners.yaml pins another runner version than runners.yaml ($pin): keep them equal"; problems=$((problems + 1)); }
 fi
+# The default install does not rest on the hash of the manifest: the stack files carry the tarball SHA-256 of the pinned version for every
+# architecture (Linux: amd64, arm64, ppc64le, s390x; Windows: amd64, arm64). A release bumps the version and the hashes together (ci/release.sh).
+sha_of() { sed -n 's/^  MACHINE_RUNNER_SWARM_RUNNER_SHA256: \${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-\([0-9a-f,]*\)}$/\1/p' "$1"; }
+sha=$(sha_of "$dir/runners.yaml")
+[[ $sha =~ ^([0-9a-f]{64},){3}[0-9a-f]{64}$ ]] || { echo "  runners.yaml: the default of MACHINE_RUNNER_SWARM_RUNNER_SHA256 is not the four tarball SHA-256 values of the pin"; problems=$((problems + 1)); }
+[[ $(sha_of "$dir/microvm.yaml") == "$sha" ]] || { echo "  microvm.yaml: the default SHA-256 list differs from runners.yaml: keep them equal"; problems=$((problems + 1)); }
+if [[ -f $dir/../../windows/stack/runners.yaml ]]; then
+  [[ $(sha_of "$dir/../../windows/stack/runners.yaml") =~ ^[0-9a-f]{64},[0-9a-f]{64}$ ]] || { echo "  windows/stack/runners.yaml: the default of MACHINE_RUNNER_SWARM_RUNNER_SHA256 is not the two tarball SHA-256 values of the pin"; problems=$((problems + 1)); }
+fi
+block=$(service_block runner-distributor)
+check runner-distributor 'the SHA-256 values of the pinned version as the default list' "^      MACHINE_RUNNER_SWARM_RUNNER_SHA256: $sha\$"
 cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner \
   MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc docker stack config -c "$dir/runners.yaml" -c "$dir/microvm.yaml")
 for s in linux-microvm linux-microvm-docker; do

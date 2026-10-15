@@ -11,7 +11,7 @@ BATS_IMAGE=${BATS_IMAGE:-bats/bats:1.14.0}
 repo=$(cd "$(dirname "$0")/../../.." && pwd)
 images=("$@")
 if [ ${#images[@]} -eq 0 ]; then
-  images=("${SWARM_TEST_CIMG_IMAGE:-cimg/base:2026.10}" "$BATS_IMAGE" "${SWARM_TEST_UBI_IMAGE:-registry.access.redhat.com/ubi9/ubi-minimal:latest}")
+  images=("${SWARM_TEST_CIMG_IMAGE:-cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a}" "$BATS_IMAGE" "${SWARM_TEST_UBI_IMAGE:-registry.access.redhat.com/ubi9/ubi-minimal:latest}")
 fi
 
 # Install what the image lacks. Runs inside the image as root.

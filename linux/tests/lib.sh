@@ -14,7 +14,7 @@
 # point the distributor at a tiny HTTP mirror in the manager's DinD container (publish_runner: a manifest.json and the tarballs of
 # the versions a test publishes, a fake runner or the real one), so no test depends on CircleCI's bucket except the ones that say so.
 #
-# Environment: SWARM_TEST_DIND_IMAGE (default docker:29-dind), SWARM_TEST_CIMG_IMAGE (default cimg/base:2026.10, the
+# Environment: SWARM_TEST_DIND_IMAGE (default docker:29-dind, by digest), SWARM_TEST_CIMG_IMAGE (default cimg/base:2026.10, by digest, the
 # image of the stack's classes), SWARM_TEST_CACHE (default ~/.cache/swarm-tests: the real runner tarballs),
 # SWARM_TEST_RUNNER_VERSION (default: the exact pin that runners.yaml ships, so that the version the stack installs by default is the
 # one that CI tests; the real runner of the tests), SWARM_TEST_KEEP=1 (keep DinD containers for debugging).
@@ -23,8 +23,10 @@
 tests_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_dir=$(cd "$tests_dir/../.." && pwd)
 stack_dir=$repo_dir/linux/stack
-DIND_IMAGE=${SWARM_TEST_DIND_IMAGE:-docker:29-dind}
-CIMG_IMAGE=${SWARM_TEST_CIMG_IMAGE:-cimg/base:2026.10}
+# The tag stays for the reader, the digest of the multi-architecture index is what runs (docker buildx imagetools inspect <tag> prints it):
+# a test must not change because a publisher re-pushed a tag.
+DIND_IMAGE=${SWARM_TEST_DIND_IMAGE:-docker:29-dind@sha256:0b6d18a4a222e71c88be6034926b4f6cde2fc33c2218643d03ccfddc65995470}
+CIMG_IMAGE=${SWARM_TEST_CIMG_IMAGE:-cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a}
 cache_dir=${SWARM_TEST_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/swarm-tests}
 BASE_SERVICES=(linux-default)   # the runner class of runners.yaml (runner-distributor and token-proxy are the other services); classes-extra.yaml adds linux-java and linux-hardened
 EXTRA_SERVICES=(linux-java linux-hardened)   # the classes of classes-extra.yaml
@@ -88,11 +90,13 @@ dind_start() {
 
 # Make image $2 available in the inner engine of $1: the host's copy if there is one, else pull.
 dind_load() {
-  local name=$1 image=$2
+  local name=$1 image=$2 tag=${2%@sha256:*} id
   if idocker "$name" image inspect "$image" >/dev/null 2>&1; then return 0; fi
   if docker image inspect "$image" >/dev/null 2>&1; then
     log "loading $image into $name"
-    docker save "$image" | idocker "$name" load -q >/dev/null
+    id=$(docker save "$image" | idocker "$name" load -q | sed -n 's/^Loaded image ID: //p')
+    # an image that is saved by digest loads with an ID and no name: give it its tag, so that tag@digest and the stack files' tag find it
+    [[ -z $id || $tag == "$image" ]] || idocker "$name" tag "$id" "$tag"
   else
     log "pulling $image in $name"
     idocker "$name" pull -q "$image" >/dev/null
@@ -370,13 +374,13 @@ deploy_stack() {
   docker cp "$stack_dir/runner-distributor.sh" "$node:/stack/runner-distributor.sh"
   for f in "$@"; do
     sed "s/CHANGE-ME/${SWARM_TEST_HOST:-CHANGE-ME}/" "$stack_dir/$f" > "$tmp/$f"
+    # SWARM_TEST_PLAIN_OVERLAY=1: the documented opt-out of the encrypted class networks (delete driver_opts in the copy), for a node that cannot do IPsec
+    # (a worker under QEMU user-mode emulation). Every other test runs the shipped file, encrypted.
+    [[ -z ${SWARM_TEST_PLAIN_OVERLAY:-} ]] || sed -i 's/, driver_opts: {encrypted: "true"}//' "$tmp/$f"
     docker cp "$tmp/$f" "$node:/stack/$f"
     args+=(-c "/stack/$f")
   done
   cp "$override" "$tmp/override.yaml"
-    # SWARM_TEST_PLAIN_OVERLAY=1: the documented opt-out of the encrypted class networks (delete driver_opts in the copy), for a node that cannot do IPsec
-    # (a worker under QEMU user-mode emulation). Every other test runs the shipped file, encrypted.
-    [[ -z ${SWARM_TEST_PLAIN_OVERLAY:-} ]] || sed -i 's/, driver_opts: {encrypted: "true"}//' "$tmp/$f"
   docker cp "$tmp/override.yaml" "$node:/stack/override.yaml"
   rm -rf "$tmp"
   for f in ${EXTRA_OVERRIDES:-}; do

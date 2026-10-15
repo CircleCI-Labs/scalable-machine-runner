@@ -242,7 +242,7 @@ Read the table this way:
 | Capabilities | Default classes drop `NET_RAW` and `MKNOD`. The hardened class drops all and adds back `CHOWN` and `FOWNER` (the entrypoint sets the owner of directories), `SETUID` and `SETGID` (the step-down), `KILL` (the init process signals the runner, which has another uid), and `AUDIT_WRITE` (sudo audit messages) |
 | Limits | `pids: 4096`, `nofile` 65536, no core dumps, and reservations that equal the limits |
 | Network | One overlay network for each class, and no published ports, so SSH rerun is off unless you deploy the SSH add-on stack file |
-| Runner version | 3.1.12 or later. By default the distributor pins the newest runner version that this repository's CI tests, and `3.1`, `3` or `current` make it follow CircleCI's manifest |
+| Runner version | 3.1.12 or later. By default the distributor pins the newest runner version that this repository's CI tests, with the SHA-256 values of its tarballs, and `3.1`, `3` or `current` (with `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest`, which is weaker) make it follow CircleCI's manifest |
 
 Swarm ignores `security_opt`, `privileged`, `userns_mode`, and the short `tmpfs` form, and its tmpfs mounts are not executable. The stack therefore sets no `no-new-privileges` and no `read_only` filesystem. The default seccomp and AppArmor profiles of Docker apply.
 

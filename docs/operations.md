@@ -370,7 +370,7 @@ Set the same values in the environment of your next `docker stack deploy`. A dep
 A rollback is a pin of an older version. The distributor keeps the last 3 versions that were active, so a rollback to one of them only moves the link: no download, and no network. A version that was removed is downloaded again, and its hash comes from the manifest or from a list that you give. The hash policy goes with the version, because the default list names the pinned version only:
 
 ```console
-$ docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.11 --env-add MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest runners_runner-distributor
+$ docker service update --env-add MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.12 --env-add MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest runners_runner-distributor
 ```
 
 The next container of every runner service runs the old version. Running jobs are not affected. Set the same values in the environment of your next `docker stack deploy`, as for the pin above.

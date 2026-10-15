@@ -10,6 +10,7 @@
 #   - digest      the digest of the image of a commit is what the release pins
 #   - release     X.Y.Z, X.Y, X and latest for a first release; a newer patch moves the floating tags and leaves X.Y.Z of the old one; an old
 #                 release finished late moves nothing but its own tag; an X.Y.Z that is another image is refused
+#   - rehearse    the throwaway image of the signing rehearsal (without the signing, which needs the OIDC token of a CircleCI job)
 #   - credentials without DOCKERHUB_USERNAME and DOCKERHUB_TOKEN, push, assemble and edge say that nothing was pushed, and exit 0
 #
 # Usage: ci/tests/proxy-image.sh      Needs Docker (buildx, QEMU for the other platforms: ci/proxy-image.sh setup), crane, and a git history.
@@ -64,6 +65,14 @@ no_creds() {
   ! crane ls "${repo}" 2> /dev/null | grep -q .
 }
 check no-credentials-push-nothing no_creds
+
+# --- the signing rehearsal: its throwaway image (the signing itself needs the OIDC token of a CircleCI job, and runs only there) ------------
+rehearsal_image() {
+  local o
+  o=$(CIRCLE_BRANCH=feature/x CIRCLE_SHA1="${newer}" REHEARSAL_REGISTRY="localhost:${port}" "${script}" rehearse 2>&1) || { echo "${o}"; return 1; }
+  [[ ${o} == *"throwaway image"* ]] && [[ ${o} == *"signing skipped"* ]] && [ -n "$(crane digest "localhost:${port}/signing-rehearsal:rehearsal")" ]
+}
+check rehearsal-makes-a-throwaway-image rehearsal_image
 
 export DOCKERHUB_USERNAME=test DOCKERHUB_TOKEN=test
 short_new=${newer:0:12}

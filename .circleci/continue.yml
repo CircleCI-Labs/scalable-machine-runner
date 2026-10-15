@@ -620,6 +620,29 @@ jobs:
           when: on_fail
           command: ci/deploy-marker.sh update proxy-image FAILED "the job proxy-image-publish failed, see ${CIRCLE_BUILD_URL}"
 
+  signing-rehearsal:
+    description: >
+      The keyless signing of main, rehearsed in every pipeline that is not docs-only, on a throwaway image in a registry:2 container of the job
+      (ci/proxy-image.sh rehearse). The job gets its OIDC token with `circleci run oidc get`, which needs no context, signs the image with cosign
+      against the real Fulcio and Rekor, and verifies it with the function that main uses: the certificate identity (this project and pipeline
+      definition), the issuer, and the ref in the certificate, here refs/heads/<this branch>. It then checks that the same signature is refused for
+      another ref. It pushes nothing to Docker Hub and holds no secret. A change in CircleCI's token claims, in Sigstore or in the scripts fails a
+      pull request, and the first merge to main is not the first real run.
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+      - image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373   # the registry of the rehearsal, at localhost:5000
+    resource_class: small
+    environment:
+      PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+    steps:
+      - checkout
+      - run:
+          name: crane and cosign (pinned, SHA-256 verified)
+          command: ci/proxy-image.sh install-tools
+      - run:
+          name: Sign and verify a throwaway image for this branch (ci/proxy-image.sh rehearse)
+          command: ci/proxy-image.sh rehearse
+
   proxy-image-edge:
     description: >
       The last job of the pipeline of main (the parameter release: main with both e2e tokens, so every test is on). It requires
@@ -1621,6 +1644,9 @@ workflows:
           serial-group: << pipeline.project.slug >>/proxy-image-publish
           requires: [proxy-image-linux-publish, proxy-image-windows-ltsc2022-publish, proxy-image-windows-ltsc2025-publish]
           filters: pipeline.parameters.publish
+      # The signing of main, on a throwaway image: no context, no secret, in every pipeline that is not docs-only (docs/releasing.md, "The signing rehearsal").
+      - signing-rehearsal:
+          filters: not pipeline.parameters.docs-only
       - proxy-image-edge:
           context: [scalable-machine-runner-dockerhub]
           serial-group: << pipeline.project.slug >>/proxy-image-edge
@@ -1691,6 +1717,7 @@ workflows:
             - proxy-image-windows-ltsc2022
             - proxy-image-windows-ltsc2025
             - proxy-image-publish
+            - signing-rehearsal
             - linux-swarm
             - linux-image-example
             - linux-setup

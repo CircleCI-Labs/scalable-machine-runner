@@ -128,7 +128,17 @@ jq -r '.verificationMaterial | (.certificate // .x509CertificateChain.certificat
 
 To see which ref a certificate has, print it with `openssl asn1parse`: `base64 -d | openssl asn1parse -inform DER | grep -A1 57264.1.14` shows the value as hex digits after `HEX DUMP]:`, `0C0F` and then the ASCII codes of the ref.
 
-CircleCI documents that OIDC tokens are issued to jobs that use at least one context. The `release` job always has one, the context with `GITHUB_TOKEN`. In a test on 2026-10-13, `circleci run oidc get` also worked in a job without a context, which is why the ref and not the identity decides.
+#### The signing rehearsal
+
+Signing runs for real on `main` only (the release job and the image jobs have the contexts), so the first merge would be its first real run, and a failure would leave `sha-<12>` tags with no release. The job `signing-rehearsal` runs the same code in every pipeline that is not documentation-only, on any branch, with no context and no secret (`ci/proxy-image.sh rehearse`):
+
+1. It starts from a `registry:2` container (the second container of the job, at `localhost:5000`) and pushes a throwaway image: one layer with one file that names the pipeline.
+1. It gets an OIDC token with `circleci run oidc get --claims '{"aud":"sigstore"}' --root-issuer`, signs the image with `cosign sign` against the real Fulcio and Rekor (a public service: a brief failure is tried again, three times), and verifies it with `verify_signature`, the function that `main` uses: the certificate identity, the issuer, and the ref, which here is `refs/heads/<the branch of the pipeline>`.
+1. It checks that the same signature is **refused** for another ref (`refs/heads/main` on any other branch), so a check that has stopped looking at the ref turns the pipeline red.
+
+Each rehearsal adds an entry to the public Rekor log with the project, the branch and the commit, like every signature of a public repository. The release requires the job. The first pipeline after a change in CircleCI's token claims or in Sigstore shows it, and the first merge does not.
+
+CircleCI documents that OIDC tokens are issued to jobs that use at least one context. The `release` job always has one, the context with `GITHUB_TOKEN`. In a test on 2026-10-13, `circleci run oidc get` also worked in a job without a context, which is why the ref and not the identity decides, and which the rehearsal relies on.
 
 ## Enable publishing
 

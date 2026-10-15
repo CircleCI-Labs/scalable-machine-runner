@@ -8,6 +8,8 @@
 #                                     else), sign every digest, and check the result (needs the credentials)
 #   ci/proxy-image.sh edge            verify the signature of REPO:sha-<12> and tag it edge, unless a newer commit is on main (needs the
 #                                     credentials). The last job of the pipeline of main runs it, after every test has passed
+#   ci/proxy-image.sh rehearse        sign and verify a throwaway image in a registry of its own (no credential, no Docker Hub), with the OIDC token of
+#                                     this job, for the ref of this branch. Every pipeline runs it, so that main is not the first real run of the signing
 #   ci/proxy-image.sh credentials     check the credentials at once: fails when REQUIRE_CREDENTIALS is set and they are missing, says so otherwise
 #   ci/proxy-image.sh digest          print the digest of REPO:sha-<12>, the image of this commit (no credentials; exit 1 when there is none)
 #   ci/proxy-image.sh release-tags vX.Y.Z   verify the signature of that digest and give it the release tags (needs the credentials):
@@ -33,6 +35,7 @@
 #   PROXY_IMAGE_MAIN_REF   the ref of main that edge is compared with (default origin/main, fetched; the test names a local one)
 #   SIGN_EXPECT_REF        the ref that the certificate of a signature must name (default refs/heads/main; the signing rehearsal of any
 #                          other branch names its own)
+#   REHEARSAL_REGISTRY     the registry of the rehearsal (default localhost:5000, the registry:2 container of the job; plain HTTP)
 #   PROXY_IMAGE_RELEASE_TAGS   the release tags that exist, one per line (default: the vX.Y.Z tags of this repository)
 #
 # Never run this with `set -x`: the credentials and the OIDC token are in the environment.
@@ -267,6 +270,43 @@ edge() {
 
 image_digest() { digest_of "${image_repo}:${version}"; }
 
+# rehearse: everything that main does to sign, on a throwaway image, in every pipeline. The OIDC token needs no context (any job of any branch gets
+# one), the registry is a registry:2 container of the job and needs no credential, and what is signed is a layer of one file. It runs the code of
+# the real publication (sign_all and verify_signature, so cosign sign, cosign verify, the certificate identity and the ref of the certificate), against
+# the real Fulcio and Rekor, so that a change in them, in the claims of CircleCI's token or in this script fails a pull request and not the first merge.
+# The ref that the certificate must name is the branch of this pipeline; then the check is shown to fail for a ref that this pipeline is not on.
+rehearse() {
+  local reg=${REHEARSAL_REGISTRY:-localhost:5000} branch=${CIRCLE_BRANCH:?CIRCLE_BRANCH is not set: the rehearsal runs for a branch} work d n other out
+  work=$(mktemp -d)
+  trap 'rm -rf "${work}"' RETURN
+  image_repo=${reg}/signing-rehearsal
+  export PROXY_IMAGE_REGISTRY_INSECURE=1
+  for _ in $(seq 1 30); do curl -fsS "http://${reg}/v2/" > /dev/null 2>&1 && break; sleep 1; done
+  curl -fsS "http://${reg}/v2/" > /dev/null || die "the registry ${reg} does not answer: the job needs registry:2 as its second container"
+  # an image of its own for every pipeline, so that no signature of an earlier run is on it
+  printf 'signing rehearsal of %s, workflow %s, %s\n' "${sha}" "${CIRCLE_WORKFLOW_ID:-local}" "$(date -u +%FT%TZ)" > "${work}/rehearsal.txt"
+  tar -C "${work}" -cf "${work}/layer.tar" rehearsal.txt
+  craned append -t "${image_repo}:rehearsal" -f "${work}/layer.tar" > /dev/null 2>&1 || die "cannot push the throwaway image to ${reg}"
+  d=$(digest_of "${image_repo}:rehearsal")
+  say "throwaway image ${image_repo}@${d}"
+  if [ "${PROXY_IMAGE_SIGN:-oidc}" = none ]; then say "signing skipped (PROXY_IMAGE_SIGN=none): the image was made, nothing more"; return 0; fi
+  # Fulcio and Rekor are public services: a brief failure of theirs is retried, a failure of the check itself is not.
+  for n in 1 2 3; do
+    if (SIGN_EXPECT_REF="refs/heads/${branch}" sign_all "${d}"); then break; fi
+    [ "${n}" -lt 3 ] || die "the rehearsal could not sign and verify ${image_repo}@${d} for refs/heads/${branch} in 3 attempts"
+    say "attempt ${n} failed: trying again in 15 seconds"; sleep 15
+  done
+  say "signed and verified for refs/heads/${branch}"
+  # The check must be able to fail: this signature is not one of another ref.
+  other=refs/heads/not-${branch}
+  [ "${branch}" = main ] || other=refs/heads/main
+  if out=$(SIGN_EXPECT_REF="${other}" verify_signature "${d}" 2>&1); then
+    die "the ref check accepted a signature of refs/heads/${branch} for ${other}: it does not check the ref"
+  fi
+  grep -q 'does not name' <<< "${out}" || die "the check of ${other} failed, but not on the ref: ${out}"
+  say "the same signature is refused for ${other}: the ref check works"
+}
+
 # verify_signature DIGEST: keyless, against the pipeline definition that signed it (the release job and the publication are jobs of one pipeline
 # definition), and for the ref SIGN_EXPECT_REF (default refs/heads/main). The identity is the same for every branch, so the ref in the certificate
 # is what tells the image of main from one that a job of another branch signed. Every signature of the digest must name it (ci/tools.sh).
@@ -315,7 +355,8 @@ case "${1:-}" in
   push) push ;;
   assemble) assemble ;;
   edge) edge ;;
+  rehearse) rehearse ;;
   credentials) have_credentials && say "the Docker Hub credentials are set" || no_credentials ;;
   install-tools) install_cosign; install_crane; crane version; cosign version 2>&1 | grep -E '^GitVersion' ;;
-  *) die "usage: ci/proxy-image.sh setup | test | push | assemble | edge | credentials | digest | release-tags vX.Y.Z | install-tools" ;;
+  *) die "usage: ci/proxy-image.sh setup | test | push | assemble | edge | rehearse | credentials | digest | release-tags vX.Y.Z | install-tools" ;;
 esac

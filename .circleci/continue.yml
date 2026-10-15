@@ -1164,6 +1164,7 @@ jobs:
             ci/security-scan.sh lists
             ci/tests/deploy-marker.sh
             ci/tests/preview-comment.sh
+            ci/tests/signature-ref.sh
       - run:
           name: The release job requires every other job (docs/releasing.md)
           command: |

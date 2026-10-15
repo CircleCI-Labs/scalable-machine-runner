@@ -48,6 +48,8 @@ sha=${CIRCLE_SHA1:-$(git rev-parse HEAD)}
 short=${sha:0:12}
 version=sha-${short}
 export PATH="${CI_TOOLS_BIN:-${RELEASE_BIN:-${HOME}/.local/bin}}:${PATH}"
+# shellcheck source=ci/tools.sh
+. "${here}/tools.sh"   # install_cosign, install_crane and signed_only_on
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -185,14 +187,12 @@ push() {
 digest_of() { craned digest "$1"; }
 
 sign_all() { # DIGEST...: keyless cosign of each digest, the way ci/release.sh signs
-  local d id
+  local d
   [ "${PROXY_IMAGE_SIGN:-oidc}" != none ] || { say "signing skipped (PROXY_IMAGE_SIGN=none)"; return 0; }
-  id="https://circleci.com/api/v2/projects/${CIRCLE_PROJECT_ID:?}/pipeline-definitions/${PIPELINE_DEFINITION_ID:?}"
   for d in "$@"; do
     say "sign ${image_repo}@${d} (keyless, CircleCI OIDC token)"
     SIGSTORE_ID_TOKEN="$(circleci run oidc get --claims '{"aud":"sigstore"}' --root-issuer)" cosign sign --yes "${image_repo}@${d}" > /dev/null
-    cosign verify --certificate-identity "${id}" --certificate-oidc-issuer "${oidc_issuer}" "${image_repo}@${d}" > /dev/null ||
-      die "the signature of ${image_repo}@${d} does not verify against ${id}"
+    verify_signature "${d}"
   done
 }
 
@@ -248,14 +248,17 @@ assemble() {
 
 image_digest() { digest_of "${image_repo}:${version}"; }
 
-# verify_signature DIGEST: keyless, against the pipeline definition that signed it (the same one: the release job and the publication are
-# jobs of one pipeline definition)
+# verify_signature DIGEST: keyless, against the pipeline definition that signed it (the release job and the publication are jobs of one pipeline
+# definition), and for the ref SIGN_EXPECT_REF (default refs/heads/main). The identity is the same for every branch, so the ref in the certificate
+# is what tells the image of main from one that a job of another branch signed. Every signature of the digest must name it (ci/tools.sh).
 verify_signature() {
-  local id
+  local id ref=${SIGN_EXPECT_REF:-refs/heads/main}
   [ "${PROXY_IMAGE_SIGN:-oidc}" != none ] || return 0
   id="https://circleci.com/api/v2/projects/${CIRCLE_PROJECT_ID:?}/pipeline-definitions/${PIPELINE_DEFINITION_ID:?}"
   cosign verify --certificate-identity "${id}" --certificate-oidc-issuer "${oidc_issuer}" "${image_repo}@$1" > /dev/null ||
     die "the signature of ${image_repo}@$1 does not verify against ${id}"
+  cosign download signature "${image_repo}@$1" | signed_only_on "${ref}" ||
+    die "a signature of ${image_repo}@$1 does not name ${ref} as its source repository ref (OID 1.3.6.1.4.1.57264.1.14), or the certificate cannot be read"
 }
 
 release_tags() {
@@ -292,7 +295,6 @@ case "${1:-}" in
   test) setup; test_images ;;
   push) push ;;
   assemble) assemble ;;
-  install-tools) # shellcheck source=ci/tools.sh
-    . "${here}/tools.sh"; install_cosign; install_crane; crane version; cosign version 2>&1 | grep -E '^GitVersion' ;;
+  install-tools) install_cosign; install_crane; crane version; cosign version 2>&1 | grep -E '^GitVersion' ;;
   *) die "usage: ci/proxy-image.sh setup | test | push | assemble | digest | release-tags vX.Y.Z | install-tools" ;;
 esac

@@ -11,8 +11,8 @@
 # builds the bundle from the tracked files, with the token proxy image of the stack files pinned to this release
 # (MACHINE_RUNNER_SWARM_PROXY_IMAGE: ${...:-ccilabs/machine-runner-swarm-proxy:edge} becomes ${...:-ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>},
 # the digest being the image that the pipeline of this commit pushed as sha-<12 characters of the commit>: ci/proxy-image.sh),
-# signs SHA256SUMS, which lists the bundles, with cosign (keyless: the CircleCI OIDC token) and checks the signature, checks the
-# signature of the image too and gives it the release tags (X.Y.Z, which never moves, and X.Y, X and latest when this is the newest
+# signs SHA256SUMS, which lists the bundles, with cosign (keyless: the CircleCI OIDC token) and checks the signature and that its certificate
+# names refs/heads/main as the source repository ref, checks the signature of the image too and gives it the release tags (X.Y.Z, which never moves, and X.Y, X and latest when this is the newest
 # of its line: ci/proxy-image.sh release-tags), then creates the GitHub release, which also creates the tag. It never pushes a
 # commit or a tag with git.
 #
@@ -38,6 +38,7 @@ out="${RELEASE_OUT:-/tmp/release}"
 bin="${RELEASE_BIN:-${HOME}/.local/bin}"
 tag_glob='v[0-9]*.[0-9]*.[0-9]*'
 oidc_issuer='https://oidc.circleci.com'
+sign_ref=refs/heads/main   # the ref that the certificate of a release must name (signed_only_on, ci/tools.sh)
 goroot="${RELEASE_GOROOT:-${HOME}/.local/go}"
 export PATH="${goroot}/bin:${bin}:${PATH}"
 ci_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -177,9 +178,13 @@ sign_and_verify() {
   say "Sign SHA256SUMS (keyless, CircleCI OIDC token)"
   SIGSTORE_ID_TOKEN="$(circleci run oidc get --claims '{"aud":"sigstore"}' --root-issuer)" \
     cosign sign-blob --yes --bundle "${out}/SHA256SUMS.sigstore.json" "${out}/SHA256SUMS" > /dev/null
-  say "Verify the signature against ${id}"
+  say "Verify the signature against ${id}, made for ${sign_ref}"
   cosign verify-blob --bundle "${out}/SHA256SUMS.sigstore.json" \
     --certificate-identity "${id}" --certificate-oidc-issuer "${oidc_issuer}" "${out}/SHA256SUMS"
+  # The identity is the same for every branch of the project: the ref is what tells a release from a signature made by a job of a feature branch.
+  signed_only_on "${sign_ref}" < "${out}/SHA256SUMS.sigstore.json" ||
+    die "the certificate of the signature does not name ${sign_ref} as its source repository ref (OID 1.3.6.1.4.1.57264.1.14): this job did not run for it"
+  say "The certificate names ${sign_ref}"
 }
 
 # proxy_image: the image of this commit is on Docker Hub (the job proxy-image-publish pushed it as sha-<12>): its digest goes in the bundle.

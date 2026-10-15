@@ -107,9 +107,24 @@ The bundles come from `git archive`, so only tracked files ship. They leave out 
 
 The job gets an OIDC token from CircleCI with `circleci run oidc get --claims '{"aud":"sigstore"}' --root-issuer`. The audience `sigstore` and the issuer `https://oidc.circleci.com` are the values that the public Sigstore certificate authority (Fulcio) accepts for CircleCI. `cosign sign-blob` swaps the token for a short-lived certificate, signs `SHA256SUMS`, and records the signature in the public Rekor log. The certificate expires within minutes, and the job keeps no key.
 
-The certificate identity is `https://circleci.com/api/v2/projects/<project-id>/pipeline-definitions/<pipeline-definition-id>`. The project and the definition IDs stay the same for every branch. The certificate also records the repository and the ref (`refs/heads/main` for a release), the workflow and the job. The job checks its own signature with `cosign verify-blob` before it publishes.
+The certificate identity is `https://circleci.com/api/v2/projects/<project-id>/pipeline-definitions/<pipeline-definition-id>`. The project and the definition IDs stay the same for every branch, and a job of any branch can get an OIDC token, with no context. The identity alone therefore does not prove that `main` signed. What does is the **source repository ref** of the certificate: the extension `1.3.6.1.4.1.57264.1.14`, which Fulcio fills from the `vcs-ref` claim of the token, so it is `refs/heads/main` for a release and `refs/heads/<branch>` for a job of any other branch. The certificate also records the repository, the workflow and the job.
 
-CircleCI documents that OIDC tokens are issued to jobs that use at least one context. The `release` job always has one, the context with `GITHUB_TOKEN`. In a test on 2026-10-13, `circleci run oidc get` also worked in a job without a context, but do not rely on that.
+`cosign` has flags for the GitHub extensions only, so [`ci/tools.sh`](../ci/tools.sh) reads the certificate itself (`signed_only_on`, tested by `ci/tests/signature-ref.sh`):
+
+- `ci/release.sh` checks the signature of `SHA256SUMS` with `cosign verify-blob`, and then that its certificate names `refs/heads/main`. The job stops if it does not.
+- `ci/proxy-image.sh` does the same for every digest of the token proxy image, right after it signs it, and again in the release job before the image gets its release tags. It reads **every** signature of the digest (`cosign download signature`), not the first one: one signature of a feature branch next to a signature of `main` fails the check.
+
+To check the ref by hand, after `cosign verify-blob` printed `Verified OK`, look for the extension in the certificate of the bundle. The long hex string is the encoding of the OID `1.3.6.1.4.1.57264.1.14` followed by the value `refs/heads/main`, so the command matches the whole value and not a part of a longer ref:
+
+```bash
+jq -r '.verificationMaterial | (.certificate // .x509CertificateChain.certificates[0]).rawBytes' SHA256SUMS.sigstore.json | base64 -d \
+  | od -An -v -tx1 | tr -d ' \n' | grep -Eq '2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' \
+  && echo "signed for refs/heads/main" || echo "NOT signed for refs/heads/main: do not use this release"
+```
+
+To see which ref a certificate has, print it with `openssl asn1parse`: `base64 -d | openssl asn1parse -inform DER | grep -A1 57264.1.14` shows the value as hex digits after `HEX DUMP]:`, `0C0F` and then the ASCII codes of the ref.
+
+CircleCI documents that OIDC tokens are issued to jobs that use at least one context. The `release` job always has one, the context with `GITHUB_TOKEN`. In a test on 2026-10-13, `circleci run oidc get` also worked in a job without a context, which is why the ref and not the identity decides.
 
 ## Enable publishing
 

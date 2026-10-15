@@ -156,6 +156,13 @@ Describe 'the stack files' {
         foreach ($name in 'custom-image.yaml', 'persistent.yaml', 'docker-build.yaml', 'ssh-rerun.yaml') { $script:files[$name] | Should -Not -Match '(?m)^  runner-distributor' -Because 'the distributor is part of the base stack file' }
     }
 
+    It 'ship the SHA-256 values of the pinned runner (amd64 and arm64) as the default list, so the pinned install does not rest on the manifest' {
+        $text = $script:files['runners.yaml']
+        $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_RUNNER_SHA256: \$\{MACHINE_RUNNER_SWARM_RUNNER_SHA256:-[0-9a-f]{64},[0-9a-f]{64}\}\r?$'
+        # a release bumps the version and the two values together (ci/release.sh, check_runner_pin)
+        $text | Should -Match '(?m)^  MACHINE_RUNNER_SWARM_RUNNER_VERSION: \$\{MACHINE_RUNNER_SWARM_RUNNER_VERSION:-[0-9]+\.[0-9]+\.[0-9]+\}'
+    }
+
     It 'spell out PATH for stock services: Windows first, then Git cmd, usr\bin and ucrt64\bin' {
         $paths = [regex]::Matches($script:allText, "(?m)^\s+PATH: '([^']+)'") | ForEach-Object { $_.Groups[1].Value }
         @($paths).Count | Should -Be 6   # runners.yaml, custom-image.yaml, persistent.yaml, ssh-rerun.yaml, docker-build.yaml (twice: the anchor and the override with C:\docker)

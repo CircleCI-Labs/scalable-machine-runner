@@ -41,7 +41,7 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
    # 2. the ref: a job of any branch can sign with that identity, so the certificate must also say that the job ran for refs/heads/main
    #    (the long string is the OID 1.3.6.1.4.1.57264.1.14 followed by the value refs/heads/main)
    jq -r '.verificationMaterial | (.certificate // .x509CertificateChain.certificates[0]).rawBytes' SHA256SUMS.sigstore.json | base64 -d \
-     | od -An -v -tx1 | tr -d ' \n' | grep -Eq '2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' \
+     | od -An -v -tx1 | tr -d ' \n' | grep -Eq '^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' \
      && echo "signed for refs/heads/main" || { echo "NOT signed for refs/heads/main: stop"; false; }
 
    # 3. the file: its checksum is in the signed list

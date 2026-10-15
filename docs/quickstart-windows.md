@@ -45,7 +45,7 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
    $material = (Get-Content -Raw -LiteralPath SHA256SUMS.sigstore.json | ConvertFrom-Json).verificationMaterial
    if ($material.certificate) { $cert = $material.certificate.rawBytes } else { $cert = $material.x509CertificateChain.certificates[0].rawBytes }
    $hex = -join ([Convert]::FromBase64String($cert) | ForEach-Object { $_.ToString('x2') })
-   if ($hex -notmatch '2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e') { throw 'NOT signed for refs/heads/main: stop' }
+   if ($hex -notmatch '^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e') { throw 'NOT signed for refs/heads/main: stop' }
 
    # 3. the file: its checksum is in the signed list
    $want = ((Get-Content SHA256SUMS | Where-Object { $_ -match [regex]::Escape($zip) }) -split '\s+')[0]

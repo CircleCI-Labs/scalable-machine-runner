@@ -86,7 +86,7 @@ signed_only_on() {
   while IFS= read -r b64; do
     [ -n "${b64}" ] || continue
     n=$((n + 1))
-    printf '%s' "${b64}" | base64 -d 2> /dev/null | od -An -v -tx1 | tr -d ' \n' | grep -Eq "${pattern}" || return 1
+    printf '%s' "${b64}" | base64 -d 2> /dev/null | od -An -v -tx1 | tr -d ' \n' | grep -Eq "^([0-9a-f]{2})*${pattern}" || return 1   # on a byte boundary
   done <<< "${certs}"
   [ "${n}" -gt 0 ]
 }

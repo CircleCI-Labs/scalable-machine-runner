@@ -124,7 +124,7 @@ To check the ref by hand, after `cosign verify-blob` printed `Verified OK`, look
 
 ```bash
 jq -r '.verificationMaterial | (.certificate // .x509CertificateChain.certificates[0]).rawBytes' SHA256SUMS.sigstore.json | base64 -d \
-  | od -An -v -tx1 | tr -d ' \n' | grep -Eq '2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' \
+  | od -An -v -tx1 | tr -d ' \n' | grep -Eq '^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' \
   && echo "signed for refs/heads/main" || echo "NOT signed for refs/heads/main: do not use this release"
 ```
 

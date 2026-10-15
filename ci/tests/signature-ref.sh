@@ -38,6 +38,12 @@ prefixed=$(cert prefixed "ASN1:UTF8String:refs/heads/x/refs/heads/main")
 tag_ref=$(cert tag_ref "ASN1:UTF8String:refs/tags/v1.0.0")
 long=$(cert long "ASN1:UTF8String:${long_ref}")
 none=$(cert none)
+# a feature branch whose certificate also holds the bytes of the main pattern half a byte off, in an extension of its own: the hex dump
+# contains the pattern, at an odd position
+shifted_hex="a$(printf '2b0601040183bf30010e04110c0f%s' "$(printf refs/heads/main | od -An -v -tx1 | tr -d ' \n')")a"
+openssl req -x509 -new -key "${work}/key.pem" -days 1 -subj "/CN=shifted" -addext "1.3.6.1.4.1.57264.1.14=ASN1:UTF8String:refs/heads/feature/x" \
+  -addext "1.2.3.4=DER:${shifted_hex}" -outform DER -out "${work}/shifted.der" 2> /dev/null
+shifted=$(base64 -w0 < "${work}/shifted.der")
 
 # expect NAME WANT REF  (the bundles are on stdin)
 expect() {
@@ -64,6 +70,7 @@ expect "a ref that ends with main"         fail refs/heads/main < <(bundle "${pr
 expect "a tag"                             fail refs/heads/main < <(bundle "${tag_ref}")
 expect "a ref of 130+ characters"          pass "${long_ref}" < <(bundle "${long}")
 expect "a ref of 130+ characters is not main" fail refs/heads/main < <(bundle "${long}")
+expect "the main pattern half a byte off"  fail refs/heads/main < <(bundle "${shifted}")
 expect "no extension"                      fail refs/heads/main < <(bundle "${none}")
 expect "two signatures of main"            pass refs/heads/main < <(bundle "${main_utf8}"; bundle "${main_printable}")
 expect "main, then a feature branch"       fail refs/heads/main < <(bundle "${main_utf8}"; bundle "${feature}")

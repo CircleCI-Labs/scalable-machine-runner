@@ -8,6 +8,7 @@
 #                                     else), sign every digest, and check the result (needs the credentials)
 #   ci/proxy-image.sh edge            verify the signature of REPO:sha-<12> and tag it edge, unless a newer commit is on main (needs the
 #                                     credentials). The last job of the pipeline of main runs it, after every test has passed
+#   ci/proxy-image.sh credentials     check the credentials at once: fails when REQUIRE_CREDENTIALS is set and they are missing, says so otherwise
 #   ci/proxy-image.sh digest          print the digest of REPO:sha-<12>, the image of this commit (no credentials; exit 1 when there is none)
 #   ci/proxy-image.sh release-tags vX.Y.Z   verify the signature of that digest and give it the release tags (needs the credentials):
 #                                     X.Y.Z (immutable: an existing X.Y.Z must be this digest), and X.Y, X and latest when X.Y.Z is the
@@ -20,8 +21,9 @@
 # files, to the digest of sha-<12> (ci/release.sh). docs/releasing.md has the table of tags.
 #
 # Environment:
-#   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN   from the context scalable-machine-runner-dockerhub (main only). Without both, push and assemble print
-#                          that they did nothing and exit 0, so that a pipeline without the credentials stays green. Never printed.
+#   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN   from the context scalable-machine-runner-dockerhub (main only). Without both, push, assemble and edge
+#                          print that they did nothing and exit 0, so that a pipeline without the credentials stays green. Never printed.
+#   REQUIRE_CREDENTIALS    true or 1 on a production main (the setup gate): then they exit 1 instead, so that a missing credential cannot hide
 #   PROXY_IMAGE_REPO       the repository (default ccilabs/machine-runner-swarm-proxy)
 #   PROXY_IMAGE_SIGN       oidc (default: keyless cosign with the CircleCI OIDC token, the way ci/release.sh signs) or none (the local test)
 #   PIPELINE_DEFINITION_ID, CIRCLE_PROJECT_ID   for the certificate identity that the signature is checked against, as in ci/release.sh
@@ -60,6 +62,9 @@ say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 have_credentials() { [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; }
 no_credentials() {
+  if require_credentials; then
+    die "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set, and this pipeline must publish (REQUIRE_CREDENTIALS=${REQUIRE_CREDENTIALS}): the context scalable-machine-runner-dockerhub is missing, restricted for this pipeline, or lacks a variable (docs/ci.md, 'The Docker Hub context')"
+  fi
   say "NOT PUSHED: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set (the context scalable-machine-runner-dockerhub holds them)."
   say "The image was built and tested; nothing was published. The maintainer adds the values to the context (docs/releasing.md)."
 }
@@ -310,6 +315,7 @@ case "${1:-}" in
   push) push ;;
   assemble) assemble ;;
   edge) edge ;;
+  credentials) have_credentials && say "the Docker Hub credentials are set" || no_credentials ;;
   install-tools) install_cosign; install_crane; crane version; cosign version 2>&1 | grep -E '^GitVersion' ;;
-  *) die "usage: ci/proxy-image.sh setup | test | push | assemble | edge | digest | release-tags vX.Y.Z | install-tools" ;;
+  *) die "usage: ci/proxy-image.sh setup | test | push | assemble | edge | credentials | digest | release-tags vX.Y.Z | install-tools" ;;
 esac

@@ -16,7 +16,8 @@
       -Test      the image reports its version, runs as it should, and starts with a token file and a state directory: it becomes healthy
                  (its own -healthcheck, and the HEALTHCHECK of Docker) and writes its state. A failure exits 1
       -Push      docker login with DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (from the environment, never printed), then docker push of -Name.
-                 Without both variables nothing is pushed, and the script says so and exits 0 (a pipeline without the credentials stays green)
+                 Without both variables nothing is pushed, and the script says so and exits 0 (a pipeline without the credentials stays green),
+                 unless REQUIRE_CREDENTIALS is true or 1 (a production main: the setup gate sets it): then it exits 1
 
 .EXAMPLE
     .\ci\Build-ProxyImage.ps1 -Binary C:\work\machine-runner-swarm-proxy_windows_amd64 -Test
@@ -126,6 +127,9 @@ if ($Test) {
 # --- push --------------------------------------------------------------------------------------------------------------------
 if ($Push) {
     if (-not $env:DOCKERHUB_USERNAME -or -not $env:DOCKERHUB_TOKEN) {
+        if ($env:REQUIRE_CREDENTIALS -in @('1', 'true')) {
+            Exit-WithFailure 'DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set, and this pipeline must publish (REQUIRE_CREDENTIALS): the context scalable-machine-runner-dockerhub is missing, restricted for this pipeline, or lacks a variable.'
+        }
         Write-Step 'NOT PUSHED: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set (the context scalable-machine-runner-dockerhub holds them). The image was built and tested; nothing was published.'
         exit 0
     }

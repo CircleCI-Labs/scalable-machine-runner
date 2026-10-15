@@ -13,6 +13,7 @@
 #                    Passed to git through GIT_ASKPASS, so that it is neither on a command line nor in a URL.
 #   PUBLISH_REMOTE   the remote (default: the GitHub repository of the CircleCI project)
 #   PUBLISH_BRANCH   the branch (default: gh-pages)
+#   REQUIRE_CREDENTIALS   true or 1 on a production main (the setup gate): a missing GITHUB_TOKEN fails the job instead of skipping the publication
 #
 # Never run this with `set -x`: GITHUB_TOKEN is in the environment.
 set -euo pipefail
@@ -24,6 +25,9 @@ sha="${CIRCLE_SHA1:-$(git -C "${here}" rev-parse HEAD)}"
 
 [ -f "${here}/public/index.html" ] || { echo "publish: no site in ${here}/public: run hugo first" >&2; exit 1; }
 if [ -z "${GITHUB_TOKEN:-}" ]; then
+  case "${REQUIRE_CREDENTIALS:-}" in
+    1 | true) echo "publish: GITHUB_TOKEN is not set (context scalable-machine-runner-docs), and this pipeline must publish (REQUIRE_CREDENTIALS=${REQUIRE_CREDENTIALS})" >&2; exit 1 ;;
+  esac
   echo "publish: skipped: GITHUB_TOKEN is not set (context scalable-machine-runner-docs). The site was built and checked only."
   exit 0
 fi

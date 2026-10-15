@@ -47,6 +47,11 @@ install_crane() {
   rm -rf "${tmp}"
 }
 
+# require_credentials: succeeds when the pipeline must publish. The setup gate sets REQUIRE_CREDENTIALS=true for main with both e2e tokens, the
+# production project (docs/ci.md, "Publishing fails closed on main"): there a missing credential fails the job. Anywhere else, and in a project
+# without the e2e context, the publication is skipped with a message and the pipeline stays green.
+require_credentials() { case "${REQUIRE_CREDENTIALS:-}" in 1 | true) return 0 ;; *) return 1 ;; esac; }
+
 # --- the ref of a signature ---------------------------------------------------------------------------------------------------------------
 # The identity of a keyless signature (the pipeline definition of this project) is the same for every branch, and a job of any branch can get
 # an OIDC token without a context. What tells a signature of main from the signature of a feature branch is the extension

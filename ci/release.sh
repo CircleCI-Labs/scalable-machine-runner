@@ -24,6 +24,8 @@
 #                         broken, so every step runs except the tags and the last one.
 #   PIPELINE_DEFINITION_ID  the pipeline definition (<< pipeline.definition.id >>), for the
 #                         certificate identity that the signature is checked against
+#   REQUIRE_CREDENTIALS   true or 1 on a production main (the setup gate): a release that is due fails when GITHUB_TOKEN or the Docker Hub credentials
+#                         are missing, instead of ending green with nothing published
 #   RELEASE_SKIP_SIGN=1   for a run outside CircleCI, where there is no OIDC token
 #   RELEASE_DEPLOY_MARKER=1  record the release in the Deploys view of CircleCI (docs/ci.md, "Deploys"): component
 #                         machine-runner-swarm, environment github-releases, version = the release tag; and the tags of the image:
@@ -201,8 +203,12 @@ resolve_proxy_image() {
 # will_publish: every condition of a release that publishes is met. A message says what is missing when it is not.
 will_publish() {
   [ "${RELEASE_SKIP_SIGN:-}" != 1 ] || return 1
-  [ -n "${GITHUB_TOKEN:-}" ] || { say "publishing skipped: GITHUB_TOKEN is not set in context scalable-machine-runner-release"; return 1; }
+  if [ -z "${GITHUB_TOKEN:-}" ]; then
+    ! require_credentials || die "GITHUB_TOKEN is not set in context scalable-machine-runner-release, and this pipeline must publish (REQUIRE_CREDENTIALS=${REQUIRE_CREDENTIALS})"
+    say "publishing skipped: GITHUB_TOKEN is not set in context scalable-machine-runner-release"; return 1
+  fi
   if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
+    ! require_credentials || die "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set in context scalable-machine-runner-dockerhub, and this pipeline must publish (REQUIRE_CREDENTIALS=${REQUIRE_CREDENTIALS})"
     say "publishing skipped: DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set in context scalable-machine-runner-dockerhub (a release needs them to tag its token proxy image)"
     return 1
   fi

@@ -4,11 +4,15 @@
 #
 #   ci/deploy-marker.sh plan NAME COMPONENT ENVIRONMENT VERSION
 #   ci/deploy-marker.sh update NAME RUNNING|SUCCESS|FAILED|CANCELED [REASON]
+#   ci/deploy-marker.sh guard NAME COMMAND...
 #
 #   plan     creates the deploy NAME (pending): the component COMPONENT at VERSION in the environment ENVIRONMENT. CircleCI
 #            creates the component and the environment on first use.
 #   update   moves the deploy NAME to a status. REASON (FAILED only) is the failure reason. A failed or canceled deploy
 #            gives the live version back to the last good one.
+#   guard    runs COMMAND, and when a cancel ends the step (SIGTERM or SIGINT reaches the script) it stops the command, gives the deploy
+#            NAME the status CANCELED and exits 143. Without it a canceled job leaves its deploy at RUNNING: a canceled step runs no later
+#            step, not even one with `when: on_fail`. The exit status of COMMAND is the exit status of guard; guard sends no other status.
 #
 # A marker never breaks the job it describes: when the task agent refuses a call (the Deploys feature is not available to
 # the organization, a name clash), the script says so and exits 0. Only a wrong use of the script exits 2. It remembers its
@@ -24,6 +28,7 @@ state_dir="${DEPLOY_MARKER_DIR:-${TMPDIR:-/tmp}/deploy-marker}"
 usage() {
   echo "usage: ci/deploy-marker.sh plan NAME COMPONENT ENVIRONMENT VERSION" >&2
   echo "       ci/deploy-marker.sh update NAME RUNNING|SUCCESS|FAILED|CANCELED [REASON]" >&2
+  echo "       ci/deploy-marker.sh guard NAME COMMAND..." >&2
   exit 2
 }
 say() { printf 'deploy-marker: %s\n' "$*"; }
@@ -71,6 +76,18 @@ case "${cmd}" in
       case "${status}" in RUNNING) echo running > "${state}" ;; *) echo "done" > "${state}" ;; esac
       say "deploy ${name} is ${status}"
     fi
+    ;;
+  guard)
+    [ $# -ge 3 ] || usage
+    shift 2
+    "$@" &
+    child=$!
+    # A signal makes `wait` return at once, and the trap then runs: stop the command, record the cancel, and leave.
+    trap 'kill -TERM "${child}" 2> /dev/null || true; wait "${child}" 2> /dev/null || true; "$0" update "${name}" CANCELED; exit 143' TERM INT
+    rc=0
+    wait "${child}" || rc=$?
+    trap - TERM INT
+    exit "${rc}"
     ;;
   *) usage ;;
 esac

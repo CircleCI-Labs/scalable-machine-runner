@@ -599,8 +599,8 @@ jobs:
           name: Deploy is running
           command: ci/deploy-marker.sh update proxy-image RUNNING
       - run:
-          name: One manifest list, sha-<12>, signed (ci/proxy-image.sh assemble; nothing without the credentials)
-          command: ci/proxy-image.sh assemble
+          name: One manifest list, sha-<12>, signed (ci/proxy-image.sh assemble; nothing without the credentials; a cancel gives the deploy CANCELED)
+          command: ci/deploy-marker.sh guard proxy-image ci/proxy-image.sh assemble
       - run:
           name: Deploy succeeded
           command: ci/deploy-marker.sh update proxy-image SUCCESS
@@ -1381,6 +1381,8 @@ jobs:
       REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing GITHUB_TOKEN fails the job
     steps:
       - checkout
+      # The build comes first: a site that does not build is not a failed deploy, and a failed build would otherwise be recorded as one.
+      - docs-site
       - run:
           name: Plan the deploy (a deploy marker; only when the site will be published)
           command: |
@@ -1389,13 +1391,12 @@ jobs:
             else
               echo "no GITHUB_TOKEN: nothing is published, so no deploy is recorded"
             fi
-      - docs-site
       - run:
           name: Deploy is running
           command: ci/deploy-marker.sh update docs-site RUNNING
       - run:
-          name: Publish to gh-pages (nothing is published without GITHUB_TOKEN)
-          command: site/publish.sh
+          name: Publish to gh-pages (nothing is published without GITHUB_TOKEN; a cancel gives the deploy CANCELED)
+          command: ci/deploy-marker.sh guard docs-site site/publish.sh
       - run:
           name: Deploy succeeded
           command: ci/deploy-marker.sh update docs-site SUCCESS

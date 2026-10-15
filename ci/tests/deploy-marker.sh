@@ -67,6 +67,30 @@ reset
 CIRCLECI='' step plan release machine-runner-swarm github-releases v0.2.0
 check "outside CircleCI nothing is called" 0 ""
 
+# guard: a command that ends by itself is passed through, and a cancel (SIGTERM) gives the deploy CANCELED
+reset
+step plan release machine-runner-swarm github-releases v0.2.0
+step update release RUNNING
+step guard release true
+check "guard: a command that passes sends no status" 0 "run release plan release --environment-name=github-releases --component-name=machine-runner-swarm --target-version=v0.2.0${nl}run release update release --status=RUNNING"
+step guard release bash -c 'exit 7'
+check "guard: the exit status of a failing command is kept, and no status is sent" 7 "run release plan release --environment-name=github-releases --component-name=machine-runner-swarm --target-version=v0.2.0${nl}run release update release --status=RUNNING"
+reset
+step plan release machine-runner-swarm github-releases v0.2.0
+step update release RUNNING
+"$marker" guard release sleep 30 > "$tmp/out" 2>&1 &
+gpid=$!
+sleep 1
+cpid=$(pgrep -P "$gpid" | head -n 1)
+kill -TERM "$gpid"
+rc=0; wait "$gpid" || rc=$?
+check "guard: a cancel gives the deploy CANCELED and exits 143" 143 "run release plan release --environment-name=github-releases --component-name=machine-runner-swarm --target-version=v0.2.0${nl}run release update release --status=RUNNING${nl}run release update release --status=CANCELED"
+rows=$((rows + 1))
+if [ -n "$cpid" ] && kill -0 "$cpid" 2> /dev/null; then echo "FAIL guard: the command is still running"; failed=$((failed + 1)); kill "$cpid" || true; else echo "ok   guard: the command was stopped"; fi
+reset
+step guard release
+check "guard with no command is a usage error" 2 ""
+
 reset
 step update release DONE
 check "a bad status is a usage error" 2 ""

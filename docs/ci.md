@@ -62,20 +62,22 @@ This section is the short answer for users and reviewers. The pipeline sections 
 
 ## Pipeline shape
 
-There is one workflow, `ci`, and a small second one, `docs-site`, that publishes the documentation site on `main` ([Docs site](#docs-site)). Every job of both is listed in `.circleci/continue.yml`. The `setup` job passes seven boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled. The setup phase itself has three mutually exclusive workflows that run the same `setup` job: `setup-e2e` for `main` and `smr-swarm/*`, with the e2e context, `setup-plain` for every other branch, without any context, and `setup-scan` for the weekly scan, without any context either ([below](#when-things-run-and-the-setup-gate)).
+There is one workflow, `ci`, and a small second one, `docs-site`, that publishes the documentation site on `main` ([Docs site](#docs-site)). Every job of both is listed in `.circleci/continue.yml`. The `setup` job passes eleven boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled. The setup phase itself has three mutually exclusive workflows that run the same `setup` job: `setup-e2e` for `main` and `smr-swarm/*`, with the e2e context, `setup-plain` for every other branch, without any context, and `setup-scan` for the weekly scan, without any context either ([below](#when-things-run-and-the-setup-gate)).
 
 ```mermaid
 flowchart TD
   setup["setup (1 small job)<br/>decides what runs, then continues with continue.yml"]
   setup --> ci["workflow ci"]
   ci --> lint["every pipeline: lint, docs site build"]
-  ci --> base["not docs-only: Linux jobs, Windows 2022 jobs"]
-  ci --> full["full-suite: Windows 2025 jobs"]
+  ci --> base["not docs-only: Linux jobs"]
+  ci --> full["full-suite (main, full: true): Windows 2025 jobs, mixed-arch"]
+  ci --> heavy["windows, proxy-image, microvm: main, full: true, or the files they read"]
   ci --> e2el["e2e-linux: Linux e2e group"]
   ci --> e2ew["e2e-windows: Windows e2e groups, 2022 then 2025"]
   lint --> release
   base --> release
   full --> release
+  heavy --> release
   e2el --> release
   e2ew --> release
   release["release: main with both e2e tokens, after every job above"]
@@ -87,14 +89,14 @@ flowchart TD
 | every pipeline | `lint-dockerfiles` | `hadolint/hadolint:v2.15.1-debian` | Linux, Windows and token proxy Dockerfiles. Warnings fail; only `docker.io`, `registry.access.redhat.com`, `mcr.microsoft.com` and `gcr.io` (distroless) are allowed in `FROM` |
 | every pipeline | `lint-yaml` | `cimg/python:3.14.8` + yamllint 1.38.0 | `yamllint --strict .` |
 | not docs-only | `proxy-test` | `golang:1.27.2` (by digest) | `gofmt`, `go vet` and `go test -race` on `proxy/`, then `ci/build-proxy.sh`: the static builds for linux amd64, arm64, ppc64le and s390x and windows amd64 and arm64 (the list of `ci/build-proxy.sh --list`), each checked for `CGO_ENABLED=0`, the right OS and architecture, and the version `sha-<12 characters of the commit>`. The windows/amd64 build goes on in the workspace to the Windows image jobs and the Windows e2e |
-| not docs-only, and not `publish` | `proxy-image-linux` | `ubuntu-2604:current` | The Linux image for four platforms with buildx and QEMU (`ci/proxy-image.sh test`: each image runs, non-root, read-only, healthy), then `ci/tests/proxy-image.sh` against a registry of its own. [The token proxy image](releasing.md#the-token-proxy-image) |
-| not docs-only, and not `publish`; `full-suite` for 2025 | `proxy-image-windows-ltsc2022`, `proxy-image-windows-ltsc2025` | `windows-server-2022-gui:current`, `windows-server-2025-gui:current` | The Windows image on Nano Server for that tag (`ci/Build-ProxyImage.ps1 -Test`), run with a token file and a state directory |
+| `proxy-image`, and not `publish` | `proxy-image-linux` | `ubuntu-2604:current` | The Linux image for four platforms with buildx and QEMU (`ci/proxy-image.sh test`: each image runs, non-root, read-only, healthy), then `ci/tests/proxy-image.sh` against a registry of its own. [The token proxy image](releasing.md#the-token-proxy-image) |
+| `proxy-image` (2025: `full-suite`), and not `publish` | `proxy-image-windows-ltsc2022`, `proxy-image-windows-ltsc2025` | `windows-server-2022-gui:current`, `windows-server-2025-gui:current` | The Windows image on Nano Server for that tag (`ci/Build-ProxyImage.ps1 -Test`), run with a token file and a state directory |
 | `publish` (main) | `proxy-image-linux-publish`, `proxy-image-windows-ltsc2022-publish`, `proxy-image-windows-ltsc2025-publish` | the same, context `scalable-machine-runner-dockerhub` | The same jobs in place of the plain ones, then the push of `sha-<12>-linux` and `sha-<12>-windows-<tag>`. Without the credentials: `NOT PUSHED`, and the job passes |
 | `publish` (main) | `proxy-image-publish` | `cimg/base:2026.10`, small, context `scalable-machine-runner-dockerhub`, `serial-group` | The manifest list, tagged `sha-<12>` only, the signatures (checked for `refs/heads/main`), the check of every platform, and the [deploy](#deploys) of `token-proxy-image`. Skipped with a message without the credentials |
 | `release` (main, both e2e tokens), optional for the release | `proxy-image-edge` | `cimg/base:2026.10`, small, context `scalable-machine-runner-dockerhub`, `serial-group` | The last job: after `proxy-image-publish`, `linux-swarm` and every e2e group it checks the signature of `sha-<12>` and tags it `edge` (`ci/proxy-image.sh edge`) |
 | every pipeline | `lint-stack` | `docker:29.9.0-cli` | `docker stack config -c` on every file in `linux/stack` and `windows/stack` alone, on all files of each OS together (the optional files are add-on stack files), and on `windows/tests/stack.e2e.yaml`: the stack files must parse, merge and interpolate. `ci/config-names.sh` checks that every Swarm config is named after the content of its file: a Swarm config cannot change, so a changed file needs a new name, and `ci/config-names.sh --write` renames it. No daemon or Swarm needed |
 | every pipeline | `lint-powershell` | `mcr.microsoft.com/powershell:7.5-ubuntu-24.04`, medium (the 5.1-compatibility analysis needs about 2.7 GB) | PSScriptAnalyzer 1.25.0 over `windows/` and `ci/` (errors and warnings fail), then `windows/tests/Invoke-UnitTests.ps1` on PowerShell 7: an ASCII check and the Pester 5.7.1 suites, including `Stack.Tests.ps1`, which keeps the stack files' invariants (no entrypoint script, the runner as the entrypoint, the secret target, Git's mount path, PATH, and that every named volume and secret is declared: `docker stack config` does not catch an undeclared volume, `docker stack deploy` fails with `undefined volume`). Pester runs without a terminal (it hangs under CircleCI's pseudo-terminal) |
-| every pipeline | `lint-circleci` | `cimg/base:2026.10` + CircleCI CLI 1.4.0 | `circleci config validate` on both config files, `circleci config process` with every parameter on (`validate` alone does not compile the filtered jobs), the table test of the setup gate (`ci/tests/setup-gate.sh`), a compile of `config.yml` for a table of branches that proves only `main` and `smr-swarm/*` get the e2e context and the scan never does (`ci/tests/setup-config.sh`), the tests of `ci/changed-files.sh` and `ci/deploy-marker.sh`, a check that every job of `ci` besides the lint jobs and `docs-site-build` is switched off by a docs-only change, and a check that the `release` job requires every other job (below) |
+| every pipeline | `lint-circleci` | `cimg/base:2026.10` + CircleCI CLI 1.4.0 | `circleci config validate` on both config files, `circleci config process` with every parameter on (`validate` alone does not compile the filtered jobs), the table test of the setup gate (`ci/tests/setup-gate.sh`), a compile of `config.yml` for a table of branches that proves only `main` and `smr-swarm/*` get the e2e context and the scan never does (`ci/tests/setup-config.sh`), the tests of `ci/changed-files.sh`, `ci/deploy-marker.sh`, `ci/tests/signature-ref.sh` and `ci/tests/require-credentials.sh`, a check that every job of `ci` besides the lint jobs and `docs-site-build` is switched off by a docs-only change, and a check that the `release` job requires every other job (below) |
 | every pipeline | `lint-markdown` | `davidanson/markdownlint-cli2:v0.18.1` | `.markdownlint-cli2.yaml` on every Markdown file; `docs/ci.md` with the same rules (the repository config ignores it) |
 | every pipeline | `lint-docs-links` | `lycheeverse/lychee:0.24.2` | Relative links and `#heading` anchors in every Markdown file, offline (external URLs are not fetched: the job is fast and never flaky) |
 | every pipeline | `lint-docs-mermaid` | `minlag/mermaid-cli:12.0.1`, medium | Renders every `mermaid` block in every Markdown file; a syntax error fails the job |
@@ -103,10 +105,10 @@ flowchart TD
 | not docs-only | `linux-swarm` | `ubuntu-2604:current`, xlarge (two test nodes share the VM) | `linux/tests/run-all.sh`: stack validation (with the config names), the setup helper, ephemerality with a negative control, exit 80, token readability, real runner tasks through the step-down (`task.sh`), placement, persistent mode, draining, network isolation, limits, the runner distributor (a node with no install, a joining node, an upgrade under load, a rollback, `current` following the manifest, the major-version guard, pruning, a tampered binary, a wrong SHA-256, and CircleCI's real manifest) and the entrypoint unit tests. The distributor downloads from a local HTTP mirror of the harness. Everything runs in a single-node and a two-node Swarm inside privileged `docker:dind` containers: the CI VM's own engine never becomes a Swarm node for these |
 | not docs-only | `linux-image-example` | `ubuntu-2604:current` | Builds `linux/images/example`, checks that the tools it adds run, then Trivy (below) |
 | not docs-only | `linux-setup` | `ubuntu-2604:current` | `ci/linux-smoke.sh`: `linux/setup.sh` and the shipped stack end to end on a fresh VM with no real token, with the distributor installing the runner (below) |
-| `full-suite` | `linux-microvm` | `android:current`, `large.gen2` (the only CircleCI image with `/dev/kvm`) | `linux/tests/microvm.sh` with `SWARM_TEST_REQUIRE_KVM=1`: the microVM add-on on two Docker-in-Docker nodes with Kata. It downloads Kata 4.2.0 (about 1 GB, SHA-256 verified). [Details](#linux-microvm) |
+| `microvm` | `linux-microvm` | `android:current`, `large.gen2` (the only CircleCI image with `/dev/kvm`) | `linux/tests/microvm.sh` with `SWARM_TEST_REQUIRE_KVM=1`: the microVM add-on on two Docker-in-Docker nodes with Kata. It downloads Kata 4.2.0 (about 1 GB, SHA-256 verified). [Details](#linux-microvm) |
 | not docs-only | `linux-arm64` | `ubuntu-2604:current`, `arm.medium` | The same script on an Arm VM: the arm64 runner installed by the distributor runs unmodified in a stock `cimg/base` through the volume, and the shipped stack starts |
-| not docs-only, optional | `linux-mixed-arch` | `ubuntu-2604:current`, xlarge | `linux/tests/mixed-arch.sh`: the shipped stack on an amd64 manager and an arm64 worker emulated by QEMU (the script registers the `qemu-aarch64` binfmt handler in the VM). Each node installs the runner of its own architecture and verifies that architecture's tarball SHA-256, and classes constrained by `node.platform.arch` stay on their architecture. A last phase runs the distributor script alone in a stock Alpine under QEMU for `ppc64le` and `s390x`, the other architectures of CircleCI's manifest: it installs the runner of that architecture. The token proxy image of those architectures is run under emulation by `proxy-image-linux`. About 2 minutes on an 8-core machine. It is not in the `requires` of the release (the release check of `lint-circleci` names it as optional): make it a requirement once it has been green for a while. A skip counts as a failure in this job |
-| not docs-only | `windows-swarm-ltsc2022` | `windows-server-2022-gui:current`, windows.medium | The stock-image path on Windows (below) |
+| `full-suite`, optional | `linux-mixed-arch` | `ubuntu-2604:current`, xlarge | `linux/tests/mixed-arch.sh`: the shipped stack on an amd64 manager and an arm64 worker emulated by QEMU (the script registers the `qemu-aarch64` binfmt handler in the VM). Each node installs the runner of its own architecture and verifies that architecture's tarball SHA-256, and classes constrained by `node.platform.arch` stay on their architecture. A last phase runs the distributor script alone in a stock Alpine under QEMU for `ppc64le` and `s390x`, the other architectures of CircleCI's manifest: it installs the runner of that architecture. The token proxy image of those architectures is run under emulation by `proxy-image-linux`. About 2 minutes on an 8-core machine. It is not in the `requires` of the release (the release check of `lint-circleci` names it as optional): make it a requirement once it has been green for a while. A skip counts as a failure in this job |
+| `windows` | `windows-swarm-ltsc2022` | `windows-server-2022-gui:current`, windows.medium | The stock-image path on Windows (below) |
 | `full-suite` | `windows-swarm-ltsc2025` | `windows-server-2025-gui:current` | The same on Server 2025 |
 | `e2e-linux` | `e2e-linux-host`, `e2e-linux-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`; probes: `cci-labs/scalable-machine-runner-e2e-linux` | Real runner e2e (below) |
 | `e2e-linux-arm64` | `e2e-linux-arm64-host`, `e2e-linux-arm64-b1`, `-b2`, `-b3` | host: `ubuntu-2604:current`, `arm.medium`; probes: the same class | The same e2e with the arm64 runner. It uses the class and the token of `e2e-linux` and runs after it in the same serial group. Every probe records `uname -m`, and the host requires it to equal its own `aarch64` |
@@ -148,14 +150,15 @@ These were measured on 2026-10-12 and shaped the scripts. Check them first when 
 
 | Branch or trigger | Setup workflow | Parameters set by `setup` | Jobs |
 |---|---|---|---|
-| any branch other than the two below | `setup-plain`, no context | none | the `every pipeline` and `not docs-only` rows |
-| the same, with the pipeline parameter `full: true` (API call) | `setup-plain`, no context | `full-suite` | adds the Server 2025 jobs. Never e2e, never release |
-| `main`, `smr-swarm/*` | `setup-e2e`, with the e2e context | `full-suite` | adds the Server 2025 jobs |
-| the same, with `E2E_RUNNER_TOKEN_LINUX` present | `setup-e2e` | adds `e2e-linux` | adds the Linux e2e group |
-| the same, with `E2E_RUNNER_TOKEN_WINDOWS` present | `setup-e2e` | adds `e2e-windows` | adds the Windows e2e groups |
-| `main` with both tokens | `setup-e2e` | adds `release` | adds the `release` job |
+| any branch other than the two below | `setup-plain`, no context | `windows`, `proxy-image` and `microvm` for the changed files that each suite reads ([below](#the-heavy-suites)) | the `every pipeline` and `not docs-only` rows, and those suites |
+| the same, with the pipeline parameter `full: true` (API call or a schedule) | `setup-plain`, no context | `full-suite`, and the three heavy suites | adds the Server 2025 jobs, `linux-mixed-arch` and every heavy suite. Never e2e, never release |
+| `smr-swarm/*` | `setup-e2e`, with the e2e context | the heavy suites for the changed files, as on any branch; `e2e-linux` and `e2e-windows` for the tokens that are present | the e2e groups. The Server 2025 jobs and `linux-mixed-arch` do not run here |
+| `main` | `setup-e2e`, with the e2e context | `full-suite`, `windows`, `proxy-image`, `microvm` | adds the Server 2025 jobs, `linux-mixed-arch` and every heavy suite |
+| `main` with `E2E_RUNNER_TOKEN_LINUX` present | `setup-e2e` | adds `e2e-linux` | adds the Linux e2e group |
+| `main` with `E2E_RUNNER_TOKEN_WINDOWS` present | `setup-e2e` | adds `e2e-windows` | adds the Windows e2e groups |
+| `main` with both tokens | `setup-e2e` | adds `release` and `strict` | adds the `release` job and `proxy-image-edge`, and a missing publishing credential fails ([below](#publishing-fails-closed-on-main)) |
 | `main` (with or without the tokens) | `setup-e2e` | adds `publish` | swaps the token proxy image jobs for their publish variants, with the Docker Hub context, and adds `proxy-image-publish` |
-| any of the above, when the push changes documentation only ([below](#documentation-only-changes)) | the same workflow | `docs-only`, and `full-suite`, `e2e-*`, `publish` and `release` off | the lint jobs and `docs-site-build` only |
+| any of the above, when the push changes documentation only ([below](#documentation-only-changes)) | the same workflow | `docs-only`, and `full-suite`, the heavy suites, `e2e-*`, `publish` and `release` off (`strict` stays) | the lint jobs and `docs-site-build` only |
 | the schedule of the [security scan](#security-scan) | `setup-scan`, no context | `security-scan` | the workflow `security-scan` only |
 | a tag | none runs a job | nothing | nothing: the setup job has no tag filter, so CircleCI runs no job for the tag |
 
@@ -165,6 +168,26 @@ The decision lives in [`ci/setup-gate.sh`](../ci/setup-gate.sh), which the `setu
 
 - `ci/tests/setup-gate.sh` is a table of branches, contexts, parameters and tokens, and the parameters the gate must print. It needs only bash and jq.
 - `ci/tests/setup-config.sh` compiles `.circleci/config.yml` with `circleci config process` for a table of branch names and checks that exactly one setup workflow is left, that the e2e context appears only for `main` and `smr-swarm/*`, and that every other branch gets a job without a context and with `--e2e false`.
+
+### The heavy suites
+
+Three suites cost most of a pipeline, and a change to the shell scripts of Linux or to a README does not need them. The setup gate switches them on from the files that the push changes (`ci/changed-files.sh`):
+
+| Parameter | Jobs | Runs on `main` and with `full: true`, and on any other branch when a changed path is |
+|---|---|---|
+| `windows` | `windows-swarm-ltsc2022` | `windows/`, `ci/`, `.circleci/` or `PSScriptAnalyzerSettings.psd1` |
+| `proxy-image` | `proxy-image-linux`, `proxy-image-windows-ltsc2022` | `proxy/`, `ci/`, `.circleci/` or `windows/tests/` |
+| `microvm` | `linux-microvm` | `linux/stack/`, `linux/tests/`, `docs/microvm.md`, `ci/` or `.circleci/` |
+
+`ci/` and `.circleci/` are in every row: they hold the scripts and the jobs of all the suites. When the changed files are not known (the first build of a branch, a pipeline started through the API), every suite runs, as for [documentation-only changes](#documentation-only-changes). `full-suite` is for `main` and `full: true` only: the Windows Server 2025 jobs (`windows-swarm-ltsc2025`, `proxy-image-windows-ltsc2025`) and `linux-mixed-arch`. A branch such as `smr-swarm/*` gets neither. `ci/tests/setup-gate.sh` has the table of paths and the answers that the gate must print.
+
+To get everything on a branch, for example before a risky merge, start a pipeline for it with the parameter `full: true`. A schedule that sets `full: true` on `main` or on a branch gives a nightly full run. Neither runs the e2e or the release job: only `main` does.
+
+### Publishing fails closed on main
+
+A missing publishing credential must not leave `main` green with nothing published. The setup gate sets the pipeline parameter `strict` to `true` for `main` when both e2e tokens are present, which is the production project (the same condition as `release`, and a documentation-only change does not turn it off). The jobs that publish get it as `REQUIRE_CREDENTIALS=true`: `proxy-image-linux` and `proxy-image-windows` (the publish variants, in a first step, before the long build), `proxy-image-publish`, `proxy-image-edge`, `release` and `docs-site-publish`. When `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` or `GITHUB_TOKEN` is missing, renamed, emptied or kept from the job by a context restriction, the job fails with a message that names the context.
+
+Everywhere else the publication is skipped with a message and the pipeline stays green, as before: a project that has not created the contexts yet, a fork of this repository, and any branch. `ci/tests/require-credentials.sh` tests both behaviors, and the table test of the gate has a row for `strict`.
 
 ### Documentation-only changes
 
@@ -368,7 +391,9 @@ ci/tests/setup-config.sh             # only main and smr-swarm/* get the e2e con
 ci/security-scan.sh refs             # the images that the weekly scan covers (the scan itself: Docker and network)
 ci/tests/changed-files.sh            # the changed files and the release question of a push, on throwaway repositories
 ci/tests/deploy-marker.sh            # the deploy markers, against a stub of the circleci command
-circleci config process .circleci/continue.yml --pipeline-parameters '{full-suite: true, e2e-linux: true, e2e-windows: true, release: true}' > /dev/null
+ci/tests/signature-ref.sh            # the ref in the certificate of a signature (refs/heads/main)
+ci/tests/require-credentials.sh      # a production main fails without its publishing credentials
+circleci config process .circleci/continue.yml --pipeline-parameters '{full-suite: true, windows: true, proxy-image: true, microvm: true, e2e-linux: true, e2e-windows: true, release: true}' > /dev/null
 
 site/stage.sh && (cd site && hugo --minify --panicOnWarning) && site/check.sh   # the docs site and its links (needs Hugo, Go and lychee)
 
@@ -386,7 +411,7 @@ docker run --rm -v "$PWD:/w" -w /w mcr.microsoft.com/powershell:7.5-ubuntu-24.04
 
 ## Release
 
-The `release` job is part of the `ci` workflow. On `main`, when both e2e tokens are present, the setup phase passes `release: true` together with `full-suite`, `e2e-linux` and `e2e-windows`, so every job that the release requires really runs. The job requires every other job of the workflow, and the release waits for every test. Pipelines of other branches never run it, and neither do tag pipelines (the release creates the tag; CircleCI schedules no job for a tag).
+The `release` job is part of the `ci` workflow. On `main`, when both e2e tokens are present, the setup phase passes `release: true` together with `full-suite`, the three heavy suites, `e2e-linux` and `e2e-windows`, so every job that the release requires really runs. The job requires every other job of the workflow, and the release waits for every test. Pipelines of other branches never run it, and neither do tag pipelines (the release creates the tag; CircleCI schedules no job for a tag).
 
 | Job | Executor | What it does |
 |---|---|---|
@@ -712,10 +737,11 @@ Measured on 2026-10-13 (pipeline `9aed4106`, a full run on `smr-swarm/ci`). Cred
 
 | Pipeline | Credits (about) | Wall clock |
 |---|---|---|
-| Feature branch (the jobs of every pipeline) | 1,500, of which the two Windows jobs are 1,200 | 18 min |
-| `main` or `smr-swarm/*` (every job except `release`) | 3,800 | 25 min |
+| Feature branch that changes a file that every heavy suite reads (the jobs of every pipeline, measured with both Windows jobs) | 1,500, of which the two Windows jobs are 1,200 | 18 min |
+| The same branch now: the Server 2025 jobs run on `main` and with `full: true` only, and each heavy suite runs only for the files it reads ([The heavy suites](#the-heavy-suites)) | 1,500 minus about 700 for the 2025 job, and minus about 500 when no Windows file changes | 18 min |
+| `main` (every job except `release`) | 3,800 | 25 min |
 
-Windows dominates the cost: every Windows job pulls the 2 GB Server Core image onto a fresh VM (about 5 to 10 minutes). A pull request that changes documentation only costs the lint jobs and the docs build (about 200 credits). The only schedule is the weekly [security scan](#security-scan), about 150 credits a run.
+The measurements above predate the gating, and the second row is an estimate from them. Windows dominates the cost: every Windows job pulls the 2 GB Server Core image onto a fresh VM (about 5 to 10 minutes). A pull request that changes documentation only costs about 200 credits. The only schedule is the weekly [security scan](#security-scan), about 150 credits a run.
 
 ## Troubleshooting
 

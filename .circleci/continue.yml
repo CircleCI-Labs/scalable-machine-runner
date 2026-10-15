@@ -5,9 +5,12 @@ version: 2.1
 #
 # One workflow, `ci`. Expression filters on the parameters switch jobs in and out:
 #   lint and docs   the lint jobs and the docs site build: every pipeline, docs-only changes included
-#   not docs-only   the builds and tests: Linux Swarm tests, arm64 smoke test, setup.sh preflight, Windows
-#                   Server 2022 Swarm tests. A change of documentation only skips them
-#   full-suite      the Windows Server 2025 Swarm tests
+#   not docs-only   the builds and tests: Linux Swarm tests, arm64 smoke test, setup.sh preflight. A change of
+#                   documentation only skips them
+#   windows         the Windows Server 2022 Swarm tests. proxy-image: the token proxy image jobs. microvm: linux-microvm.
+#                   The heavy suites: always on main and with `full: true`, and on another branch only when a changed file
+#                   is one that the suite reads (ci/setup-gate.sh, docs/ci.md)
+#   full-suite      main and `full: true` only: the Windows Server 2025 Swarm tests and linux-mixed-arch
 #   e2e-linux       job A hosts a Swarm service, probes B1, B2, B3 run on it
 #   e2e-windows     the same on Windows (2022, then 2025)
 #   publish         main only, not for a change of documentation: the jobs that push the token proxy image
@@ -28,6 +31,27 @@ parameters:
   full-suite:
     type: boolean
     default: false
+    description: >
+      main, or `full: true` (a manual run, or a schedule that sets it): the Windows Server 2025 jobs and linux-mixed-arch, the two most
+      expensive suites. It also switches the three heavy suites below on.
+  windows:
+    type: boolean
+    default: false
+    description: The Windows Server 2022 jobs. Always on main and with full, and on another branch for the changed files that they read.
+  proxy-image:
+    type: boolean
+    default: false
+    description: The token proxy image jobs (the plain ones, and the Windows 2022 image). Same rule as windows.
+  microvm:
+    type: boolean
+    default: false
+    description: linux-microvm, the one job on the Android machine image. Same rule as windows.
+  strict:
+    type: boolean
+    default: false
+    description: >
+      main with both e2e tokens: the production project. The jobs that publish get REQUIRE_CREDENTIALS=true, and a missing Docker Hub
+      credential or GITHUB_TOKEN fails them instead of skipping the publication. A docs-only change does not turn it off.
   e2e-linux:
     type: boolean
     default: false
@@ -47,7 +71,8 @@ parameters:
     description: >
       main only, and not for a change of documentation only (the setup phase decides). The jobs that push the token proxy image to
       Docker Hub run instead of the jobs that only build and test it, and they have the context scalable-machine-runner-dockerhub. Without
-      DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the context they build, test, say that nothing was pushed, and pass.
+      DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the context they build, test, say that nothing was pushed, and pass, unless the parameter
+      strict is true (a production main), where they fail.
   docs-only:
     type: boolean
     default: false
@@ -433,8 +458,16 @@ jobs:
         type: boolean
         default: false
     executor: linux-vm
+    environment:
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
     steps:
       - checkout
+      - when:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: The Docker Hub credentials (fails at once on a production main when they are missing)
+                command: ci/proxy-image.sh credentials
       - run:
           name: crane and cosign (pinned, SHA-256 verified)
           command: ci/proxy-image.sh install-tools
@@ -471,8 +504,22 @@ jobs:
         type: boolean
         default: false
     executor: << parameters.os >>
+    environment:
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
     steps:
       - checkout
+      - when:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: The Docker Hub credentials (fails at once on a production main when they are missing)
+                command: |
+                  $required = $env:REQUIRE_CREDENTIALS -in @('1', 'true')
+                  if ($required -and (-not $env:DOCKERHUB_USERNAME -or -not $env:DOCKERHUB_TOKEN)) {
+                    Write-Host 'DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set, and this pipeline must publish.'
+                    Write-Host 'Check the context scalable-machine-runner-dockerhub.'
+                    exit 1
+                  }
       - attach_workspace:
           at: proxy-bin   # the windows/amd64 build that proxy-test made
       - run:
@@ -515,14 +562,18 @@ jobs:
       no tag that a user pulls: edge moves in proxy-image-edge, after the tests, and the stack files default to latest, which the release moves.
       The release requires it, and finds the digest of its commit by the tag sha-<12>. A publication is recorded as a deploy of the component
       token-proxy-image, environment docker-hub, version sha-<12> (ci/deploy-marker.sh, docs/ci.md "Deploys"). Without the credentials the
-      job says that nothing was pushed, records no deploy, and passes.
+      job says that nothing was pushed, records no deploy, and passes, unless strict is true (a production main), where it fails.
     docker:
       - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
     resource_class: small
     environment:
       PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
     steps:
       - checkout
+      - run:
+          name: The Docker Hub credentials (fails at once on a production main when they are missing)
+          command: ci/proxy-image.sh credentials
       - run:
           name: crane and cosign (pinned, SHA-256 verified)
           command: ci/proxy-image.sh install-tools
@@ -559,6 +610,7 @@ jobs:
     resource_class: small
     environment:
       PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
     steps:
       - checkout
       - run:
@@ -1147,7 +1199,8 @@ jobs:
             # validate compiles only what the default parameters enable; compile the gated
             # jobs (full-suite, e2e-linux, e2e-windows, release) too.
             /tmp/cli/circleci config process .circleci/continue.yml \
-              --pipeline-parameters '{full-suite: true, e2e-linux: true, e2e-windows: true, release: true}' > /tmp/compiled.yml
+              --pipeline-parameters '{full-suite: true, windows: true, proxy-image: true, microvm: true, e2e-linux: true,
+                e2e-windows: true, release: true}' > /tmp/compiled.yml
             # A backslash right before a parameter tag escapes it (a Windows path such as
             # C:\dir\ followed by the tag), leaving the tag literal in the compiled config.
             if grep -nE '\<< *(parameters|pipeline)\.' /tmp/compiled.yml; then
@@ -1157,13 +1210,15 @@ jobs:
             # A change of documentation only runs the lint jobs and the docs site build. `process` leaves the expression filters
             # in the compiled config, so read them from the source: a job of ci with no filter must be a lint job or the docs
             # site build, and every other filter is `not pipeline.parameters.docs-only` or a parameter that the setup gate
-            # turns off for a docs-only change (full-suite, e2e-linux, e2e-windows, release, publish), alone or with
-            # `and not pipeline.parameters.publish` (the jobs that the publish variants replace on main). A new job without a
-            # filter would otherwise run on every docs pull request.
+            # turns off for a docs-only change (full-suite, windows, proxy-image, microvm, e2e-linux, e2e-windows, release, publish),
+            # alone or with `and not pipeline.parameters.publish` (the jobs that the publish variants replace on main). A new job
+            # without a filter would otherwise run on every docs pull request.
             yq -o=json '.workflows.ci.jobs' .circleci/continue.yml | jq -r '
-              ["not pipeline.parameters.docs-only", "pipeline.parameters.full-suite", "pipeline.parameters.e2e-linux",
+              ["not pipeline.parameters.docs-only", "pipeline.parameters.full-suite", "pipeline.parameters.windows",
+               "pipeline.parameters.proxy-image", "pipeline.parameters.microvm", "pipeline.parameters.e2e-linux",
                "pipeline.parameters.e2e-windows", "pipeline.parameters.release", "pipeline.parameters.publish",
                "not pipeline.parameters.docs-only and not pipeline.parameters.publish",
+               "pipeline.parameters.proxy-image and not pipeline.parameters.publish",
                "pipeline.parameters.full-suite and not pipeline.parameters.publish"] as $gated
               | map(if type == "string" then {key: ., value: {}} else to_entries[0] end)
               | map(select(.key | startswith("lint-") or . == "docs-site-build" | not))
@@ -1188,6 +1243,7 @@ jobs:
             ci/tests/deploy-marker.sh
             ci/tests/preview-comment.sh
             ci/tests/signature-ref.sh
+            ci/tests/require-credentials.sh
       - run:
           name: The release job requires every other job (docs/releasing.md)
           command: |
@@ -1286,11 +1342,13 @@ jobs:
     description: >
       Builds the site again, with the same steps, and pushes it to the gh-pages branch (site/publish.sh). Runs on main only,
       in the workflow docs-site, so that the release does not wait for it. The context holds GITHUB_TOKEN. Without it the job
-      builds and checks the site and publishes nothing. A publication is recorded as a deploy of the component docs-site,
-      environment github-pages, version = the commit (ci/deploy-marker.sh, docs/ci.md "Deploys").
+      builds and checks the site and publishes nothing, unless strict is true (a production main), where it fails. A publication is recorded
+      as a deploy of the component docs-site, environment github-pages, version = the commit (ci/deploy-marker.sh, docs/ci.md "Deploys").
     docker:
       - image: cimg/go:1.27.2@sha256:d370371192063607c1237351759d8ab0c49f5e37ab7c3bd7553b09c8b62247d5
     resource_class: small
+    environment:
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing GITHUB_TOKEN fails the job
     steps:
       - checkout
       - run:
@@ -1326,7 +1384,8 @@ jobs:
       except publishing. The context also gives the job its OIDC token for the signature. The job pins the token proxy
       image of its commit (the digest of sha-<12>, which proxy-image-publish pushed, with its signature checked) in the stack
       files of the bundle, and gives that image the release tags (X.Y.Z, X.Y, X, latest) before it creates the GitHub release; the
-      context scalable-machine-runner-dockerhub holds the credentials for the tags. A release publishes nothing without them.
+      context scalable-machine-runner-dockerhub holds the credentials for the tags. A release publishes nothing without them, and on a production
+      main (the parameter strict) a release that is due and cannot publish fails.
     docker:
       - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
     resource_class: small
@@ -1335,6 +1394,7 @@ jobs:
       # A release that publishes is recorded as a deploy of the component machine-runner-swarm, environment github-releases,
       # version = the tag, with its failure status (ci/deploy-marker.sh, docs/ci.md "Deploys").
       RELEASE_DEPLOY_MARKER: "1"
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
     steps:
       - checkout
       - run:
@@ -1473,7 +1533,7 @@ workflows:
       # The token proxy image: built and tested everywhere; on main the publish variants run instead and push (docs/ci.md, "The token
       # proxy image"). The Windows jobs need the windows/amd64 build of proxy-test.
       - proxy-image-linux:
-          filters: not pipeline.parameters.docs-only and not pipeline.parameters.publish
+          filters: pipeline.parameters.proxy-image and not pipeline.parameters.publish
       - proxy-image-linux:
           name: proxy-image-linux-publish
           publish: true
@@ -1484,7 +1544,7 @@ workflows:
           os: windows-2022
           tag: ltsc2022
           requires: [proxy-test]
-          filters: not pipeline.parameters.docs-only and not pipeline.parameters.publish
+          filters: pipeline.parameters.proxy-image and not pipeline.parameters.publish
       - proxy-image-windows:
           name: proxy-image-windows-ltsc2022-publish
           os: windows-2022
@@ -1526,17 +1586,17 @@ workflows:
       - linux-arm64:
           filters: not pipeline.parameters.docs-only
       # Required by the release: KVM on the Android image has passed in CI in every pipeline since the first one that could run it
-      # (full-suite, which a release pipeline switches on).
+      # (microvm, which a release pipeline switches on, as every heavy suite).
       - linux-microvm:
-          filters: pipeline.parameters.full-suite
-      # Optional: it is NOT in the `requires` of the release (the release check of lint-circleci lists it as optional).
+          filters: pipeline.parameters.microvm
+      # Optional: it is NOT in the `requires` of the release (the release check of lint-circleci lists it as optional). main and full only.
       - linux-mixed-arch:
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.full-suite
       - windows-swarm:
           name: windows-swarm-ltsc2022
           os: windows-2022
           tag: ltsc2022
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.windows
       - windows-swarm:
           name: windows-swarm-ltsc2025
           os: windows-2025

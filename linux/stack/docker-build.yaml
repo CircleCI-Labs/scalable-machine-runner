@@ -24,10 +24,9 @@ x-env: &env
   CIRCLECI_RUNNER_API_URL: http://token-proxy:8080   # through the token proxy of runners.yaml
 
 services:
-  # Adds this class to the token proxy of runners.yaml (stack files merge networks, secrets and variables by name).
+  # Adds this class to the token proxy of runners.yaml: the proxy serves a class for every secret <service>-token that it holds, so the
+  # class needs its secret and (on Linux) its network there, and nothing else (stack files merge networks and secrets by name).
   token-proxy:
-    environment:
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_DOCKER_BUILD: linux-docker-build=/run/secrets/linux-docker-build-token
     secrets:
       - {source: linux-docker-build-token, target: linux-docker-build-token, uid: "65534", gid: "65534", mode: 0400}
     networks: [linux-docker-build]

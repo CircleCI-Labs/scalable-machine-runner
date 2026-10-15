@@ -90,11 +90,9 @@ x-runner: &runner
     options: {max-size: 20m, max-file: "3"}
 
 services:
-  # Adds the classes to the token proxy of runners.yaml (stack files merge networks, secrets and variables by name).
+  # Adds the classes to the token proxy of runners.yaml: the proxy serves a class for every secret <service>-token that it holds, so a
+  # class needs its secret and its network there, and nothing else (stack files merge networks and secrets by name).
   token-proxy:
-    environment:
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_MICROVM: linux-microvm=/run/secrets/linux-microvm-token
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_MICROVM_DOCKER: linux-microvm-docker=/run/secrets/linux-microvm-docker-token
     secrets:
       - {source: linux-microvm-token, target: linux-microvm-token, uid: "65534", gid: "65534", mode: 0400}
       - {source: linux-microvm-docker-token, target: linux-microvm-docker-token, uid: "65534", gid: "65534", mode: 0400}

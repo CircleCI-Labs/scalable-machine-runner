@@ -156,12 +156,14 @@ else
   for c in "${proxied[@]}"; do
     check token-proxy "the network of $c" "^      $c: null$"
     check token-proxy "the class token $c-token" "^      - source: $c-token$"
-    check token-proxy "the class $c, with its token file" "^      MACHINE_RUNNER_SWARM_PROXY_CLASS_[A-Z_]+: $c=/run/secrets/$c-token$"
   done
-  n=$(grep -c 'MACHINE_RUNNER_SWARM_PROXY_CLASS_' <<< "$block" || true)
+  if grep -q 'MACHINE_RUNNER_SWARM_PROXY_CLASS_\|^    environment:$\|runner-placeholder' <<< "$block"; then
+    echo "  token-proxy: no class variable and no placeholder secret: the proxy takes a class for every secret <service>-token that it holds (its secrets and networks are all that a class needs)"
+    problems=$((problems + 1))
+  fi
   m=$(awk '/^    secrets:$/ { f = 1; next } /^    [a-z]/ { f = 0 } f && /^      - source: /' <<< "$block" | wc -l)
-  if [[ $n -ne ${#proxied[@]} || $m -ne ${#proxied[@]} ]]; then
-    echo "  token-proxy: $n class(es) and $m secret(s), expected ${#proxied[@]} of each (every proxied class, and no other secret)"
+  if [[ $m -ne ${#proxied[@]} ]]; then
+    echo "  token-proxy: $m secret(s), expected ${#proxied[@]} (the token of every proxied class, and no other secret)"
     problems=$((problems + 1))
   fi
   if grep -qE '^    ports:$|privileged|security_opt|source: /opt|docker.sock' <<< "$block"; then

@@ -89,16 +89,16 @@ Describe 'the stack files' {
         $proxy | Should -Match '(?m)^          - node\.labels\.machine-runner-swarm\.docker-build != true'
         $proxy | Should -Match '(?m)^    healthcheck:'
         $script:files['runners.yaml'] | Should -Match '(?m)^volumes:\r?\n(  .*\r?\n)*?  proxy-state: \{\}'
-        # the class tokens are the secrets of the proxy only, one variable per class
+        # the class tokens are the secrets of the proxy only: the proxy takes a class for every secret <service>-token that it holds
         $proxy | Should -Match '(?m)^      - source: windows-default-token\r?\n        target: windows-default-token'
-        $proxy | Should -Match "MACHINE_RUNNER_SWARM_PROXY_CLASS_WINDOWS_DEFAULT: 'windows-default=C:\\ProgramData\\Docker\\secrets\\windows-default-token'"
+        $proxy | Should -Not -Match 'MACHINE_RUNNER_SWARM_PROXY_CLASS_|(?m)^    environment:|runner-placeholder' -Because 'a class is a secret <service>-token of the proxy, and nothing else'
     }
 
-    It 'add the class of an add-on stack file to the token proxy, with its network, secret and variable' {
-        foreach ($c in @(@('custom-image.yaml', 'windows-custom', 'WINDOWS_CUSTOM'), @('docker-build.yaml', 'windows-docker-build', 'WINDOWS_DOCKER_BUILD'), @('ssh-rerun.yaml', 'windows-default-ssh', 'WINDOWS_DEFAULT_SSH'))) {
+    It 'add the class of an add-on stack file to the token proxy with its secret and nothing else' {
+        foreach ($c in @(@('custom-image.yaml', 'windows-custom'), @('docker-build.yaml', 'windows-docker-build'), @('ssh-rerun.yaml', 'windows-default-ssh'))) {
             $text = $script:files[$c[0]]
             $text | Should -Match '(?m)^  token-proxy-windows:'
-            $text | Should -Match "MACHINE_RUNNER_SWARM_PROXY_CLASS_$($c[2]): '$($c[1])=C:\\ProgramData\\Docker\\secrets\\$($c[1])-token'"
+            $text | Should -Not -Match 'MACHINE_RUNNER_SWARM_PROXY_CLASS_'
             $text | Should -Match "(?m)^      - source: $($c[1])-token\r?\n        target: $($c[1])-token"
         }
         $script:files['persistent.yaml'] | Should -Not -Match 'token-proxy-windows:'

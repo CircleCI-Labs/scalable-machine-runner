@@ -4,9 +4,10 @@
 // class token to the task-claim call and to nothing else; every other call passes through untouched, because
 // the runner and its task agent send the task-scoped token from the claim response themselves.
 //
-// One proxy serves every class of a stack. Each -class SERVICE=TOKEN-FILE pair names the DNS name of the runner
-// containers of one class (tasks.<service>, on the class overlay network) and the file with that class's token.
-// A claim is allowed only from an IP that is currently in the DNS answer of a class, and it gets that class's token.
+// One proxy serves every class of a stack. It finds its classes in its secrets directory (-secrets-dir): every file
+// <service>-token is one class, whose runner containers are tasks.<service> (on the class overlay network) and whose token
+// is in that file. A claim is allowed only from an IP that is currently in the DNS answer of a class, and it gets that class's
+// token.
 //
 // One claim per runner container: after a claim that returns a task, that IP is latched and further claims from it
 // get 403 until the IP has been missing from the DNS answer for several polls in a row (the container is gone). Single-task
@@ -15,11 +16,11 @@
 //
 // A restarted proxy must know who has claimed. With -state-dir it keeps the latched IPs in a small file of a volume,
 // written before the claim's answer goes back to the runner, and a restart with that state refuses every IP that really
-// claimed, whether DNS lists it yet or not. A class with no state (a proxy that never ran, a state that was lost, no -state-dir, a class that is new
-// to the state) cannot know, so the proxy asks CircleCI: GET /api/v3/runner/scale with the token of that class says how
-// many tasks of the class are running. With none running, no runner present can be holding a task, and the runners
-// present may claim. With some running, or when the call fails, the proxy fails safe and latches every IP present of
-// that class. See state.go.
+// claimed, whether DNS lists it yet or not. A class with no state (a proxy that never ran, a state that was lost, no
+// -state-dir, a class that is new to the state) cannot know, so the proxy asks CircleCI: GET /api/v3/runner/scale with the
+// token of that class says how many tasks of the class are running. With none running, no runner present can be holding a
+// task, and the runners present may claim. With some running, or when the call fails or does not answer in time, the proxy
+// fails safe and latches every IP present of that class. See state.go.
 package main
 
 import (
@@ -38,7 +39,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -51,9 +54,9 @@ const (
 	scalePath  = "/api/v3/runner/scale"
 	healthPath = "/healthz"
 
-	// classEnvPrefix: every environment variable with this prefix holds one -class value. Stack files merge
-	// environment variables by name but replace a command, so an add-on stack file adds its class this way.
-	classEnvPrefix = "MACHINE_RUNNER_SWARM_PROXY_CLASS_"
+	tokenSuffix = "-token" // a secret <service>-token is the class <service>
+	// placeholderSecret is the made-up token that every runner reads. It is never mounted into the proxy, and it is never a class.
+	placeholderSecret = "runner-placeholder-token"
 
 	maxClaimBody  = 64 << 10 // a claim is a small JSON document
 	releasePolls  = 30       // seconds of polls that DNS must omit a latched IP before the latch is released
@@ -80,6 +83,30 @@ func newClass(service, tokenFile string) *class {
 		service = "tasks." + service
 	}
 	return &class{dns: service, tokenFile: tokenFile, latched: map[string]bool{}, absent: map[string]int{}, busy: map[string]bool{}}
+}
+
+// discoverClasses finds the classes in dir: one for every file <service>-token, except the placeholder of the runners.
+func discoverClasses(dir string) ([]*class, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var classes []*class
+	for _, e := range entries { // sorted by name
+		name := e.Name()
+		service, ok := strings.CutSuffix(name, tokenSuffix)
+		if !ok || service == "" || name == placeholderSecret {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(dir, name)); err != nil || fi.IsDir() { // a mounted secret may be a link to a file
+			continue
+		}
+		classes = append(classes, newClass(service, filepath.Join(dir, name)))
+	}
+	if len(classes) == 0 {
+		return nil, fmt.Errorf("no file *%s in %s", tokenSuffix, dir)
+	}
+	return classes, nil
 }
 
 type proxy struct {
@@ -572,43 +599,6 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, tok string, c *c
 	}).ServeHTTP(w, r)
 }
 
-// classFlags collects -class SERVICE=TOKEN-FILE (repeatable).
-type classFlags []string
-
-func (f *classFlags) String() string     { return strings.Join(*f, ",") }
-func (f *classFlags) Set(v string) error { *f = append(*f, v); return nil }
-
-// parseClasses builds the classes from the -class values and from the MACHINE_RUNNER_SWARM_PROXY_CLASS_* variables of env.
-func parseClasses(flagValues, env []string) ([]*class, error) {
-	specs := append([]string{}, flagValues...)
-	var fromEnv []string
-	for _, kv := range env {
-		if k, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, classEnvPrefix) && v != "" {
-			fromEnv = append(fromEnv, v)
-		}
-	}
-	sort.Strings(fromEnv)
-	specs = append(specs, fromEnv...)
-	var classes []*class
-	seen := map[string]bool{}
-	for _, s := range specs {
-		service, file, ok := strings.Cut(s, "=")
-		if !ok || strings.TrimSpace(service) == "" || strings.TrimSpace(file) == "" {
-			return nil, fmt.Errorf("class %q: want SERVICE=TOKEN-FILE", s)
-		}
-		c := newClass(strings.TrimSpace(service), strings.TrimSpace(file))
-		if seen[c.dns] {
-			return nil, fmt.Errorf("class %s is given twice", c.dns)
-		}
-		seen[c.dns] = true
-		classes = append(classes, c)
-	}
-	if len(classes) == 0 {
-		return nil, errors.New("no class")
-	}
-	return classes, nil
-}
-
 // checkHealth is the -healthcheck flag: the exit status of one GET of /healthz on the address that -listen names.
 func checkHealth(listen string) int {
 	host, port, err := net.SplitHostPort(listen)
@@ -699,8 +689,11 @@ func (l *logEvery) printf(format string, args ...any) {
 }
 
 func main() {
-	var cf classFlags
-	flag.Var(&cf, "class", "SERVICE=TOKEN-FILE: the runner service of one resource class (tasks.<service> is resolved) and the file with its token, bare or a runner config with auth_token (repeatable; also "+classEnvPrefix+"* variables)")
+	defaultSecrets := "/run/secrets"
+	if runtime.GOOS == "windows" {
+		defaultSecrets = `C:\ProgramData\Docker\secrets`
+	}
+	secretsDir := flag.String("secrets-dir", defaultSecrets, "the directory of the class tokens: every file <service>"+tokenSuffix+" is the class <service>, whose runners are tasks.<service> (a token file is bare or a runner config with auth_token)")
 	listen, upstream := flag.String("listen", ":8080", "address to listen on"), flag.String("upstream", "https://runner.circleci.com", "the runner API")
 	poll := flag.Duration("poll", time.Second, "how often to look for runners that have left")
 	stateDir := flag.String("state-dir", "", "a directory of a volume that keeps the latched runner addresses across restarts (empty: none, and every restart asks CircleCI which runners may claim)")
@@ -715,12 +708,12 @@ func main() {
 		os.Exit(checkHealth(*listen))
 	}
 	u, err := url.Parse(*upstream)
-	classes, cerr := parseClasses(cf, os.Environ())
-	if err != nil || u.Host == "" || cerr != nil || *poll <= 0 { // usage
-		if cerr != nil {
-			log.Print(cerr)
-		}
-		log.Fatal("usage: machine-runner-swarm-proxy -class <service>=<token-file> [-class ...] [-upstream URL] [-listen ADDR] [-state-dir DIR]")
+	if err != nil || u.Host == "" || *poll <= 0 { // usage
+		log.Fatal("usage: machine-runner-swarm-proxy [-secrets-dir DIR] [-upstream URL] [-listen ADDR] [-state-dir DIR] [-poll DURATION]")
+	}
+	classes, err := discoverClasses(*secretsDir)
+	if err != nil {
+		log.Fatalf("classes: %v", err) // fail closed: no token, no proxy
 	}
 	st, err := openStore(*stateDir)
 	if err != nil {

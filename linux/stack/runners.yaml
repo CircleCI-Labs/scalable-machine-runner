@@ -217,13 +217,9 @@ services:
   token-proxy:
     image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:edge}
     user: "65534"
+    # The classes are the files <service>-token in /run/secrets (-secrets-dir): the runners of a class are tasks.<service>. A class of
+    # another stack file is its secret and its network below, nothing more (stack files merge secrets and networks by name, but replace a command).
     command: ["-upstream", "https://runner.circleci.com", "-state-dir", "/state"]   # CircleCI server: your runner API URL
-    environment:
-      # One variable for each class, because stack files merge variables but replace a command: an add-on stack file adds its class
-      # with a variable of its own. The value is <service>=<token file>; the proxy resolves tasks.<service>.
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_DEFAULT: linux-default=/run/secrets/linux-default-token
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_JAVA: linux-java=/run/secrets/linux-java-token
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_HARDENED: linux-hardened=/run/secrets/linux-hardened-token
     read_only: true
     cap_drop: [ALL]
     secrets:

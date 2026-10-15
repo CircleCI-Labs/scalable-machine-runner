@@ -515,23 +515,31 @@ func TestUserAgentIsTaggedOnEveryForwardedRequest(t *testing.T) {
 	}
 }
 
-func TestParseClasses(t *testing.T) {
-	cs, err := parseClasses([]string{"tasks.one=/run/secrets/one", "two = /run/secrets/two"},
-		[]string{"PATH=/bin", classEnvPrefix + "B=three=/run/secrets/three", classEnvPrefix + "A=tasks.four=/run/secrets/four", classEnvPrefix + "EMPTY="})
+func TestDiscoverClasses(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"linux-java-token", "linux-default-token", placeholderSecret, "-token", "notes", "linux-x-token.bak", "token"} {
+		os.WriteFile(filepath.Join(dir, f), []byte("t"), 0o400)
+	}
+	os.Mkdir(filepath.Join(dir, "a-dir-token"), 0o700)
+	os.Symlink(filepath.Join(dir, "linux-java-token"), filepath.Join(dir, "linked-token")) // a mounted secret can be a link
+	os.Symlink(filepath.Join(dir, "gone"), filepath.Join(dir, "dangling-token"))
+	cs, err := discoverClasses(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got []string
 	for _, c := range cs {
-		got = append(got, c.dns+"="+c.tokenFile)
+		got = append(got, c.dns+"="+filepath.Base(c.tokenFile))
 	}
-	want := "tasks.one=/run/secrets/one tasks.two=/run/secrets/two tasks.four=/run/secrets/four tasks.three=/run/secrets/three"
+	want := "tasks.linked=linked-token tasks.linux-default=linux-default-token tasks.linux-java=linux-java-token"
 	if strings.Join(got, " ") != want {
-		t.Errorf("classes %q, want %q", strings.Join(got, " "), want)
+		t.Errorf("classes %q, want %q (the placeholder, a directory, a dangling link and other names are no class)", strings.Join(got, " "), want)
 	}
-	for _, bad := range [][]string{nil, {"noequals"}, {"=file"}, {"svc="}, {"a=/x", "tasks.a=/y"}} {
-		if _, err := parseClasses(bad, nil); err == nil {
-			t.Errorf("%q must be refused", bad)
+	onlyPlaceholder := t.TempDir()
+	os.WriteFile(filepath.Join(onlyPlaceholder, placeholderSecret), []byte("t"), 0o400)
+	for _, bad := range []string{t.TempDir(), onlyPlaceholder, filepath.Join(dir, "missing")} {
+		if _, err := discoverClasses(bad); err == nil {
+			t.Errorf("%s has no class and must be refused", bad)
 		}
 	}
 }

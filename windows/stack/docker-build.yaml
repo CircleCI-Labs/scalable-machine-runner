@@ -77,10 +77,9 @@ x-git-mount: &git-mount                     # portable Git, where the task agent
     subpath: 'git\current'
 
 services:
-  # Adds this class to the token proxy of runners.yaml (stack files merge secrets and variables by name).
+  # Adds this class to the token proxy of runners.yaml: the proxy serves a class for every secret <service>-token that it holds, so the
+  # class needs its secret there, and nothing else (stack files merge secrets by name).
   token-proxy-windows:
-    environment:
-      MACHINE_RUNNER_SWARM_PROXY_CLASS_WINDOWS_DOCKER_BUILD: 'windows-docker-build=C:\ProgramData\Docker\secrets\windows-docker-build-token'
     secrets:
       - source: windows-docker-build-token
         target: windows-docker-build-token

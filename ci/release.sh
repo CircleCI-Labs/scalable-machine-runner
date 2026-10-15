@@ -97,7 +97,7 @@ check_runner_pin() {
     [ -z "${first}" ] || [ "${pin}" = "${first}" ] || die "${f} pins runner ${pin}, another stack file pins ${first}: they must be equal"
     first="${pin}"
   done
-  curl -fsSL --proto '=https' --tlsv1.2 --retry 3 https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json |
+  curl -fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json |
     python3 -c '
 import json, sys
 pin = sys.argv[1]

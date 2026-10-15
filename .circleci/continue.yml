@@ -197,11 +197,11 @@ commands:
             # renovate: datasource=github-releases depName=lycheeverse/lychee extractVersion=^lychee-v(?<version>.*)$
             lychee_version=0.24.2
             lychee_sha256=73657a111819a30c47c08352896796f23d64e4eb2b3ed39b6d32149241566fc5
-            curl -fsSLo /tmp/hugo.tgz \
+            curl -fsSL --retry 5 --retry-all-errors -o /tmp/hugo.tgz \
               "https://github.com/gohugoio/hugo/releases/download/v${hugo_version}/hugo_extended_${hugo_version}_linux-amd64.tar.gz"
             echo "${hugo_sha256}  /tmp/hugo.tgz" | sha256sum -c -
             tar -xzf /tmp/hugo.tgz -C "${HOME}/.local/bin" hugo
-            curl -fsSLo /tmp/lychee.tgz \
+            curl -fsSL --retry 5 --retry-all-errors -o /tmp/lychee.tgz \
               "https://github.com/lycheeverse/lychee/releases/download/lychee-v${lychee_version}/lychee-x86_64-unknown-linux-musl.tar.gz"
             echo "${lychee_sha256}  /tmp/lychee.tgz" | sha256sum -c -
             tar -xzf /tmp/lychee.tgz -C "${HOME}/.local/bin" --strip-components=1 lychee-x86_64-unknown-linux-musl/lychee
@@ -1193,7 +1193,7 @@ jobs:
             # renovate: datasource=github-releases depName=CircleCI-Public/circleci-cli extractVersion=^v(?<version>.*)$
             cli_version=1.4.0
             cli_sha256=96c3de64d815b076725f5f05aa626d83eaf39b1332a6b1f7e5dbaf46af43f169
-            curl -fsSLo /tmp/cli.tgz \
+            curl -fsSL --retry 5 --retry-all-errors -o /tmp/cli.tgz \
               "https://github.com/CircleCI-Public/circleci-cli/releases/download/v${cli_version}/circleci-cli_${cli_version}_linux_amd64.tar.gz"
             echo "${cli_sha256}  /tmp/cli.tgz" | sha256sum -c -
             mkdir -p /tmp/cli && tar -xzf /tmp/cli.tgz -C /tmp/cli circleci

@@ -14,7 +14,7 @@ tools_bin="${CI_TOOLS_BIN:-${RELEASE_BIN:-${HOME}/.local/bin}}"
 
 # fetch URL SHA256 FILE: download, and check the SHA-256 value
 fetch() {
-  curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$3" "$1"
+  curl -fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors -o "$3" "$1"
   echo "$2  $3" | sha256sum -c --quiet -
 }
 

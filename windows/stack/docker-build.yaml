@@ -4,7 +4,8 @@
 # Like windows-default, this class claims through the token-proxy-windows of runners.yaml (the service
 # below only adds this class to it), so deploy the two files together. The runner holds
 # the placeholder secret runner-placeholder-token.
-# It only schedules on nodes you label:  docker node update --label-add machine-runner-swarm.docker-build=true <node>
+# It only schedules on WORKER nodes you label:  docker node update --label-add machine-runner-swarm.docker-build=true <node>
+# (never on a manager: a job with the engine pipe could read every secret of the swarm there). So a single-node swarm cannot run it.
 #
 # !!! The engine's named pipe is ADMINISTRATOR-EQUIVALENT on its node: see the comment on the service.
 #
@@ -86,8 +87,8 @@ services:
 
   # Pattern A: Docker builds for WINDOWS images only. The job talks to the host engine through its
   # named pipe, so a job can do anything the engine can: it is administrator-equivalent on that node
-  # (and on a Swarm manager it can also read every secret). Only nodes labelled machine-runner-swarm.docker-build=true
-  # may run it, and no other class should share those nodes. Linux images cannot be built here.
+  # (and on a Swarm manager it could also read every secret, so it runs on workers only). Only worker nodes labelled
+  # machine-runner-swarm.docker-build=true may run it, and no other class should share those nodes. Linux images cannot be built here.
   # docker.exe comes from the host: adjust the source to where it lives on your nodes.
   windows-docker-build:
     <<: [*runner, *stock]
@@ -122,6 +123,8 @@ services:
           - node.platform.os == windows
           - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
           - node.labels.machine-runner-swarm.docker-build == true
+          # A worker only: on a manager the engine pipe also gives a job every secret of the swarm (a service that mounts them), the class tokens included.
+          - node.role == worker
 
 volumes:
   runner-bin: {}                            # declared by runners.yaml too: this file must also deploy (and lint) alone

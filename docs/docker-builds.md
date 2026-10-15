@@ -75,9 +75,9 @@ The file [`examples/linux-docker-build.yml`](../examples/linux-docker-build.yml)
 
 ### Deploy on Windows
 
-The add-on stack file `windows\stack\docker-build.yaml` defines `windows-docker-build`. It mounts the named pipe `\\.\pipe\docker_engine`, which `docker stack deploy` supports, and the host directory `C:\Program Files\Docker` at `C:\docker`, read-only. It appends `C:\docker` to the `PATH`. Adjust the bind source if `docker.exe` lives elsewhere on your nodes.
+The add-on stack file `windows\stack\docker-build.yaml` defines `windows-docker-build`. It mounts the named pipe `\\.\pipe\docker_engine`, which `docker stack deploy` supports, and the host directory `C:\Program Files\Docker` at `C:\docker`, read-only. It appends `C:\docker` to the `PATH`. Adjust the bind source if `docker.exe` lives elsewhere on your nodes. It runs on a worker node only (`node.role == worker`), as on Linux, so it needs a Windows worker that joined the Swarm ([Multi-Node Clusters](multi-node.md)). The single-node Swarm of the Windows quickstart has only a manager, and the class stays `Pending` there.
 
-1. Label the node: `docker node update --label-add machine-runner-swarm.docker-build=true <node name>`.
+1. Label the worker node: `docker node update --label-add machine-runner-swarm.docker-build=true <node name>`.
 2. Create the resource class `<namespace>/windows-docker-build` and the secret `windows-docker-build-token`.
 3. Deploy the add-on stack file with the main file. Pass the same list of files on every later deploy ([why](concepts.md#add-on-stack-files-and-how-they-merge)).
 

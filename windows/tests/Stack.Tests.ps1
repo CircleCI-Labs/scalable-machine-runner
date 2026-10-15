@@ -193,6 +193,8 @@ Describe 'the stack files' {
         $script:allText | Should -Not -Match 'windows-build'
         $script:blocks['windows-docker-build'] | Should -Match 'node\.labels\.machine-runner-swarm\.docker-build == true'
         $script:blocks['windows-docker-build'] | Should -Not -Match 'docker-build !='
+        # The engine pipe lets a job create a service that mounts every secret of the swarm: never on a manager (also not on a single-node swarm).
+        $script:blocks['windows-docker-build'] | Should -Match '(?m)^          - node\.role == worker\b'
         $script:blocks['windows-persistent'] | Should -Match 'node\.labels\.machine-runner-swarm\.class\.windows-persistent == true'
         $script:blocks['windows-docker-build'] | Should -Match ([regex]::Escape('type: npipe') + '\r?\n        ' + [regex]::Escape("source: '\\.\pipe\docker_engine'"))
     }

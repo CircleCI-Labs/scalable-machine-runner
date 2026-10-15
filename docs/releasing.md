@@ -28,7 +28,7 @@ A push to `main` that changes only documentation (`docs/`, `site/`, Markdown fil
 
 If an e2e token is missing on `main`, the setup phase passes `release: false` and says so in its log. The pipeline then runs the `ci` workflow without the release job (and without the e2e group whose token is missing), because a release must wait for every test.
 
-**Add a new job to `requires` of the release job.** The release job lists every other job of the workflow in `requires` (in `.circleci/continue.yml`), and a comment at the job says so. The job `lint-circleci` compiles the workflow and fails when a job is missing from the list, so a pull request cannot add a test that the release does not wait for. The only exceptions are the optional jobs that `lint-circleci` names in its `$optional` list (today `linux-mixed-arch`, the emulated mixed-architecture cluster test).
+**Add a new job to `requires` of the release job.** The release job lists every other job of the workflow in `requires` (in `.circleci/continue.yml`), and a comment at the job says so. The job `lint-circleci` compiles the workflow and fails when a job is missing from the list, so a pull request cannot add a test that the release does not wait for. The only exceptions are the optional jobs that `lint-circleci` names in its `$optional` list (today `linux-mixed-arch`, the emulated mixed-architecture cluster test, and `proxy-image-edge`, which moves the `edge` tag after the tests).
 
 ## Versions
 
@@ -73,20 +73,24 @@ The token proxy is a published image, `ccilabs/machine-runner-swarm-proxy` on Do
 | Event | Tags pushed |
 |---|---|
 | A pull request or a branch | None: the image is built and tested, never pushed |
-| A merge to `main` | `edge` and `sha-<12 characters of the commit>` |
+| A merge to `main` | `sha-<12 characters of the commit>`, and nothing else, by `proxy-image-publish` |
+| The same merge, after `linux-swarm` and every e2e group have passed | `edge`, by the last job of the pipeline, `proxy-image-edge`. It stays where it is when a newer commit is on `main` |
 | A release (`ci/release.sh` on `main`, the version `vX.Y.Z` that git-cliff computes) | `X.Y.Z` (immutable), `X.Y`, `X` and `latest`, on the digest of that commit's `sha-<12>` image: nothing is rebuilt |
+
+The stack files of a checkout default to `latest`, so the only job that changes what a checkout deploys is the release job, and it runs after every test. `edge` is for people who want the newest tested commit, and `sha-<12>` is the image of one commit that nothing has tested yet: neither is the default of anything. Before the first release `latest` does not exist: deploy a checkout with `MACHINE_RUNNER_SWARM_PROXY_IMAGE` set to a `sha-<12>` or `edge` tag, or use the release bundle once there is one.
 
 `X.Y.Z` never moves: a release that finds `X.Y.Z` on another digest stops. `X.Y`, `X` and `latest` move only when the release is the newest of its minor line, its major line, and of all, so finishing an old release late moves nothing else. Three helper tags, `sha-<12>-linux`, `sha-<12>-windows-ltsc2022` and `sha-<12>-windows-ltsc2025`, hold the parts that the jobs push first; pull the other tags.
 
 How it is made, in the order of the pipeline (`ci/proxy-image.sh`, `ci/Build-ProxyImage.ps1`):
 
 1. `proxy-image-linux` builds `proxy/Dockerfile` for the four Linux platforms with buildx and QEMU, and runs each image: it reports its version, runs as 65534 with a read-only root and no capabilities, takes a token file and a state volume, and becomes healthy. `proxy-image-windows-ltsc2022` and `-ltsc2025` build `proxy/Dockerfile.windows` from the `windows/amd64` binary of `proxy-test` on the Windows machine executors and run it the same way. `ci/tests/proxy-image.sh` runs the publication against a registry of its own. Windows on Arm has no machine executor, so there is no `windows/arm64` image ([install-windows.md](install-windows.md#the-token-proxy-image)).
-1. On `main` (the pipeline parameter `publish`), the publish variants of those jobs run instead, with the context `scalable-machine-runner-dockerhub`: they push `sha-<12>-linux`, `sha-<12>-windows-ltsc2022` and `sha-<12>-windows-ltsc2025`. Then `proxy-image-publish` joins the three with `crane index append` into one manifest list, tags it `sha-<12>` and `edge` (not `edge` when a newer commit is on `main`), checks that every platform is in it, and signs every digest keyless with the CircleCI OIDC token, as `ci/release.sh` signs `SHA256SUMS`. It records a deploy of `token-proxy-image` in `docker-hub` with the version `sha-<12>` ([Deploys](ci.md#deploys)).
-1. The release job pins the digest of `sha-<12>` in the stack files of the bundle (`MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`), checks the signature, and adds the four release tags.
+1. On `main` (the pipeline parameter `publish`), the publish variants of those jobs run instead, with the context `scalable-machine-runner-dockerhub`: they push `sha-<12>-linux`, `sha-<12>-windows-ltsc2022` and `sha-<12>-windows-ltsc2025`. Then `proxy-image-publish` joins the three with `crane index append` into one manifest list, tags it `sha-<12>` and nothing else, checks that every platform is in it, and signs every digest keyless with the CircleCI OIDC token, as `ci/release.sh` signs `SHA256SUMS`. It records a deploy of `token-proxy-image` in `docker-hub` with the version `sha-<12>` ([Deploys](ci.md#deploys)).
+1. `proxy-image-edge`, the last job of the pipeline, runs after `proxy-image-publish`, `linux-swarm` and the e2e groups. It checks the signature of `sha-<12>` and tags it `edge` (not when a newer commit is on `main`: `ci/proxy-image.sh edge`). The release does not wait for it.
+1. The release job pins the digest of `sha-<12>` in the stack files of the bundle (`MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`, in place of `:latest`), checks the signature, and adds the four release tags.
 
 **The credentials.** The context `scalable-machine-runner-dockerhub` holds `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (an access token that can push to the repository), and is restricted to `main` ([Docker Hub context](ci.md#the-docker-hub-context)). Without both values every push step builds, tests, prints `NOT PUSHED` with the reason, and passes, so the pipeline stays green.
 
-A checkout keeps the default `ccilabs/machine-runner-swarm-proxy:edge`, which Renovate does not manage (it is a tag with no digest). A release bundle carries its own digest. Users verify the image with cosign ([Verify the token proxy image](security.md#verify-the-token-proxy-image)).
+A checkout keeps the default `ccilabs/machine-runner-swarm-proxy:latest`, which Renovate does not manage (it is a tag with no digest). A release bundle carries its own digest, and it is the documented way to install: users download it, verify its signature and run the image that it names. Users verify the image with cosign ([Verify the token proxy image](security.md#verify-the-token-proxy-image)); the verification must also check that the certificate names `refs/heads/main` ([How the signature works](#how-the-signature-works)).
 
 ### Bump the runner version
 

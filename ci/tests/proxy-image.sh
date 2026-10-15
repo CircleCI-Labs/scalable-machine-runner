@@ -3,13 +3,14 @@
 # of its own (registry:2 on localhost), with no credential and no signature. It builds the real Linux image for the four platforms, and
 # stands in two Windows images (a Windows image cannot be built here) with the same names that ci/Build-ProxyImage.ps1 pushes. Checks:
 #   - push        one index with the four Linux platforms, tagged sha-<12>-linux
-#   - assemble    one manifest list with the four Linux platforms and both Windows images, tagged sha-<12> and edge, by the digests that were pushed
-#   - older       a commit that is not the newest on main makes its sha-<12> tag and leaves edge where it is
+#   - assemble    one manifest list with the four Linux platforms and both Windows images, tagged sha-<12> and nothing else, by the digests that were pushed
+#   - edge        the last job of a pipeline tags edge on the image of its commit, and a commit that is not the newest on main leaves edge where it is
+#   - older       a commit that is not the newest on main makes its sha-<12> tag
 #   - missing     a Windows image that was not pushed stops the assembly (no tag is made from a part)
 #   - digest      the digest of the image of a commit is what the release pins
 #   - release     X.Y.Z, X.Y, X and latest for a first release; a newer patch moves the floating tags and leaves X.Y.Z of the old one; an old
 #                 release finished late moves nothing but its own tag; an X.Y.Z that is another image is refused
-#   - credentials without DOCKERHUB_USERNAME and DOCKERHUB_TOKEN, push and assemble say that nothing was pushed, and exit 0
+#   - credentials without DOCKERHUB_USERNAME and DOCKERHUB_TOKEN, push, assemble and edge say that nothing was pushed, and exit 0
 #
 # Usage: ci/tests/proxy-image.sh      Needs Docker (buildx, QEMU for the other platforms: ci/proxy-image.sh setup), crane, and a git history.
 set -euo pipefail
@@ -59,6 +60,7 @@ no_creds() {
   local o
   o=$(env -u DOCKERHUB_USERNAME -u DOCKERHUB_TOKEN CIRCLE_SHA1="${newer}" "${script}" push 2>&1) && [[ ${o} == *"NOT PUSHED"* ]] || { echo "push: ${o}"; return 1; }
   o=$(env -u DOCKERHUB_USERNAME -u DOCKERHUB_TOKEN CIRCLE_SHA1="${newer}" "${script}" assemble 2>&1) && [[ ${o} == *"NOT PUSHED"* ]] || { echo "assemble: ${o}"; return 1; }
+  o=$(env -u DOCKERHUB_USERNAME -u DOCKERHUB_TOKEN CIRCLE_SHA1="${newer}" "${script}" edge 2>&1) && [[ ${o} == *"NOT PUSHED"* ]] || { echo "edge: ${o}"; return 1; }
   ! crane ls "${repo}" 2> /dev/null | grep -q .
 }
 check no-credentials-push-nothing no_creds
@@ -114,8 +116,11 @@ PY
 }
 check assemble-joins-the-three-pushes joined
 same_tag() { [ "$(crane digest "${repo}:sha-${short_new}")" = "$(crane digest "${repo}:$1")" ]; }
-check edge-is-the-new-image same_tag edge
+no_edge_yet() { ! crane digest "${repo}:edge" > /dev/null 2>&1; }
+check assemble-does-not-tag-edge no_edge_yet
 idx_new=$(crane digest "${repo}:sha-${short_new}")
+CIRCLE_SHA1=${newer} "${script}" edge > "${work}/edge.log" 2>&1 || { tail -n 20 "${work}/edge.log"; echo "edge failed"; exit 1; }
+check the-edge-job-tags-the-new-image same_tag edge
 [ "$(cat "${work}/out/index.digest")" = "${idx_new}" ] || { echo "index.digest is not the digest of sha-${short_new}"; failed=$((failed + 1)); }
 digest_cmd() { [ "$(CIRCLE_SHA1=${newer} "${script}" digest)" = "${idx_new}" ]; }
 check digest-subcommand digest_cmd
@@ -123,11 +128,13 @@ no_digest() { ! CIRCLE_SHA1=0123456789abcdef0123456789abcdef01234567 "${script}"
 check digest-of-a-commit-that-was-never-published no_digest
 
 # --- an older commit: its tag, and edge stays ----------------------------------------------------------------------------------------
+# (the pipeline of the older commit assembles its image, and its last job asks for edge, which a newer commit on main keeps)
 git update-ref refs/proxy-image-test/main "${newer}"
 for t in linux windows-ltsc2022 windows-ltsc2025; do crane tag "${repo}:sha-${short_new}-${t}" "sha-${short_old}-${t}"; done
 CIRCLE_SHA1=${older} "${script}" assemble > "${work}/assemble-old.log" 2>&1 || { tail -n 20 "${work}/assemble-old.log"; echo "assemble of the older commit failed"; exit 1; }
+CIRCLE_SHA1=${older} "${script}" edge > "${work}/edge-old.log" 2>&1 || { tail -n 20 "${work}/edge-old.log"; echo "edge of the older commit failed"; exit 1; }
 older_commit() {
-  [ -n "$(crane digest "${repo}:sha-${short_old}")" ] && grep -q 'edge stays where it is' "${work}/assemble-old.log" && [ "$(crane digest "${repo}:edge")" = "${idx_new}" ]
+  [ -n "$(crane digest "${repo}:sha-${short_old}")" ] && grep -q 'edge stays where it is' "${work}/edge-old.log" && [ "$(crane digest "${repo}:edge")" = "${idx_new}" ]
 }
 check older-commit-keeps-edge older_commit
 
@@ -140,6 +147,11 @@ missing_part() {
     ! crane digest "${repo}:sha-${fake:0:12}" > /dev/null 2>&1
 }
 check a-missing-windows-image-stops-the-assembly missing_part
+no_image_no_edge() { # edge for a commit whose image was never assembled stops, and edge stays
+  ! CIRCLE_SHA1=0123456789abcdef0123456789abcdef01234567 "${script}" edge > "${work}/edge-none.log" 2>&1 && grep -q 'is not on the registry' "${work}/edge-none.log" &&
+    [ "$(crane digest "${repo}:edge")" = "${idx_new}" ]
+}
+check edge-of-a-commit-with-no-image-stops no_image_no_edge
 
 # --- release tags -----------------------------------------------------------------------------------------------------------------------
 tags_of_image() { # the release tags that name the image of the newer commit

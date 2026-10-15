@@ -3,8 +3,8 @@
 #   list  repository   (a shell pattern; the tag and the digest are not part of it, they come from the files that pin the image)
 #
 #   infra   an image that a stack runs as infrastructure on a user's cluster, not a job image: the distributor (alpine), the microVM DNS
-#           forwarder (CoreDNS) and the token proxy (ccilabs/machine-runner-swarm-proxy, the tag edge: the latest commit of main, which is
-#           what the stack files name; the scan reports that it cannot pull it until the first publication). A CRITICAL finding with a
+#           forwarder (CoreDNS) and the token proxy (ccilabs/machine-runner-swarm-proxy, the tag latest: the newest release, which is
+#           what the stack files name; the scan reports that it cannot pull it until the first release). A CRITICAL finding with a
 #           fix FAILS the scan.
 #   report  a job image that users choose (cimg/*, maintained by the CircleCI image team) or an image that only CI or a test
 #           uses (linters, Hugo, lychee, Trivy, Docker-in-Docker). HIGH and CRITICAL findings are listed, in a table and a JSON

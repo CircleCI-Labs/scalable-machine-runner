@@ -20,8 +20,9 @@ version: 2.1
 # (docs/ci.md, "Security scan").
 #
 # The jobs of the token proxy image (docs/releasing.md, "The token proxy image") build it for every platform and test it in every pipeline,
-# and on main they push it to Docker Hub (edge and sha-<12>) with the context scalable-machine-runner-dockerhub; the release job gives the
-# release tags to the image of its commit. No other job publishes an image. Scan reports and logs are stored as job artifacts.
+# and on main they push it to Docker Hub (sha-<12> only) with the context scalable-machine-runner-dockerhub. The job proxy-image-edge tags edge
+# after linux-swarm and the e2e groups have passed, and the release job gives the release tags (X.Y.Z, X.Y, X and latest, the default of the stack
+# files) to the image of its commit. No other job moves a tag. Scan reports and logs are stored as job artifacts.
 
 parameters:
   full-suite:
@@ -415,7 +416,8 @@ jobs:
   # The token proxy image (docs/releasing.md, "The token proxy image"): ccilabs/machine-runner-swarm-proxy on Docker Hub. Every platform
   # is built and tested in every pipeline, and no pipeline but main pushes. On main (the parameter publish) the publish variant of each
   # job runs instead of the plain one: the same steps, then the push, with the context scalable-machine-runner-dockerhub (main only).
-  # proxy-image-publish then joins the three pushes into one manifest list, tags it edge and sha-<12>, and signs every digest.
+  # proxy-image-publish then joins the three pushes into one manifest list, tags it sha-<12>, and signs every digest. The tags that users pull
+  # move later: edge in the last job of the pipeline (proxy-image-edge), after every test, and X.Y.Z, X.Y, X and latest in the release job.
   # ---------------------------------------------------------------------------
   proxy-image-linux:
     description: >
@@ -508,8 +510,9 @@ jobs:
   proxy-image-publish:
     description: >
       main only (the parameter publish; the context scalable-machine-runner-dockerhub). Joins the Linux index and the two Windows images that
-      the jobs before it pushed into ONE manifest list (crane index append), tags it sha-<12> and edge (edge only when no newer commit is on
-      main), signs every digest keyless with the CircleCI OIDC token, as ci/release.sh signs, and checks the signatures and the platforms.
+      the jobs before it pushed into ONE manifest list (crane index append), tags it sha-<12> and nothing else, signs every digest keyless with the
+      CircleCI OIDC token, as ci/release.sh signs, and checks the signatures (and that they name refs/heads/main) and the platforms. It moves
+      no tag that a user pulls: edge moves in proxy-image-edge, after the tests, and the stack files default to latest, which the release moves.
       The release requires it, and finds the digest of its commit by the tag sha-<12>. A publication is recorded as a deploy of the component
       token-proxy-image, environment docker-hub, version sha-<12> (ci/deploy-marker.sh, docs/ci.md "Deploys"). Without the credentials the
       job says that nothing was pushed, records no deploy, and passes.
@@ -535,7 +538,7 @@ jobs:
           name: Deploy is running
           command: ci/deploy-marker.sh update proxy-image RUNNING
       - run:
-          name: One manifest list, sha-<12> and edge, signed (ci/proxy-image.sh assemble; nothing without the credentials)
+          name: One manifest list, sha-<12>, signed (ci/proxy-image.sh assemble; nothing without the credentials)
           command: ci/proxy-image.sh assemble
       - run:
           name: Deploy succeeded
@@ -544,6 +547,26 @@ jobs:
           name: Deploy failed
           when: on_fail
           command: ci/deploy-marker.sh update proxy-image FAILED "the job proxy-image-publish failed, see ${CIRCLE_BUILD_URL}"
+
+  proxy-image-edge:
+    description: >
+      The last job of the pipeline of main (the parameter release: main with both e2e tokens, so every test is on). It requires
+      proxy-image-publish, linux-swarm (which runs the image in a Swarm: linux/tests/proxy.sh) and the four e2e groups, then checks the signature of
+      sha-<12> and tags it edge, unless a newer commit is on main (ci/proxy-image.sh edge). Until it runs, edge is the image of an earlier commit
+      that passed everything. It is not a requirement of the release, which does not need edge (lint-circleci lists it as optional).
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+    resource_class: small
+    environment:
+      PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+    steps:
+      - checkout
+      - run:
+          name: crane and cosign (pinned, SHA-256 verified)
+          command: ci/proxy-image.sh install-tools
+      - run:
+          name: Tag edge on sha-<12> (ci/proxy-image.sh edge)
+          command: ci/proxy-image.sh edge
 
   linux-swarm:
     description: >
@@ -1172,7 +1195,7 @@ jobs:
             # jobs. A job that nothing else requires and that the lock does not list is missing,
             # unless it is one of the optional jobs named here.
             yq -o=json '.workflows.ci.jobs' /tmp/compiled.yml | jq -r '
-              ["linux-mixed-arch"] as $optional
+              ["linux-mixed-arch", "proxy-image-edge"] as $optional
               | map(if type == "string" then {key: ., value: {}} else to_entries[0] end) as $jobs
               | ($jobs | map(select(.key == "release"))[0].value.requires[0]) as $gate
               | ($jobs | map(select(.key == $gate))[0].value.requires) as $required
@@ -1489,6 +1512,11 @@ workflows:
           serial-group: << pipeline.project.slug >>/proxy-image-publish
           requires: [proxy-image-linux-publish, proxy-image-windows-ltsc2022-publish, proxy-image-windows-ltsc2025-publish]
           filters: pipeline.parameters.publish
+      - proxy-image-edge:
+          context: [scalable-machine-runner-dockerhub]
+          serial-group: << pipeline.project.slug >>/proxy-image-edge
+          requires: [proxy-image-publish, linux-swarm, e2e-linux, e2e-linux-arm64, e2e-windows-2022, e2e-windows-2025]
+          filters: pipeline.parameters.release
       - linux-swarm:
           filters: not pipeline.parameters.docs-only
       - linux-image-example:

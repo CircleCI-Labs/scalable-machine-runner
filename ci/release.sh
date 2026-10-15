@@ -9,7 +9,7 @@
 # version that the stack files pin (MACHINE_RUNNER_SWARM_RUNNER_VERSION, the newest one that CI tests) is in CircleCI's manifest
 # for every platform,
 # builds the bundle from the tracked files, with the token proxy image of the stack files pinned to this release
-# (MACHINE_RUNNER_SWARM_PROXY_IMAGE: ${...:-ccilabs/machine-runner-swarm-proxy:edge} becomes ${...:-ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>},
+# (MACHINE_RUNNER_SWARM_PROXY_IMAGE: ${...:-ccilabs/machine-runner-swarm-proxy:latest} becomes ${...:-ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>},
 # the digest being the image that the pipeline of this commit pushed as sha-<12 characters of the commit>: ci/proxy-image.sh),
 # signs SHA256SUMS, which lists the bundles, with cosign (keyless: the CircleCI OIDC token) and checks the signature and that its certificate
 # names refs/heads/main as the source repository ref, checks the signature of the image too and gives it the release tags (X.Y.Z, which never moves, and X.Y, X and latest when this is the newest
@@ -150,10 +150,10 @@ build() {
   local os pinned pin="${image_repo}:${version#v}${proxy_digest:+@${proxy_digest}}"
   mkdir -p "${out}/pinned"
   for os in linux windows; do   # the stack file of each OS that names the proxy: the default of its image is this release
-    grep -q "MACHINE_RUNNER_SWARM_PROXY_IMAGE:-${image_repo}:edge}" "${os}/stack/runners.yaml" || continue
+    grep -q "MACHINE_RUNNER_SWARM_PROXY_IMAGE:-${image_repo}:latest}" "${os}/stack/runners.yaml" || continue
     pinned="${out}/pinned/${os}/runners.yaml"
     mkdir -p "${out}/pinned/${os}"
-    sed "s|\(MACHINE_RUNNER_SWARM_PROXY_IMAGE:-\)${image_repo}:edge}|\1${pin}}|" "${os}/stack/runners.yaml" > "${pinned}"
+    sed "s|\(MACHINE_RUNNER_SWARM_PROXY_IMAGE:-\)${image_repo}:latest}|\1${pin}}|" "${os}/stack/runners.yaml" > "${pinned}"
     grep -qF "MACHINE_RUNNER_SWARM_PROXY_IMAGE:-${pin}}" "${pinned}" || die "could not pin the token proxy image in ${os}/stack/runners.yaml"
   done
   say "Bundle ${name}"

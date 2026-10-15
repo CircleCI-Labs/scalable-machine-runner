@@ -4,8 +4,10 @@
 #   ci/proxy-image.sh setup           QEMU handlers for the other architectures and a pinned BuildKit builder
 #   ci/proxy-image.sh test            build proxy/Dockerfile for linux/amd64, arm64, ppc64le and s390x, and test each image
 #   ci/proxy-image.sh push            build the four platforms and push them as ONE index, REPO:sha-<12>-linux (needs the credentials)
-#   ci/proxy-image.sh assemble        join the Linux index and the two Windows images into one manifest list, tag it sha-<12> and edge, sign
-#                                     every digest, and check the result (needs the credentials)
+#   ci/proxy-image.sh assemble        join the Linux index and the two Windows images into one manifest list, tag it sha-<12> (and nothing
+#                                     else), sign every digest, and check the result (needs the credentials)
+#   ci/proxy-image.sh edge            verify the signature of REPO:sha-<12> and tag it edge, unless a newer commit is on main (needs the
+#                                     credentials). The last job of the pipeline of main runs it, after every test has passed
 #   ci/proxy-image.sh digest          print the digest of REPO:sha-<12>, the image of this commit (no credentials; exit 1 when there is none)
 #   ci/proxy-image.sh release-tags vX.Y.Z   verify the signature of that digest and give it the release tags (needs the credentials):
 #                                     X.Y.Z (immutable: an existing X.Y.Z must be this digest), and X.Y, X and latest when X.Y.Z is the
@@ -13,8 +15,9 @@
 #   ci/proxy-image.sh install-tools   crane and cosign (ci/tools.sh: pinned, SHA-256 checked)
 #
 # The pipeline of a push to main runs them in this order: test and push in the job that builds the Linux image; the Windows jobs push
-# REPO:sha-<12>-windows-ltsc2022 and -ltsc2025 (ci/Build-ProxyImage.ps1); then assemble, which makes the tags that a user pulls. A release
-# only adds tags to the digest of sha-<12> (ci/release.sh). docs/releasing.md has the table of tags.
+# REPO:sha-<12>-windows-ltsc2022 and -ltsc2025 (ci/Build-ProxyImage.ps1); then assemble, which makes sha-<12>. No tag that a user pulls by default
+# moves before the tests have passed: edge moves in the last job of the pipeline, and a release adds X.Y.Z, X.Y, X and latest, the default of the stack
+# files, to the digest of sha-<12> (ci/release.sh). docs/releasing.md has the table of tags.
 #
 # Environment:
 #   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN   from the context scalable-machine-runner-dockerhub (main only). Without both, push and assemble print
@@ -26,6 +29,8 @@
 #   PROXY_IMAGE_OUT        a directory for the digests that the job writes (default /tmp/proxy-image)
 #   PROXY_IMAGE_REGISTRY_INSECURE=1   the registry of the test is plain HTTP on localhost
 #   PROXY_IMAGE_MAIN_REF   the ref of main that edge is compared with (default origin/main, fetched; the test names a local one)
+#   SIGN_EXPECT_REF        the ref that the certificate of a signature must name (default refs/heads/main; the signing rehearsal of any
+#                          other branch names its own)
 #   PROXY_IMAGE_RELEASE_TAGS   the release tags that exist, one per line (default: the vX.Y.Z tags of this repository)
 #
 # Never run this with `set -x`: the credentials and the OIDC token are in the environment.
@@ -216,7 +221,7 @@ if len(windows) != int(sys.argv[1]) or any(w["architecture"] != "amd64" for w in
 
 assemble() {
   have_credentials || { no_credentials; return 0; }
-  local linux idx t w main_sha
+  local linux idx t w
   local -a members=() digests=()
   mkdir -p "${out}"
   login
@@ -235,13 +240,22 @@ assemble() {
   check_index "${image_repo}@${idx}"
   printf '%s\n' "${idx}" > "${out}/index.digest"
   sign_all "${digests[@]}" "${idx}"
-  # edge follows main. A pipeline of an older commit (a newer one is already on main) must not move it back.
+}
+
+# edge: the tag edge follows main, once the tests of the pipeline have passed. A pipeline of an older commit (a newer one is already on main) must
+# not move it back. The signature is checked first, as the release does, so edge never names an image that main did not sign.
+edge() {
+  have_credentials || { no_credentials; return 0; }
+  local idx main_sha
+  login
+  idx=$(image_digest) || die "${image_repo}:${version} is not on the registry: the job that assembles it did not run"
+  verify_signature "${idx}"
   [ -n "${PROXY_IMAGE_MAIN_REF:-}" ] || git fetch --quiet origin main 2> /dev/null || true
   main_sha=$(git rev-parse --verify --quiet "${PROXY_IMAGE_MAIN_REF:-origin/main}" || true)
   if [ -n "${main_sha}" ] && [ "${main_sha}" != "${sha}" ] && git merge-base --is-ancestor "${sha}" "${main_sha}"; then
     say "edge stays where it is: ${main_sha:0:12} is on main after this commit and publishes its own"
   else
-    craned tag "${image_repo}:${version}" edge
+    craned tag "${image_repo}@${idx}" edge
     say "${image_repo}:edge is ${idx}"
   fi
 }
@@ -295,6 +309,7 @@ case "${1:-}" in
   test) setup; test_images ;;
   push) push ;;
   assemble) assemble ;;
+  edge) edge ;;
   install-tools) install_cosign; install_crane; crane version; cosign version 2>&1 | grep -E '^GitVersion' ;;
-  *) die "usage: ci/proxy-image.sh setup | test | push | assemble | digest | release-tags vX.Y.Z | install-tools" ;;
+  *) die "usage: ci/proxy-image.sh setup | test | push | assemble | edge | digest | release-tags vX.Y.Z | install-tools" ;;
 esac

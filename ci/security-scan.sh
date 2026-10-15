@@ -44,7 +44,7 @@ refs() {
       | xargs -0 grep -hoE '[a-z0-9][a-z0-9._/-]*[a-z0-9](:[A-Za-z0-9][A-Za-z0-9._-]*)?@sha256:[a-f0-9]{64}' || true
     git ls-files -z -- 'linux/stack/*.yaml' 'windows/stack/*.yaml' \
       | xargs -0 sed -nE 's/^[[:space:]]+image:[[:space:]]+([^[:space:]#]+).*/\1/p'
-    # an image that a stack names by a variable, with its published default: the token proxy (the tag edge, the latest commit of main)
+    # an image that a stack names by a variable, with its published default: the token proxy (the tag latest, the newest release)
     git ls-files -z -- 'linux/stack/*.yaml' 'windows/stack/*.yaml' \
       | xargs -0 sed -nE 's/^[[:space:]]+image:[[:space:]]+[$][{][A-Z_]+:-([^}[:space:]]+)[}].*/\1/p'
   } | grep -vE '[$]|^registry\.example\.com/|^localhost[:/]' | sort -u

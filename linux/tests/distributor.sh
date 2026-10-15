@@ -332,6 +332,26 @@ echo "RESULT test=distributor phase=mismatch exit=$dist_rc running=$dist_running
 dist_once bad-pin "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "MACHINE_RUNNER_SWARM_RUNNER_SHA256=$zeros,${PUBLISHED_SHA[$OLD]^^}"   # the list holds one hash that matches, in capitals
 echo "RESULT test=distributor phase=sha256-list accepted_with_the_right_hash_in_the_list=$([[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] && echo yes || echo no)"
 [[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] || fail "a list that contains the right SHA-256 was refused: $dist_log"
+# an exact version match: a pin of 3.1.1 does not accept a binary that reports 3.1.13 (the version line of a prefix is no match)
+mkdir -p "$work/mirror/3.1.1"
+cp "$work/mirror/$NEW/circleci-runner_linux_$ARCH.tar.gz" "$work/mirror/3.1.1/"
+mirror_versions+=(3.1.1)
+mirror_manifest "$OLD"
+dist_once prefix "MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.1"
+echo "RESULT test=distributor phase=exact-version exit=$dist_rc pin=3.1.1 binary_reports=$NEW"
+[[ $dist_rc -ne 0 && $dist_log == *"does not report version 3.1.1"* ]] || fail "a pin of 3.1.1 accepted a binary that reports $NEW: $dist_log"
+[[ -z $(dk "$MGR" run --rm -v prefix:/v "$DIST_IMAGE" ls -A /v/versions) ]] || fail "the binary of $NEW was installed as 3.1.1"
+
+# explicit errors where set -e does not reach: a current that cannot be replaced fails the check (it used to log [ ok ] and succeed), and
+# what a stopped run left (a link, a history that was being cut) is cleaned at the start
+dk "$MGR" volume create flipfail >/dev/null
+dk "$MGR" run --rm -v flipfail:/v "$DIST_IMAGE" sh -c 'mkdir -p /v/current/blocker && : > /v/.current.77 && : > /v/.history.77'
+dist_once flipfail "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD"
+left=$(dk "$MGR" run --rm -v flipfail:/v "$DIST_IMAGE" ls -A /v | paste -sd, -)
+echo "RESULT test=distributor phase=flip-error exit=$dist_rc left_in_volume=$left"
+[[ $dist_rc -ne 0 && $dist_log == *"cannot move current to versions/$OLD"* && $dist_log != *"[ ok ]"* ]] || fail "a flip that failed was reported as done: $dist_log"
+[[ $left != *.current.* && $left != *.history.* ]] || fail "a link and a history of a stopped run were not cleaned at the start: $left"
+
 for bad in latest 3. .1 3.1. 3..1 3x 3.1.x.; do
   dist_once bad-input "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$bad"
   [[ $dist_rc -ne 0 && $dist_log == *"MACHINE_RUNNER_SWARM_RUNNER_VERSION must be"* ]] || fail "the version '$bad' was accepted: $dist_log"

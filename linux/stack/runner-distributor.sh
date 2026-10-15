@@ -14,8 +14,9 @@
 #                                                    architecture of the fleet), instead of the hash of the manifest
 # It resolves the version, downloads the tarball when versions/<version> is missing or does not match its record, verifies the
 # tarball SHA-256, extracts circleci-runner, computes the SHA-256 of the binary and records it in versions/<version>/SHA256, and
-# moves the link current to versions/<version> with one atomic rename. Old versions stay (the last 3 that were active), so a
-# rollback is a flip. A runner container resolves current once, when it starts, and verifies the binary against the record.
+# moves the link current to versions/<version> with one atomic rename. Every step is checked (the script runs under set -e, which
+# does not apply inside a function that is called in a condition), and an install and a flip are verified afterwards. Old versions
+# stay (the last 3 that were active), so a rollback is a flip. A runner container resolves current once, when it starts, and verifies the binary against the record.
 #
 # With the argument --once it makes one check and exits 0 when the runner is installed and current points to it, otherwise 1.
 # The entrypoint of a microVM class (MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true) runs it that way in the container itself, where nothing is shared with other jobs, so every job downloads and verifies its own runner (docs/microvm.md).
@@ -127,12 +128,14 @@ installed_ok() {
   return 1
 }
 
-# install_version VERSION HASHES: download into a temporary directory next to versions/, verify, record, move into place
+# install_version VERSION HASHES: download into a temporary directory next to versions/, verify, record, move into place, check again.
+# Every step has its own check: this function runs in a condition (cycle || ...), where set -e does not apply.
 install_version() {
   v=$1
-  mkdir -p "$root/versions"
-  tmp=$(mktemp -d "$root/.tmp.XXXXXX")   # same filesystem as versions/: the final mv is atomic
-  mkdir -m 0755 "$tmp/bin"
+  vre=$(printf '%s' "$v" | sed 's/\./\\./g')
+  mkdir -p "$root/versions" || { log "cannot create $root/versions" >&2; return 1; }
+  tmp=$(mktemp -d "$root/.tmp.XXXXXX") || { log "cannot create a temporary directory in $root" >&2; return 1; }   # same filesystem as versions/: the final mv is atomic
+  mkdir -m 0755 "$tmp/bin" || { log "cannot create $tmp/bin" >&2; rm -rf "$tmp"; return 1; }
   log "downloading circleci-runner $v linux/$arch"
   fetch "$base/$v/$tarball" "$tmp/$tarball" || { log "cannot download $base/$v/$tarball" >&2; rm -rf "$tmp"; return 1; }
   got=$(sha256sum "$tmp/$tarball" | cut -d' ' -f1)
@@ -140,25 +143,33 @@ install_version() {
     *" $got "*) ;;
     *) log "SHA-256 mismatch for $tarball $v: got $got, wanted $2: refusing to install" >&2; rm -rf "$tmp"; return 1 ;;
   esac
-  echo "$got  $tarball" > "$tmp/TARBALL"
+  echo "$got  $tarball" > "$tmp/TARBALL" || { log "cannot write $tmp/TARBALL" >&2; rm -rf "$tmp"; return 1; }
   tar -xzf "$tmp/$tarball" -C "$tmp/bin" circleci-runner || { log "$tarball has no circleci-runner" >&2; rm -rf "$tmp"; return 1; }
-  rm "$tmp/$tarball"
-  chmod 0755 "$tmp/bin/circleci-runner"
-  "$tmp/bin/circleci-runner" --version 2>&1 | grep -qF "version $v" ||
+  rm -f "$tmp/$tarball"
+  chmod 0755 "$tmp/bin/circleci-runner" || { log "cannot make the runner executable" >&2; rm -rf "$tmp"; return 1; }
+  # the version must be that of the tarball, as a whole number: 3.1.1 does not accept 3.1.13
+  "$tmp/bin/circleci-runner" --version 2>&1 | grep -Eq "version $vre([^0-9.]|\$)" ||
     { log "the downloaded binary does not report version $v: refusing to install" >&2; rm -rf "$tmp"; return 1; }
-  (cd "$tmp" && sha256sum bin/circleci-runner > SHA256) && echo "$v" > "$tmp/VERSION"
-  chown -R 0:0 "$tmp" && chmod 0755 "$tmp" "$tmp/bin"
+  { (cd "$tmp" && sha256sum bin/circleci-runner > SHA256) && echo "$v" > "$tmp/VERSION"; } ||
+    { log "cannot write the record of $v" >&2; rm -rf "$tmp"; return 1; }
+  { chown -R 0:0 "$tmp" && chmod 0755 "$tmp" "$tmp/bin"; } || { log "cannot set the owner and mode of $v" >&2; rm -rf "$tmp"; return 1; }
   rm -rf "$root/versions/$v"
-  mv "$tmp" "$root/versions/$v"
+  mv "$tmp" "$root/versions/$v" || { log "cannot move $v into $root/versions" >&2; rm -rf "$tmp"; return 1; }
+  # the copy in place must pass the same check that every runner container applies when it starts
+  installed_ok "$v" "$2" || { log "versions/$v does not pass its own check after the install (disk full?): removing it" >&2; rm -rf "$root/versions/$v"; return 1; }
   log "installed circleci-runner $v: binary SHA-256 $(cut -d' ' -f1 "$root/versions/$v/SHA256")"
 }
 
-# flip VERSION: current -> versions/VERSION, atomically, and remember that it was active
+# flip VERSION: current -> versions/VERSION, atomically, remember that it was active, and check that the link says so
 flip() {
   if [ "$(readlink "$root/current" 2>/dev/null)" != "versions/$1" ]; then
-    ln -s "versions/$1" "$root/.current.$$" && mv -T "$root/.current.$$" "$root/current"
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $1" >> "$root/history"
-    tail -n 200 "$root/history" > "$root/.history.$$" && mv "$root/.history.$$" "$root/history"
+    rm -f "$root/.current.$$"
+    ln -s "versions/$1" "$root/.current.$$" || { log "cannot create the link to versions/$1" >&2; return 1; }
+    mv -T "$root/.current.$$" "$root/current" || { log "cannot move current to versions/$1" >&2; rm -f "$root/.current.$$"; return 1; }
+    [ "$(readlink "$root/current" 2>/dev/null)" = "versions/$1" ] || { log "current does not point to versions/$1 after the flip" >&2; return 1; }
+    # the history serves the pruning: a failure to write it is no reason to undo the flip
+    { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $1" >> "$root/history" &&
+      tail -n 200 "$root/history" > "$root/.history.$$" && mv "$root/.history.$$" "$root/history"; } || { log "cannot update $root/history" >&2; rm -f "$root/.history.$$"; }
     log "[ ok ] current -> versions/$1: circleci-runner $1 linux/$arch"
   fi
 }
@@ -173,7 +184,7 @@ prune() {
     [ "versions/$old" != "$active" ] || continue
     case " $(echo "$keepers" | tr '\n' ' ') " in *" $old "*) continue ;; esac
     log "removing circleci-runner $old (only the last $keep active versions are kept)"
-    rm -rf "$d"
+    rm -rf "$d" || log "cannot remove $d" >&2
   done
 }
 
@@ -221,7 +232,7 @@ resolve() {
 
 # cycle: one look at the manifest. Non-zero: this check failed.
 cycle() {
-  work=$(mktemp -d "$root/.work.XXXXXX")   # inside the volume: the root file system of the service is read-only
+  work=$(mktemp -d "$root/.work.XXXXXX") || { log "cannot create a working directory in $root" >&2; return 1; }   # inside the volume: the root file system of the service is read-only
   ver=
   accept=
   resolve || return 1
@@ -234,12 +245,12 @@ cycle() {
   else
     install_version "$ver" "$accept" || return 1
   fi
-  flip "$ver"
+  flip "$ver" || return 1
   prune
 }
 
-mkdir -p "$root"
-rm -rf "$root"/.work.* "$root"/.tmp.*   # what a stopped run left
+mkdir -p "$root" || die "cannot create $root"
+rm -rf "$root"/.work.* "$root"/.tmp.* "$root"/.current.* "$root"/.history.*   # what a stopped run left (a link that a flip did not finish, a history that was being cut)
 case $kind in
   exact) log "version $want (an exact pin: it never changes by itself, and the manifest is asked only when it is not installed), check every ${interval}s, from $base" ;;
   minor | major) log "version $want (floating: the newest $want.x of the manifest), check every ${interval}s, from $base" ;;

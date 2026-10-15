@@ -319,6 +319,12 @@ function Install-Runner {
     Write-Ascii (Join-Path $tmp 'SHA256') "$(Get-Sha256 $exe)  bin/circleci-runner.exe"
     Write-Ascii (Join-Path $tmp 'VERSION') $Version
     $name = Move-IntoPlace -Source $tmp -Parent $versions -Name $Version
+    # the copy in place must pass the same check that Find-Runner applies at every later check
+    if (-not (Test-RunnerDirectory -Dir (Join-Path $versions $name) -Accept $Accept)) {
+        Write-DistributorLog "versions\$name does not pass its own check after the install: removing it"
+        Invoke-TreeRemoval (Join-Path $versions $name)
+        return $null
+    }
     Write-DistributorLog "installed circleci-runner $Version in versions\${name}: binary SHA-256 $(([IO.File]::ReadAllText((Join-Path $versions "$name\SHA256")) -split ' ')[0])"
     return $name
 }
@@ -395,6 +401,8 @@ function Switch-Runner {
     # current -> versions\Name, and remember that it was active.
     param([string] $Name)
     if (-not (Switch-Link -Link (Join-Path $script:Root 'current') -Target "versions\$Name")) { return }
+    # the link must say so now: a flip that did not take is an error of this check, and the old version stays active
+    if ((Get-LinkTarget (Join-Path $script:Root 'current')) -ne "versions\$Name") { throw "current does not point to versions\$Name after the flip" }
     $history = Join-Path $script:Root 'history'
     $lines = @()
     if (Test-Path -LiteralPath $history) { $lines = @(Get-Content -LiteralPath $history) }

@@ -11,6 +11,8 @@
 #   pass            b1, b2 (default service) and b3 (hardened) pass: verdict=PASS
 #   no-job          nothing is queued: the host must fail ("exited without evidence")
 #   probe-failure   b1 runs with hardened expectations in the default service: the host must fail
+#   pass-split      the same as pass, with the classes in two files (runners.yaml and classes-extra.yaml, merged)
+#   terminated      a cancel (SIGTERM) ends the host while its stack runs: it must remove the stack
 #
 # Needs Docker (privileged containers) and network access (Alpine packages, the stock image).
 set -euo pipefail
@@ -70,6 +72,66 @@ services:
       - {source: linux-java-token, target: circleci_runner_config.yaml, uid: "2000", gid: "2000", mode: 0400}
 secrets:
   linux-default-token: {external: true}
+  linux-hardened-token: {external: true}
+  linux-java-token: {external: true}
+YAML
+
+# The same stack in two files, as the shipped one is: the default class and the distributor, and the add-on classes (merged by docker stack deploy -c -c).
+mkdir "${tmp}/split"
+cat > "${tmp}/split/stack.yaml" <<'YAML'
+x-runner: &runner
+  image: cimg/base:2026.10
+  entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]
+  user: "0:0"
+  volumes:
+    - {type: bind, source: /opt/machine-runner-swarm/current, target: /opt/machine-runner-swarm, read_only: true}
+    - {type: bind, source: /repo/ci, target: /ci, read_only: true}
+  deploy:
+    replicas: 1
+    restart_policy: {condition: any, delay: 3s}
+services:
+  linux-default:
+    <<: *runner
+    hostname: "{{.Node.Hostname}}-linux-default-{{.Task.Slot}}"
+    environment:
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-default-{{.Task.Slot}}"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
+    secrets:
+      - {source: linux-default-token, target: circleci_runner_config.yaml, uid: "2000", gid: "2000", mode: 0400}
+  runner-distributor:
+    image: cimg/base:2026.10
+    command: ["sleep", "3600"]
+    deploy: {mode: global}
+secrets:
+  linux-default-token: {external: true}
+YAML
+cat > "${tmp}/split/classes-extra.yaml" <<'YAML'
+x-runner: &runner
+  image: cimg/base:2026.10
+  entrypoint: ["/opt/machine-runner-swarm/bin/circleci-runner-entrypoint"]
+  user: "0:0"
+  volumes:
+    - {type: bind, source: /opt/machine-runner-swarm/current, target: /opt/machine-runner-swarm, read_only: true}
+    - {type: bind, source: /repo/ci, target: /ci, read_only: true}
+  deploy:
+    replicas: 1
+    restart_policy: {condition: any, delay: 3s}
+services:
+  linux-hardened:
+    <<: *runner
+    hostname: "{{.Node.Hostname}}-linux-hardened-{{.Task.Slot}}"
+    environment:
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-hardened-{{.Task.Slot}}"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "false"
+    secrets:
+      - {source: linux-hardened-token, target: circleci_runner_config.yaml, uid: "2000", gid: "2000", mode: 0400}
+  linux-java:
+    <<: *runner
+    environment:
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-java-{{.Task.Slot}}"
+    secrets:
+      - {source: linux-java-token, target: circleci_runner_config.yaml, uid: "2000", gid: "2000", mode: 0400}
+secrets:
   linux-hardened-token: {external: true}
   linux-java-token: {external: true}
 YAML
@@ -144,13 +206,13 @@ scenario() {
   shift 3
   log "scenario ${scenario}"
   in_vm sh -c 'docker swarm leave --force > /dev/null 2>&1; rm -rf /tmp/e2e; mkdir -p /tmp/e2e/evidence/queue'
-  in_vm env CIRCLE_WORKFLOW_ID=wf-sim E2E_SETUP=/sim/setup.sh E2E_STACK_FILE=/sim/stack.yaml bash /repo/ci/e2e-host.sh prepare > /dev/null 2>&1 || { log "prepare failed"; failed=1; }
+  in_vm env CIRCLE_WORKFLOW_ID=wf-sim E2E_SETUP=/sim/setup.sh E2E_STACK_FILE="${SIM_STACK:-/sim/stack.yaml}" bash /repo/ci/e2e-host.sh prepare > /dev/null 2>&1 || { log "prepare failed"; failed=1; }
   for item in "$@"; do
     in_vm sh -c "echo '${item#*=}' > /tmp/e2e/evidence/queue/${item%%=*}"
   done
   in_vm chmod -R 0777 /tmp/e2e/evidence
   out=$(in_vm env CIRCLE_WORKFLOW_ID=wf-sim CIRCLE_BUILD_NUM=1 E2E_RUNNER_TOKEN_LINUX=sim-token-value E2E_SETUP=/sim/setup.sh \
-    E2E_STACK_FILE=/sim/stack.yaml E2E_DEADLINE_SECONDS=120 bash /repo/ci/e2e-host.sh run 2>&1) || rc=$?
+    E2E_STACK_FILE="${SIM_STACK:-/sim/stack.yaml}" E2E_DEADLINE_SECONDS=120 bash /repo/ci/e2e-host.sh run 2>&1) || rc=$?
   in_vm env CIRCLE_WORKFLOW_ID=wf-sim bash /repo/ci/e2e-host.sh cleanup > /dev/null 2>&1 || true
   if [ "${rc}" -ne "${want}" ] || ! grep -q -- "${pattern}" <<< "${out}"; then
     log "FAIL ${scenario}: exit ${rc} (wanted ${want}), pattern '${pattern}'"
@@ -165,7 +227,36 @@ scenario() {
 
 scenario pass 0 'verdict=PASS' \
   'b1=b1 --expect-sudo true' 'b2=b2 --previous b1 --expect-sudo true' 'b3=b3 --previous b2 --expect-sudo false'
+SIM_STACK=/sim/split/stack.yaml scenario pass-split 0 'verdict=PASS' \
+  'b1=b1 --expect-sudo true' 'b2=b2 --previous b1 --expect-sudo true' 'b3=b3 --previous b2 --expect-sudo false'
 scenario no-job 1 'exited without evidence'
 scenario probe-failure 1 'reported a failure' 'b1=b1 --expect-sudo false'
+
+# A cancel ends the step with SIGTERM while the stack runs: the host must remove the stack, so that no idle service is left to claim the next pipeline's B1.
+terminated() {
+  local pid left
+  log "scenario terminated"
+  in_vm sh -c 'docker swarm leave --force > /dev/null 2>&1; rm -rf /tmp/e2e; mkdir -p /tmp/e2e/evidence/queue'
+  in_vm env CIRCLE_WORKFLOW_ID=wf-sim E2E_SETUP=/sim/setup.sh E2E_STACK_FILE=/sim/stack.yaml bash /repo/ci/e2e-host.sh prepare > /dev/null 2>&1 || { log "prepare failed"; failed=1; }
+  in_vm chmod -R 0777 /tmp/e2e/evidence
+  # No job is queued, so the host waits for a probe: that is the state of a cancel. The process is started in the background of the VM.
+  pid=$(in_vm sh -c 'env CIRCLE_WORKFLOW_ID=wf-sim CIRCLE_BUILD_NUM=1 E2E_RUNNER_TOKEN_LINUX=sim-token-value E2E_SETUP=/sim/setup.sh E2E_STACK_FILE=/sim/stack.yaml E2E_DEADLINE_SECONDS=300 bash /repo/ci/e2e-host.sh run > /tmp/e2e/host.out 2>&1 & echo $!')
+  for _ in $(seq 1 60); do
+    [ -n "$(in_vm docker service ls -q 2> /dev/null)" ] && break
+    sleep 1
+  done
+  [ -n "$(in_vm docker service ls -q 2> /dev/null)" ] || { log "FAIL terminated: the host never deployed the stack"; failed=1; return; }
+  in_vm kill -TERM "${pid}"
+  for _ in $(seq 1 60); do in_vm kill -0 "${pid}" 2> /dev/null || break; sleep 1; done
+  left=$(in_vm docker service ls -q 2> /dev/null || true)
+  if in_vm kill -0 "${pid}" 2> /dev/null; then
+    log "FAIL terminated: the host is still running 60 s after SIGTERM"; failed=1
+  elif [ -n "${left}" ] || ! in_vm grep -q 'terminated: removing the stack' /tmp/e2e/host.out; then
+    log "FAIL terminated: services left after SIGTERM: '${left}'"; in_vm tail -n 15 /tmp/e2e/host.out; failed=1
+  else
+    log "ok   terminated: SIGTERM removed the stack"
+  fi
+}
+terminated
 
 [ "${failed}" -eq 0 ] && log "all scenarios passed" || { log "FAILED"; exit 1; }

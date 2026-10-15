@@ -190,8 +190,10 @@ function Invoke-Cleanup {
     Remove-Item -LiteralPath $secrets -Recurse -Force -ErrorAction SilentlyContinue
     Write-E2ELog "cleanup: swarm state is now $((Invoke-Docker info --format '{{.Swarm.LocalNodeState}}') -join '')"
 }
+function Write-RunEnded { Set-Content -LiteralPath (Join-Path $logDir 'run-ended') -Value 'ended' -Encoding ASCII -ErrorAction SilentlyContinue }
 function Exit-WithFailure([string] $Message) {
     Write-E2ELog "FAIL: $Message"
+    Write-RunEnded
     # docker events and docker service logs run with -NoNewWindow and would keep the step's console
     # open (the step then hangs until its no_output_timeout instead of failing).
     Invoke-TreeKill $script:logsProc
@@ -374,6 +376,15 @@ function Invoke-Run {
     Write-E2ELog "deploying $fullService from $($StackFile.Replace($repo + '\', '')) + override: idle_timeout=$runnerIdle max_run_time=$runnerMaxRun"
     Invoke-Docker stack deploy --detach=true --resolve-image never -c $renderedStack -c $override $Stack | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) { Exit-WithFailure 'docker stack deploy failed' }
+    # A cancel ends this step (Ctrl+C, or the console closing) and PowerShell exits: remove the stack then, or its idle service lives on until
+    # the VM is reclaimed and claims the B1 of the next pipeline (docs/ci.md, "Stray claims"). Every exit that this script chooses (a pass, or
+    # Exit-WithFailure) writes the file run-ended first and keeps the stack for the Cleanup step, which reads its logs; only an exit
+    # without the file is a cancel. The action of an engine event does not see the functions of this script, so it calls docker directly. A kill
+    # that PowerShell cannot see (TerminateProcess) leaves nothing to run: the next pipeline's B1 then fails by design, and a rerun works.
+    Remove-Item -LiteralPath (Join-Path $logDir 'run-ended') -Force -ErrorAction SilentlyContinue
+    $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -MessageData @{ Stack = $Stack; Marker = (Join-Path $logDir 'run-ended') } -Action {
+        if (-not (Test-Path -LiteralPath $Event.MessageData.Marker)) { & docker.exe stack rm $Event.MessageData.Stack 2>&1 | Out-Null }
+    }
     $script:logsProc = Start-Process -FilePath docker.exe -NoNewWindow -PassThru `
         -RedirectStandardOutput $serviceLog -RedirectStandardError (Join-Path $logDir 'service.err') `
         -ArgumentList "service logs --follow --raw --no-task-ids --timestamps $fullService"
@@ -389,6 +400,7 @@ function Invoke-Run {
     # and the step would hang until its no_output_timeout, also after a pass.
     Invoke-TreeKill $script:logsProc
     Invoke-TreeKill $script:eventsProc
+    Write-RunEnded
     if (-not $ok) { exit 1 }
     exit 0
 }
@@ -505,5 +517,6 @@ try {
 } catch {
     Write-E2ELog "FAIL: unexpected error: $($_.Exception.Message)"
     Write-Host ($_.ScriptStackTrace)
+    Write-RunEnded
     exit 1
 }

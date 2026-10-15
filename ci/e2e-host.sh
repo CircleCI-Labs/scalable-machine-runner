@@ -29,6 +29,8 @@
 #                           Goes to setup.sh --secret on stdin; never written to disk, never
 #                           printed.
 #   E2E_STACK_FILE          stack under test (default linux/stack/runners.yaml)
+#   E2E_EXTRA_STACK_FILE    the add-on stack file that has the class linux-hardened, merged with it (default classes-extra.yaml beside the
+#                           stack file, when it exists)
 #   E2E_SERVICE             service for b1 and b2 (default linux-default)
 #   E2E_HARDENED_SERVICE    service for b3 (default linux-hardened)
 #   E2E_IMAGE               stock image for the active service (default: pinned cimg/base)
@@ -50,6 +52,11 @@ wf=${CIRCLE_WORKFLOW_ID:?CIRCLE_WORKFLOW_ID is not set}
 build=${CIRCLE_BUILD_NUM:-local}
 root=${E2E_ROOT:-/tmp/e2e}
 stack_file=${E2E_STACK_FILE:-${repo}/linux/stack/runners.yaml}
+# The shipped runners.yaml has the class linux-default. The class that b3 needs, linux-hardened, is in classes-extra.yaml beside it, an add-on stack
+# file that is merged with it: use it when it exists (E2E_EXTRA_STACK_FILE names another one). A stack file that has both classes needs no extra file.
+extra_file=${E2E_EXTRA_STACK_FILE:-$(dirname "${stack_file}")/classes-extra.yaml}
+stack_args=(-c "${stack_file}")
+if [ -f "${extra_file}" ]; then stack_args+=(-c "${extra_file}"); fi
 service=${E2E_SERVICE:-linux-default}
 hardened=${E2E_HARDENED_SERVICE:-linux-hardened}
 image=${E2E_IMAGE:-cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a}
@@ -104,11 +111,11 @@ build_proxy() {
 # Stack files
 # ---------------------------------------------------------------------------
 rendered_services() {  # the runner classes: runner-distributor and token-proxy are services of their own
-  docker stack config -c "${stack_file}" | awk '/^services:/{s=1;next} /^[^ ]/{s=0} s && /^  [^ ]/{sub(/^  /,"");sub(/:$/,"");print}' |
+  docker stack config "${stack_args[@]}" | awk '/^services:/{s=1;next} /^[^ ]/{s=0} s && /^  [^ ]/{sub(/^  /,"");sub(/:$/,"");print}' |
     grep -vx -e runner-distributor -e token-proxy
 }
 rendered_secrets() {
-  docker stack config -c "${stack_file}" | awk '/^secrets:/{s=1;next} /^[^ ]/{s=0} s && /^    name:/{print $2}'
+  docker stack config "${stack_args[@]}" | awk '/^secrets:/{s=1;next} /^[^ ]/{s=0} s && /^    name:/{print $2}'
 }
 
 # write_override ACTIVE_SERVICE: one replica of the pinned image for it, none for the others.
@@ -164,12 +171,12 @@ create_secrets() {
 
 deploy() {  # deploy ACTIVE_SERVICE
   write_override "$1"
-  log "deploying ${stack}_$1 from $(rel "${stack_file}") + override: image=${image%%@*} idle_timeout=${idle} max_run_time=${max_run}"
+  log "deploying ${stack}_$1 from $(rel "${stack_file}")$([ "${#stack_args[@]}" -eq 2 ] || echo " + $(rel "${extra_file}")") + override: image=${image%%@*} idle_timeout=${idle} max_run_time=${max_run}"
   if [ "${use_proxy}" = true ]; then
     # the token proxy stays as the stack has it (every runner claims through it), with the image that prepare built (no registry has it)
-    MACHINE_RUNNER_SWARM_PROXY_IMAGE="${proxy_image}" docker stack deploy --detach=true --resolve-image never -c "${stack_file}" -c "${override}" "${stack}"
+    MACHINE_RUNNER_SWARM_PROXY_IMAGE="${proxy_image}" docker stack deploy --detach=true --resolve-image never "${stack_args[@]}" -c "${override}" "${stack}"
   else
-    docker stack deploy --detach=true -c "${stack_file}" -c "${override}" "${stack}"
+    docker stack deploy --detach=true "${stack_args[@]}" -c "${override}" "${stack}"
   fi
 }
 
@@ -277,8 +284,8 @@ host() {
   local services secrets svc
   services=$(rendered_services); secrets=$(rendered_secrets)
   for svc in "${service}" "${hardened}"; do
-    grep -qx "${svc}" <<< "${services}" || die "$(rel "${stack_file}") has no service ${svc}"
-    grep -qx "${svc}-token" <<< "${secrets}" || die "$(rel "${stack_file}") has no external secret ${svc}-token"
+    grep -qx "${svc}" <<< "${services}" || die "$(rel "${stack_file}") (with its add-on ${extra_file##*/}, when it exists) has no service ${svc}"
+    grep -qx "${svc}-token" <<< "${secrets}" || die "$(rel "${stack_file}") (with its add-on ${extra_file##*/}, when it exists) has no external secret ${svc}-token"
   done
 
   mkdir -p "${evidence_dir}" "${log_dir}"
@@ -287,7 +294,7 @@ host() {
     echo "workflow=${wf}"
     echo "host_build=${build}"
     echo "image=${image}"
-    echo "stack_file=$(rel "${stack_file}")"
+    echo "stack_file=$(rel "${stack_file}")$([ "${#stack_args[@]}" -eq 2 ] || echo " + $(rel "${extra_file}")")"
     echo "started=$(date -u +%FT%TZ)"
   } > "${evidence_dir}/host"
   chmod 0644 "${evidence_dir}/host"
@@ -302,6 +309,9 @@ host() {
     >> "${events_log}" 2>&1 &
   events_pid=$!
   trap 'kill "${events_pid}" 2>/dev/null || true; stop_logs' EXIT
+  # A cancel ends this step with SIGTERM (or SIGINT). Remove the stack at once: its idle service would otherwise live on until the VM is
+  # reclaimed, and claim the B1 of the next pipeline, which fails by design (docs/ci.md, "Stray claims"). The EXIT trap then stops the followers.
+  trap 'log "terminated: removing the stack ${stack}"; remove_stack; exit 143' TERM INT
 
   # Phase 1: linux-default (the job user keeps sudo), two jobs, two containers.
   deploy "${service}"

@@ -51,11 +51,42 @@ func TestClaimsShareTheCachedMembership(t *testing.T) {
 	e.check(e.claim(runnerA1), 200, "a runner is known from the same answer")
 }
 
+func TestAFailedLookupIsSharedByTheClaimsToo(t *testing.T) {
+	e := newEnv(t, runnerA1)
+	e.p.cacheTTL = time.Hour
+	e.dnsErr = errors.New("server misbehaving")
+	lookups := countLookups(e)
+	for range 20 {
+		e.check(e.claim("10.9.9.9"), 503, "DNS fails")
+	}
+	if n := lookups(); n != len(e.p.classes) {
+		t.Errorf("%d DNS lookups for 20 claims while DNS fails, want one for each of the %d classes", n, len(e.p.classes))
+	}
+}
+
+func TestAClaimThatIsGivenUpDoesNotEndTheLookupForTheOthers(t *testing.T) {
+	e := newEnv(t, runnerA1)
+	e.p.cacheTTL = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	e.p.lookup = func(lctx context.Context, host string) ([]string, error) {
+		cancel() // the client that started the lookup goes away
+		if err := lctx.Err(); err != nil {
+			return nil, err
+		}
+		return []string{runnerA1}, nil
+	}
+	sets, err := e.p.membership(ctx)
+	if err != nil || len(sets) != len(e.p.classes) {
+		t.Errorf("a lookup that ends with its claim: %v, %v", sets, err)
+	}
+}
+
 func TestClaimsFromOneAddressAreRateLimited(t *testing.T) {
 	e := newEnv(t, runnerA1, runnerA2)
 	now := time.Now()
 	e.p.limit = newLimiter(1, 3)
 	e.p.limit.now = func() time.Time { return now }
+	e.p.limitLog.every = time.Hour
 	e.status = []int{204} // no task: nobody latches
 	var codes []int
 	for range 5 {
@@ -73,6 +104,9 @@ func TestClaimsFromOneAddressAreRateLimited(t *testing.T) {
 	e.check(e.claim(runnerA1), 204, "after two seconds")
 	e.check(e.claim(runnerA1), 429, "after two seconds, two tokens")
 	e.check(e.do(runnerA1, "GET", "/api/v2/task/config", taskToken), 204, "other calls are not limited")
+	if n := strings.Count(e.logs.String(), "too many claims"); n != 1 {
+		t.Errorf("%d log lines for the refusals of the rate limit, want one (and a count)", n)
+	}
 	now = now.Add(time.Hour)
 	e.p.limit.gc()
 	if len(e.p.limit.buckets) != 0 {

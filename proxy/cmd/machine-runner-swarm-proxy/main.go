@@ -127,9 +127,12 @@ type proxy struct {
 
 	mu sync.Mutex // guards the latched, absent and busy maps of every class, stateErr and the state file
 
-	cacheMu sync.Mutex // one DNS lookup at a time for the claims
-	cache   map[*class]map[string]bool
-	cacheAt time.Time
+	cacheMu  sync.Mutex // one DNS lookup at a time for the claims
+	cache    map[*class]map[string]bool
+	cacheErr error // the lookup at cacheAt failed
+	cacheAt  time.Time
+
+	limitLog logEvery // the refusals of the rate limit: a flood would fill the log
 }
 
 // describe lists what DNS says for every class, for the log line of a claim from an address that belongs to none: a runner that
@@ -209,19 +212,17 @@ func (p *proxy) resolve(ctx context.Context) (map[*class]map[string]bool, error)
 	return sets, nil
 }
 
-// membership is resolve for the claims: an answer that is younger than cacheTTL is reused, and the lookups of concurrent claims are one.
+// membership is resolve for the claims: an answer, or a failure, that is younger than cacheTTL is reused, and the lookups of concurrent
+// claims are one. The lookup does not end with the request that started it: the answer is for every claim that waits.
 func (p *proxy) membership(ctx context.Context) (map[*class]map[string]bool, error) {
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
-	if p.cache != nil && time.Since(p.cacheAt) < p.cacheTTL {
-		return p.cache, nil
+	if !p.cacheAt.IsZero() && time.Since(p.cacheAt) < p.cacheTTL {
+		return p.cache, p.cacheErr
 	}
-	sets, err := p.resolve(ctx)
-	if err != nil {
-		return nil, err
-	}
-	p.cache, p.cacheAt = sets, time.Now()
-	return sets, nil
+	p.cache, p.cacheErr = p.resolve(context.WithoutCancel(ctx))
+	p.cacheAt = time.Now()
+	return p.cache, p.cacheErr
 }
 
 // poll looks at DNS once and releases the latch of every IP that has been missing for releaseAfter polls in a row. A failed lookup
@@ -233,7 +234,7 @@ func (p *proxy) poll(ctx context.Context) error {
 		return err
 	}
 	p.cacheMu.Lock()
-	p.cache, p.cacheAt = sets, time.Now()
+	p.cache, p.cacheErr, p.cacheAt = sets, nil, time.Now()
 	p.cacheMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -472,7 +473,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ap, _ := netip.ParseAddrPort(r.RemoteAddr)
 	ip := ap.Addr().Unmap().String()
 	if !p.limit.allow(ip) {
-		log.Printf("claim from %s refused: too many claims", ip)
+		p.limitLog.printf("claim from %s refused: too many claims", ip)
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "too many claims", http.StatusTooManyRequests)
 		return
@@ -672,11 +673,15 @@ func (p *proxy) pollLoop(ctx context.Context, interval time.Duration) {
 // logEvery limits a message that repeats (every poll fails the same way) to one line for each interval.
 type logEvery struct {
 	every time.Duration
-	last  time.Time
-	held  int // messages since the last line, that one included
+
+	mu   sync.Mutex
+	last time.Time
+	held int // messages since the last line, that one included
 }
 
 func (l *logEvery) printf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.held++
 	if !l.last.IsZero() && time.Since(l.last) < l.every {
 		return
@@ -723,7 +728,7 @@ func main() {
 		upstream: u, classes: classes, store: st, lookup: lookupHost,
 		scaleTries: 3, scaleWait: 2 * time.Second, restoreDeadline: restoreWithin,
 		releaseAfter: int(math.Ceil(releasePolls * float64(time.Second) / float64(*poll))),
-		limit:        newLimiter(2, 10), cacheTTL: time.Second,
+		limit:        newLimiter(2, 10), cacheTTL: time.Second, limitLog: logEvery{every: time.Minute},
 	}
 	for _, c := range classes { // fail closed: no token, no proxy
 		if _, err := c.token(); err != nil {

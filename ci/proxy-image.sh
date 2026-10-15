@@ -111,10 +111,11 @@ test_images() {
   local p a tag work failures=0 cid vol
   work=$(mktemp -d)
   trap 'rm -rf "${work}"' RETURN
-  # a token file and a state volume, as a stack gives them to the proxy
+  # a token file and a state volume, as a stack gives them to the proxy: the proxy finds its classes as the <service>-token files of its secrets
+  # directory, so smoke-token is the class smoke
   mkdir -m 0755 "${work}/tokens"
-  printf 'api:\n  auth_token: smoke-not-a-real-token\n' > "${work}/tokens/token"
-  chmod 0444 "${work}/tokens/token"
+  printf 'api:\n  auth_token: smoke-not-a-real-token\n' > "${work}/tokens/smoke-token"
+  chmod 0444 "${work}/tokens/smoke-token"
   for p in "${platforms[@]}"; do
     a=${p#*/}
     tag=machine-runner-swarm-proxy:ci-${a}
@@ -146,7 +147,7 @@ test_images() {
     # It starts as a stack would start it: read-only root, no capabilities, a token file, a state volume owned by the image.
     vol=mrsp-smoke-${a}-$$
     cid=$(docker run -d --platform "${p}" --read-only --cap-drop ALL --user 65534:65534 -v "${work}/tokens:/tokens:ro" -v "${vol}:/state" \
-      "${tag}" -class smoke=/tokens/token -state-dir /state -upstream http://127.0.0.1:9)
+      "${tag}" -secrets-dir /tokens -state-dir /state -upstream http://127.0.0.1:9)
     healthcheck_flag() {
       for _ in $(seq 1 60); do
         docker exec "${cid}" /machine-runner-swarm-proxy -healthcheck && return 0

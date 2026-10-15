@@ -84,18 +84,19 @@ if ($Test) {
     $osv = (Invoke-Docker @('image', 'inspect', $Name, '--format', '{{.Os}} {{.OsVersion}}')) -join ' '
     Test-Check 'proxy-image-os' ($osv -like 'windows 10.0.*') "image: $osv"
 
-    # A token file and a state directory from the host, as a stack gives them: it must become healthy and write its state.
+    # A token file and a state directory from the host, as a stack gives them: it must become healthy and write its state. The proxy finds its classes
+    # as the <service>-token files of -secrets-dir: smoke-token is the class smoke.
     $work = Join-Path ([IO.Path]::GetTempPath()) "proxy-smoke-$PID"
     $secrets = Join-Path $work 'secrets'
     $state = Join-Path $work 'state'
     New-Item -ItemType Directory -Force -Path $secrets, $state | Out-Null
-    [IO.File]::WriteAllText((Join-Path $secrets 'token'), "api:`n  auth_token: smoke-not-a-real-token`n", (New-Object Text.ASCIIEncoding))
+    [IO.File]::WriteAllText((Join-Path $secrets 'smoke-token'), "api:`n  auth_token: smoke-not-a-real-token`n", (New-Object Text.ASCIIEncoding))
     foreach ($d in $secrets, $state) { & icacls.exe $d /grant '*S-1-5-11:(OI)(CI)M' /T /Q | Out-Null }
     $cname = "proxy-smoke-$PID"
     try {
         $null = Invoke-Docker @('rm', '--force', $cname)
         $null = Invoke-Docker @('run', '--detach', '--name', $cname, '--isolation=process', '--volume', "${secrets}:C:\secrets", '--volume', "${state}:C:\state",
-            $Name, '-class', 'smoke=C:\secrets\token', '-state-dir', 'C:\state', '-upstream', 'http://127.0.0.1:9')
+            $Name, '-secrets-dir', 'C:\secrets', '-state-dir', 'C:\state', '-upstream', 'http://127.0.0.1:9')
         Test-Check 'proxy-image-starts' ($script:dockerExit -eq 0) 'docker run'
         $healthy = $false
         for ($i = 0; $i -lt 60 -and -not $healthy; $i++) {

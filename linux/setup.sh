@@ -73,6 +73,31 @@ swarm_create_secret() {
   info "[ ok ] created secret $name"
 }
 
+# next_steps STACK: the hint after every run names only what is still to do, from what Docker says now (swarm, secrets, stack)
+next_steps() {
+  local stack=$1 state todo=()
+  state=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)
+  if [[ $state != active ]]; then
+    todo+=("$0 --swarm-init")
+  fi
+  if [[ $state != active ]] || ! docker secret inspect linux-default-token >/dev/null 2>&1; then
+    todo+=("printf %s \"\$TOKEN\" | $0 --secret linux-default")
+  fi
+  if [[ $state != active ]] || ! docker secret inspect runner-placeholder-token >/dev/null 2>&1; then
+    todo+=("printf %s machine-runner-swarm-placeholder | $0 --secret runner-placeholder")
+  fi
+  if [[ $state != active ]] || ! docker stack ls --format '{{.Name}}' 2>/dev/null | grep -qx "$stack"; then
+    todo+=("$0 --deploy")
+  fi
+  if [[ ${#todo[@]} -gt 0 ]]; then
+    local out=${todo[0]} t
+    for t in "${todo[@]:1}"; do out="$out; $t"; done
+    info "Next: $out"
+  else
+    info "Check: docker service logs ${stack}_runner-distributor; docker stack ps ${stack} --no-trunc"
+  fi
+}
+
 main() {
   local stack=runners check=false swarm=false deploy=false
   local -a secrets=() files=()
@@ -103,7 +128,7 @@ main() {
     for f in "${files[@]}"; do args+=(-c "$f"); done
     docker stack deploy "${args[@]}" "$stack"
   fi
-  info "Next: $0 --swarm-init; printf %s \"\$TOKEN\" | $0 --secret linux-default; $0 --deploy; docker service logs ${stack}_runner-distributor"
+  next_steps "$stack"
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

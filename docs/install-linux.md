@@ -313,7 +313,7 @@ This command is the whole install. The service `runner-distributor` starts on ev
 | `--secret <service>` | Creates the secret `<service>-token` from a token read on stdin |
 | `--deploy` | Runs `docker stack deploy` with each `--stack-file`. Without one it deploys the shipped `linux/stack/runners.yaml`, so pass your copy from step 5 |
 
-With no step, it runs `--check`. The steps always run in the order of the table, whatever order you type them, and the hint that starts with `Next:` prints after every run, even when nothing is left to do. Options are `--stack-file` (repeatable) and `--stack-name`.
+With no step, it runs `--check`. The steps always run in the order of the table, whatever order you type them, and the hint after every run starts with `Next:` and names only the steps that are still to do (the Swarm, the secrets `linux-default-token` and `runner-placeholder-token`, the stack), read from Docker. When nothing is left it starts with `Check:` and names the commands that show the runners start. Options are `--stack-file` (repeatable) and `--stack-name`.
 
 ```bash
 sudo linux/setup.sh --check --swarm-init

@@ -16,7 +16,7 @@
 #   runner name.
 # * Nothing is installed on the hosts. The service runner-distributor-windows (at the end of this file) runs on every Windows
 #   node, also on a node that joins later, and keeps circleci-runner.exe and portable Git for Windows in the per-node volume
-#   runner-bin (windows\runner-distributor.ps1, a Swarm config). The runner version is an exact pin by default (the newest one
+#   runner-bin (windows\stack\runner-distributor.ps1, a Swarm config). The runner version is an exact pin by default (the newest one
 #   that this repository's CI tests, which a release of this repository bumps), so the nodes never change version by themselves.
 #   3.1, 3 or current make it float (with MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest: a floating version has no list of its own, so
 #   the manifest's hash is trusted, which is weaker): the distributor then follows CircleCI's manifest and checks again every 24 hours.

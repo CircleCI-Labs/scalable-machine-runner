@@ -31,7 +31,7 @@ The manual steps are short: start or join a swarm, label the node, create the se
 
   The host cannot be a domain controller.
 
-- Docker Engine in Windows-container mode, with the Windows Containers feature. The `Install-DockerCE` script in the `helpful_tools` directory of the [Microsoft Windows Containers repository](https://github.com/microsoft/Windows-Containers) installs both.
+- Docker Engine 28.0 or later (the CLI and the engine), in Windows-container mode, with the Windows Containers feature. The stack files mount a subpath of a volume (`current` and `git\current`). The Docker release notes say that Swarm passes `volume.subpath` to the engine from 26.1.0 (26.0 dropped it from the task), and that `docker stack deploy` stopped ignoring `volume.subpath` in the CLI with 28.0.0 (before that the whole volume was mounted at the runner path, and the runner did not start). The CI of this repository runs Docker 29.4.0 on Windows. `windows\Setup.ps1` checks the version. The `Install-DockerCE` script in the `helpful_tools` directory of the [Microsoft Windows Containers repository](https://github.com/microsoft/Windows-Containers) installs both.
 - An elevated Windows PowerShell 5.1 session.
 - A host clock that is synchronized with NTP. TLS to CircleCI fails silently when the clock drifts.
 - Outbound HTTPS access from each host to the hosts in [Egress hosts](security.md#egress-hosts). The distributor needs `circleci-binary-releases.s3.amazonaws.com` for the runner and its manifest, and `github.com` and `release-assets.githubusercontent.com` for Git and 7-Zip. The host needs `mcr.microsoft.com` for the base image, and Docker Hub for the token proxy image. For hosts without internet access, refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
@@ -300,13 +300,13 @@ docker service logs runners_runner-distributor-windows
 
 ## Optional: use the setup helper
 
-`windows\Setup.ps1` checks the host, starts Swarm on request, labels the node, creates the secrets, and deploys, with checks. It does not install the runner: the distributor service of the stack does that on every node. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <name> PASS` or `FAIL` for each preflight check: administrator, Windows Server build, Windows-container mode, and Swarm manager.
+`windows\Setup.ps1` checks the host, starts Swarm on request, labels the node, creates the secrets, and deploys, with checks. It does not install the runner: the distributor service of the stack does that on every node. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <name> PASS` or `FAIL` for each preflight check: administrator, Windows Server build, Windows-container mode, Docker 28.0 or later, and Swarm manager. After every run it prints `Next:` with the steps that are still to do (Swarm, secrets, deploy, read from Docker), or `Check:` with the commands to watch the start when nothing is left.
 
 The helper does not add the labels of the optional classes.
 
 | Parameter | Effect |
 |---|---|
-| `-InitSwarm -AdvertiseAddr <ip>` | Creates a Swarm when none exists. The address is required, and the helper waits until the node is a manager |
+| `-InitSwarm -AdvertiseAddr <ip>` | Creates a Swarm when none exists, and waits until the node is a manager. The address is needed only then: on a Swarm that is active, `-InitSwarm` needs no address and changes nothing |
 | `-Class <name>,<name>` | Asks for each token with hidden input and creates the secret `<name>-token`. An existing secret stays unchanged |
 | (placeholder) | With `-Class` or `-Deploy` it also creates the secret `runner-placeholder-token` with a made-up token, which every runner reads. `-InitSwarm` creates a manager, which is where the token proxy runs |
 | `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, `runners.yaml` first) and `-StackName` (default `runners`). Without `-StackFile` it deploys the shipped `windows\stack\runners.yaml` as it is, which suits a first run. Once you keep copies as in step 5, pass them. The helper prints the files that it deploys |

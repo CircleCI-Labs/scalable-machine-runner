@@ -7,9 +7,12 @@
 
 .DESCRIPTION
     1. Preflight, printed as "CHECK <name> PASS|FAIL": administrator, Windows Server build, Docker in
-       Windows-container mode, Swarm manager (-InitSwarm -AdvertiseAddr <ip> creates one; the address is required, a plain "docker swarm init" fails on some hosts).
+       Windows-container mode, Docker 28.0 or later (the stack files mount a subpath of a volume, which "docker stack deploy" ignores
+       before the CLI of 28.0 and Swarm ignores before the engine of 26.1: the runner would not start), Swarm manager (-InitSwarm
+       -AdvertiseAddr <ip> creates one; a plain "docker swarm init" fails on some hosts).
        Pull the stock image BEFORE -InitSwarm: the network drops for a few seconds after it.
-    2. -InitSwarm -AdvertiseAddr <ip>: docker swarm init. The node is a manager, which is where the token proxy runs by default (it
+    2. -InitSwarm -AdvertiseAddr <ip>: docker swarm init, only while the swarm is inactive: the address is needed then, and a run on a
+       swarm that is active needs no address. The node is a manager, which is where the token proxy runs by default (it
        keeps its state there), so no label is needed.
     3. Labels the node with the image tags it can run (the stack files' placement uses them): Server 2022
        gets machine-runner-swarm.windows-ltsc2022=true, Server 2025 gets machine-runner-swarm.windows-ltsc2022=true
@@ -103,15 +106,41 @@ function Get-DockerInfo {
     return @{ OSType = $f[0]; Swarm = $f[1]; Manager = ($f[2] -eq 'true'); NodeId = $f[3] }
 }
 
+function Get-DockerVersion {
+    # The versions of the Docker CLI and of the engine, or $null without a working docker.
+    $r = Invoke-Docker @('version', '--format', '{{.Client.Version}}|{{.Server.Version}}')
+    if ($r.ExitCode -ne 0) { return $null }
+    $f = ([string]($r.Output | Select-Object -First 1)) -split '\|'
+    if ($f.Count -lt 2) { return $null }
+    return @{ Client = $f[0]; Server = $f[1] }
+}
+
+function Test-DockerVersion {
+    # True when both the CLI and the engine are Docker 28.0 or later. The stack files mount a subpath of a volume (current and git\current):
+    # the engine accepts volume.subpath in a Swarm service from 26.1.0 (26.0 dropped it from the task), and the CLI passes it in
+    # "docker stack deploy" from 28.0.0 (before that it silently ignored it, and the whole volume was mounted at the runner path).
+    param($Version)
+    if (-not $Version) { return $false }
+    foreach ($v in @($Version.Client, $Version.Server)) {
+        if ("$v" -notmatch '^([0-9]+)\.([0-9]+)') { return $false }
+        if ([int]$Matches[1] -lt 28) { return $false }
+    }
+    return $true
+}
+
 function Test-Preflight {
     # Returns $true when nothing failed.
     param([switch] $WillInitSwarm)
     $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
     $d = Get-DockerInfo
+    $dv = Get-DockerVersion
+    $dvText = 'docker must be 28.0 or later (CLI and engine): the stack files use volume.subpath'
+    if ($dv) { $dvText = "CLI $($dv.Client), engine $($dv.Server); 28.0 or later is needed (the stack files use volume.subpath)" }
     $ok = @((Write-Check 'administrator' $admin 'run this in an elevated PowerShell'),
         (Write-Check 'windows-server' ($os.ProductType -eq 3 -and [bool](Get-BuildLabel -Build ([int]$os.BuildNumber))) "$($os.Caption) build $($os.BuildNumber); Server 2022 and 2025 are targeted"),
         (Write-Check 'windows-containers' ($d -and $d.OSType -eq 'windows') 'docker must run in Windows-container mode'),
+        (Write-Check 'docker-version' (Test-DockerVersion $dv) $dvText),
         (Write-Check 'swarm-manager' ($d -and (($d.Swarm -eq 'active' -and $d.Manager) -or ($WillInitSwarm -and $d.Swarm -eq 'inactive'))) 'use -InitSwarm -AdvertiseAddr <ip> to create a swarm'))
     return (@($ok | Where-Object { -not $_ }).Count -eq 0)
 }
@@ -137,15 +166,50 @@ function Install-ClassSecret {
     if ($r.ExitCode -ne 0) { throw "docker secret create $Name-token failed: $($r.Output -join ' ')" }
 }
 
+function Initialize-Swarm {
+    # -InitSwarm: docker swarm init while the swarm is inactive. The address is needed then, and only then: on a swarm that is active
+    # the script is safe to run again without it. Returns $true when it created the swarm.
+    param([string] $AdvertiseAddr)
+    $d = Get-DockerInfo
+    if (-not $d -or $d.Swarm -ne 'inactive') { return $false }
+    if (-not $AdvertiseAddr) { throw '-InitSwarm needs -AdvertiseAddr <the IPv4 address of this host> while the swarm is not active' }
+    $r = Invoke-Docker @('swarm', 'init', '--advertise-addr', $AdvertiseAddr)
+    if ($r.ExitCode -ne 0) { throw "docker swarm init failed: $($r.Output -join ' ')" }
+    for ($i = 0; $i -lt 15 -and -not (Get-DockerInfo).Manager; $i++) { Start-Sleep -Seconds 2 }   # the network blips after init
+    return $true
+}
+
+function Get-NextStep {
+    # What is still to do after this run, as a list of hints (nothing when the install is complete). The state comes from Docker, so a
+    # run that only creates a secret does not repeat the hint to deploy a stack that is up.
+    param([bool] $SwarmActive, [bool] $HasSecrets, [bool] $Deployed, [string[]] $StackFile, [string] $StackName)
+    $steps = @()
+    if (-not $SwarmActive) { $steps += '.\windows\Setup.ps1 -InitSwarm -AdvertiseAddr <the IPv4 address of this host>' }
+    if (-not $HasSecrets) { $steps += '.\windows\Setup.ps1 -Class windows-default   (the token comes from a hidden prompt)' }
+    if (-not $Deployed) { $steps += "docker stack deploy -c $($StackFile -join ' -c ') $StackName" }
+    return $steps
+}
+
+function Get-InstallState {
+    # SwarmActive, HasSecrets (the placeholder and at least one class token) and Deployed (the stack has services), from Docker.
+    param([string] $StackName)
+    $d = Get-DockerInfo
+    $state = @{ SwarmActive = [bool]($d -and $d.Swarm -eq 'active'); HasSecrets = $false; Deployed = $false }
+    if (-not $state.SwarmActive) { return $state }
+    $r = Invoke-Docker @('secret', 'ls', '--format', '{{.Name}}')
+    if ($r.ExitCode -eq 0) {
+        $names = @($r.Output)
+        $state.HasSecrets = ($names -contains 'runner-placeholder-token') -and (@($names | Where-Object { $_ -like '*-token' -and $_ -ne 'runner-placeholder-token' }).Count -gt 0)
+    }
+    $r = Invoke-Docker @('stack', 'services', $StackName, '--format', '{{.Name}}')
+    $state.Deployed = ($r.ExitCode -eq 0 -and @($r.Output | Where-Object { $_ }).Count -gt 0)
+    return $state
+}
+
 if ($MyInvocation.InvocationName -ne '.') {
     $ErrorActionPreference = 'Stop'
     if (-not (Test-Preflight -WillInitSwarm:$InitSwarm)) { throw 'preflight failed, see the CHECK lines' }
-    if ($InitSwarm -and -not $AdvertiseAddr) { throw '-InitSwarm needs -AdvertiseAddr <the IPv4 address of this host>' }
-    if ($InitSwarm -and (Get-DockerInfo).Swarm -eq 'inactive') {
-        $r = Invoke-Docker @('swarm', 'init', '--advertise-addr', $AdvertiseAddr)
-        if ($r.ExitCode -ne 0) { throw "docker swarm init failed: $($r.Output -join ' ')" }
-        for ($i = 0; $i -lt 15 -and -not (Get-DockerInfo).Manager; $i++) { Start-Sleep -Seconds 2 }   # the network blips after init
-    }
+    if ($InitSwarm) { $null = Initialize-Swarm -AdvertiseAddr $AdvertiseAddr }
     Install-CapabilityLabel -NodeId (Get-DockerInfo).NodeId -Build ([int](Get-CimInstance -ClassName Win32_OperatingSystem).BuildNumber)
     if ($Class.Count -gt 0 -or $Deploy) { Install-PlaceholderSecret }
     foreach ($c in $Class) { Install-ClassSecret -Name $c }
@@ -155,5 +219,9 @@ if ($MyInvocation.InvocationName -ne '.') {
         $r.Output | ForEach-Object { [Console]::Out.WriteLine($_) }
         if ($r.ExitCode -ne 0) { throw 'docker stack deploy failed' }
     }
-    [Console]::Out.WriteLine("Next: docker stack deploy -c $($StackFile -join ' -c ') $StackName ; docker service logs ${StackName}_runner-distributor-windows ; docker stack ps $StackName --no-trunc. Keep the host clock synchronised, and enable BitLocker on the Docker root volume (Windows keeps secrets in clear text on the container disk).")
+    $state = Get-InstallState -StackName $StackName
+    $next = @(Get-NextStep -SwarmActive $state.SwarmActive -HasSecrets $state.HasSecrets -Deployed $state.Deployed -StackFile $StackFile -StackName $StackName)
+    if ($next.Count -gt 0) { [Console]::Out.WriteLine("Next: $($next -join ' ; ')") }
+    else { [Console]::Out.WriteLine("Check: docker service logs ${StackName}_runner-distributor-windows ; docker stack ps $StackName --no-trunc") }
+    [Console]::Out.WriteLine('Keep the host clock synchronised, and enable BitLocker on the Docker root volume (Windows keeps secrets in clear text on the container disk).')
 }

@@ -25,12 +25,18 @@ setup() { # args... ; stdin is passed through
 
 out=$(setup --check </dev/null)
 grep -q 'Swarm: inactive' <<< "$out" || fail "--check: $out"
+# the hint after a run names only the steps that are still to do: everything, on a fresh host
+next_of() { grep '^Next:' <<< "$1" || true; }
+hint=$(next_of "$out")
+[[ $hint == *"--swarm-init"* && $hint == *"--secret linux-default"* && $hint == *"--secret runner-placeholder"* && $hint == *"--deploy"* ]] || fail "--check: the hint on a fresh host does not list every step: $hint"
 echo "RESULT test=helper step=check swarm=inactive"
 
 out=$(setup --swarm-init </dev/null)
 grep -q 'Swarm initialised' <<< "$out" || fail "--swarm-init: $out"
 out=$(setup --swarm-init </dev/null)
 grep -q 'already active' <<< "$out" || fail "--swarm-init is not idempotent: $out"
+hint=$(next_of "$out")
+[[ $hint != *"--swarm-init"* && $hint == *"--secret linux-default"* && $hint == *"--deploy"* ]] || fail "--swarm-init: the hint still lists the swarm, or lacks the secrets and the deploy: $hint"
 addr=$(idocker "$node" info --format '{{.Swarm.NodeAddr}}')
 role=$(idocker "$node" node inspect self --format '{{.Spec.Role}}')
 echo "RESULT test=helper step=swarm-init state=active idempotent=yes node_addr=$addr role=$role"
@@ -42,6 +48,8 @@ grep -q 'created secret linux-default-token' <<< "$out" || fail "--secret: $out"
 if grep -q "$SENTINEL_TOKEN" <<< "$out"; then fail "the token was echoed"; fi
 out=$(printf '%s\n' "$SENTINEL_TOKEN" | setup --secret linux-default)
 grep -q 'exists' <<< "$out" || fail "--secret is not idempotent: $out"
+hint=$(next_of "$out")
+[[ $hint != *"--secret linux-default"* && $hint == *"--secret runner-placeholder"* && $hint == *"--deploy"* ]] || fail "--secret: the hint still lists the secret that exists, or lacks the placeholder: $hint"
 if printf '' | setup --secret linux-java >/dev/null; then fail "an empty token was accepted"; fi
 if idocker "$node" secret inspect linux-java-token >/dev/null 2>&1; then fail "an empty secret was created"; fi
 # the secret is a runner config holding the token
@@ -59,7 +67,8 @@ echo "RESULT test=helper step=deploy_without_secrets refused=yes"
 # the runners' placeholder config, as runners.yaml tells you to create it
 printf '%s' machine-runner-swarm-placeholder | setup --secret runner-placeholder >/dev/null
 idocker "$node" secret inspect runner-placeholder-token >/dev/null || fail "--secret runner-placeholder did not create runner-placeholder-token"
-setup --deploy --stack-file /work/runners.yaml </dev/null >/dev/null
+out=$(setup --deploy --stack-file /work/runners.yaml </dev/null)
+[[ -z $(next_of "$out") && $out == *"Check: docker service logs runners_runner-distributor"* ]] || fail "--deploy: the hint after a complete setup still lists steps: $(next_of "$out")"
 services=$(idocker "$node" stack services runners --format '{{.Name}}' | sort | paste -sd, -)
 echo "RESULT test=helper step=deploy services=$services"
 [[ $services == runners_linux-default,runners_runner-distributor,runners_token-proxy ]] || fail "unexpected services: $services: the shipped stack is one class"

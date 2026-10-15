@@ -4,8 +4,11 @@
 #
 # Unlike the other classes this one does NOT claim through the token proxy: a continuous runner claims a task after
 # every job, and the proxy allows one claim per container. The runner keeps the real class token in its secret file,
-# so a job that becomes root in the container (sudo) can read it. That is why this class is weaker: give it a class of
-# its own and keep it for trusted projects (docs/security.md, "The persistent class").
+# so a job that becomes root in the container (sudo) can read it. That is why jobs here have NO sudo by default
+# (MACHINE_RUNNER_SWARM_JOB_SUDO "false": the step-down is setpriv --no-new-privs, so the token file stays unreadable to the job user, and
+# tools must be in the image). Set "true" for the passwordless sudo of the other classes, and the token is then readable to a job that uses it.
+# The class is weaker than the proxied ones either way: give it a class of its own and keep it for trusted projects
+# (docs/security.md, "The persistent class").
 #
 # Continuous mode runs many jobs in ONE long-lived container, so state from one job (files, installed
 # tools, processes) is visible to the next, and a job can change what later jobs see. Use it only for
@@ -32,7 +35,7 @@ services:
       # directory ("failed to remove working directory"): jobs on this class clean up after themselves.
       CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"
       CIRCLECI_RUNNER_LOGGING_FORMAT: text
-      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "false"   # "true" is the opt-in: jobs get sudo, and a job that uses it reads the class token
     secrets:
       - source: linux-persistent-token
         target: circleci_runner_config.yaml

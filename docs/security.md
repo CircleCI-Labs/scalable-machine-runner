@@ -34,7 +34,7 @@ This page describes what the stack protects, what it does not protect, and which
 | Threat | Control | What remains |
 |---|---|---|
 | A job leaves state for the next job | Single-task mode and a new container for every job | Anything on mounted volumes or on a mounted Docker engine. Refer to [What a clean environment covers](concepts.md#what-a-clean-environment-covers) |
-| A job reads the runner token | Single-task classes: only the token proxy holds the token, and runners and jobs hold a made-up placeholder. Linux persistent class: the token is a file that only the runner user and root can read, and is not in the environment. Windows persistent class: the token is a file that every job can read | Linux persistent class: a job that uses sudo reads it. Windows persistent class: a job reads it. A job that escapes its container onto the node of the proxy. Refer to [The token proxy](#the-token-proxy) and [The persistent class](#the-persistent-class) |
+| A job reads the runner token | Single-task classes: only the token proxy holds the token, and runners and jobs hold a made-up placeholder. Linux persistent class: the token is a file that only the runner user and root can read, and is not in the environment. Windows persistent class: the token is a file that every job can read | Linux persistent class: a job that uses sudo reads it, which the shipped file does not allow (the opt-in `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"` does). Windows persistent class: a job reads it. A job that escapes its container onto the node of the proxy. Refer to [The token proxy](#the-token-proxy) and [The persistent class](#the-persistent-class) |
 | A job replaces the runner or entrypoint | On Linux, the runner is in a per-node volume that the container mounts read-only and that only root owns, the entrypoint is a Swarm config, and the entrypoint checks the runner against its SHA-256 record at every container start. On Windows, the volume with the runner and Git is mounted read-only, and the distributor compares the runner with its record at every check | On Linux, a privileged sibling container can still change the volume. Refer to [Runner binary integrity on Linux](#runner-binary-integrity-on-linux) |
 | A job reaches other tenants through the network | One overlay network for each Linux class | Replicas of one class reach each other. Refer to [Isolation between runners](#isolation-between-runners) |
 | A job breaks out of the container | Default seccomp and AppArmor profiles, dropped capabilities, no privileged mode | Containers share the host kernel. A kernel or runtime vulnerability bypasses every control on this page. The opt-in [microVM classes](microvm.md) give each job its own kernel |
@@ -66,7 +66,7 @@ flowchart TB
   file --> runner
   runner -- "HTTPS, the token authenticates the runner" --> api
   runner -- "task agent runs the job as the job user" --> job
-  job -. "persistent class: Linux with sudo, Windows always" .-> file
+  job -. "persistent class: Linux with the sudo opt-in, Windows always" .-> file
 ```
 
 The two arrows into the runner and the API show the two paths. A single-task class takes the first, on Linux and on Windows: the runner talks to the proxy, and only the proxy holds the class token. A persistent class takes the second: the runner holds the token itself.
@@ -137,10 +137,10 @@ What it does not do:
 
 A persistent class (`persistent.yaml`) does not use the proxy. A continuous runner claims a task after every job, and the proxy allows one claim for each container, so the runner keeps its token in a file in its own container. This class is weaker than the proxied classes:
 
-- A job that uses sudo, which the shipped file allows, reads the class token, and it can then run a runner of its own on that class.
+- The shipped file sets `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"`, so the token file is unreadable to the job user, and the tools that jobs need must be in the image. If you set `"true"` (the opt-in), a job that uses sudo reads the class token, and it can then run a runner of its own on that class.
 - State from one job is visible to the next, because the container lives on.
 
-Therefore give the persistent class a resource class of its own, restrict it to trusted projects with a config policy, keep production contexts away from it, and rotate its token on a schedule. If its jobs can do without sudo, set `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` in your copy of the file and bake the tools into the image, which makes the token unreadable to the job user as in the old hardened class. Refer to [Persistent mode](resource-classes.md#persistent-mode).
+Therefore give the persistent class a resource class of its own, restrict it to trusted projects with a config policy, keep production contexts away from it, and rotate its token on a schedule. Refer to [Persistent mode](resource-classes.md#persistent-mode).
 
 ## Runner binary integrity on Linux
 

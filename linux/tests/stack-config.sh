@@ -203,6 +203,8 @@ block=$(service_block linux-hardened)
 check linux-hardened 'MACHINE_RUNNER_SWARM_JOB_SUDO "false"' '^      MACHINE_RUNNER_SWARM_JOB_SUDO: "false"$'
 check linux-hardened 'cap_drop ALL' '^      - ALL$'
 block=$(service_block linux-persistent)
+# the runner of this class holds the real token (no proxy), so its jobs have no sudo by default: "true" is the documented opt-in
+check linux-persistent 'MACHINE_RUNNER_SWARM_JOB_SUDO "false" (the job user cannot read the token file)' '^      MACHINE_RUNNER_SWARM_JOB_SUDO: "false"$'
 check linux-persistent 'continuous mode' '^      CIRCLECI_RUNNER_MODE: continuous$'
 check linux-persistent 'working-directory cleanup off' '^      CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"$'
 check linux-persistent 'a named volume' '^        source: persistent-home$'

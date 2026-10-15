@@ -177,7 +177,7 @@ The file `linux/stack/persistent.yaml` defines `linux-persistent`. It sets `CIRC
 
 A volume lives on one node, so the service pins itself with the constraint `node.hostname == CHANGE-ME`. Edit that value before you deploy.
 
-The service keeps its class token in its own container and does not claim through the token proxy, because a continuous runner claims after every job and the proxy allows one claim for each container. A job that uses sudo can therefore read the token. Set `MACHINE_RUNNER_SWARM_JOB_SUDO` to `"false"` in your copy if its jobs can do without sudo.
+The service keeps its class token in its own container and does not claim through the token proxy, because a continuous runner claims after every job and the proxy allows one claim for each container. A job that can use sudo can therefore read the token. The shipped file sets `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"`: jobs have no sudo (the step-down is `setpriv --no-new-privs`), so the job user cannot read the token file, and the tools that a job needs must be in the image ([Images](images.md)). Set it to `"true"` in your copy if its jobs need sudo, and accept that a job that uses it reads the token and can run a runner of its own on the class.
 
 The service sets `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` to `"false"`. The runner user cannot remove files that the job user created, so the runner does not clean the working directory, and each job must clean up what an earlier job left. Refer to [Working directory cleanup](security.md#working-directory-cleanup).
 

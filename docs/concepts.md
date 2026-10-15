@@ -207,7 +207,7 @@ What happens next depends on one setting, `MACHINE_RUNNER_SWARM_JOB_SUDO`.
 |---|---|---|---|
 | Default (`linux-default`, and `linux-java` of `classes-extra.yaml`) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"` | Yes, passwordless, as in the Docker executor | No, the container holds a placeholder. Only a job that escapes the container onto the node of the proxy can |
 | Hardened (`linux-hardened` of `classes-extra.yaml`) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` | No | No, for the same reason |
-| Persistent (`linux-persistent`, no proxy) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"` | Yes | Yes, if the job uses sudo. Refer to [The persistent class](security.md#the-persistent-class) |
+| Persistent (`linux-persistent`, no proxy) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` (the shipped file; `"true"` is the opt-in) | No (with `"true"`: yes) | No, as in the hardened class. With `"true"`, yes if the job uses sudo. Refer to [The persistent class](security.md#the-persistent-class) |
 
 **The default class.** Jobs keep the passwordless sudo that many orgs and orbs expect, for example `sudo apt-get install`. A job that uses sudo is root in its container: it can read the placeholder and the files of the runner, and become the runner user. It finds no class token. The test `linux/tests/token.sh` measures what the user of a job can read in the runner's config file, and `linux/tests/proxy.sh` scans the containers as root and finds no class token.
 

@@ -13,7 +13,7 @@
 #   cleanup      CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true fails: the runner (uid 2000) cannot remove the
 #                working directory the job user owns. This is why the stack and the entrypoint default it to false
 #   persistent   persistent.yaml (continuous mode): two tasks in one runner; the second sees the first's files
-#                and nothing fails
+#                and nothing fails. The job has no sudo (the runner holds the real token there), unless you opt in
 #
 # Usage: task.sh        Env: TIMEOUT=120
 set -euo pipefail
@@ -82,6 +82,8 @@ wait_tasks 2
 mapfile -t lines < <(task_lines | head -n 2)
 printf 'RESULT test=task step=persistent %s\n' "${lines[@]}"
 [[ ${lines[0]} == *"residue=0"* && ${lines[1]} != *"residue=0"* ]] || fail "the second task of a persistent runner should see the first one's files"
+# the shipped file gives the job no sudo (the runner holds the real token in this class): setpriv --no-new-privs, and the token file stays unreadable
+[[ ${lines[0]} == *"sudo=no"* && ${lines[0]} == *"no_new_privs=1"* && ${lines[0]} == *"config=denied"* ]] || fail "linux-persistent: the job has sudo, or can read the token file: ${lines[0]}"
 if service_logs "$SWARM_TEST_MGR" "$svc" | grep -aq 'failed to remove'; then fail "a persistent runner failed to clean up"; fi
 
 pass "the real runner runs tasks as the job user through sudo -niHu (default) or setpriv --no-new-privs (hardened); cleanup=true cannot work with a stepped-down job, so it defaults to false; a persistent runner keeps files between tasks and does not fail"

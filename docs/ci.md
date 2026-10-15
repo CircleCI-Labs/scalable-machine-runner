@@ -118,6 +118,8 @@ flowchart TD
 | `main` only, workflow `docs-site` | `docs-site-publish` | `cimg/go:1.27.2`, small, context `scalable-machine-runner-docs`, `serial-group` | The same build, then `site/publish.sh` pushes the site to the `gh-pages` branch, and the publication is recorded as a [deploy](#deploys). The release does not wait for it ([below](#docs-site)) |
 | scheduled, workflow `security-scan` | `security-scan-images`, `security-scan-go` | `ubuntu-2604:2026.05.1`; `golang:1.27.2`, small | The weekly [security scan](#security-scan). Never part of the `ci` workflow |
 
+**Test results.** `lint-powershell` and `windows-swarm` (Pester 5, `OutputFormat = 'JUnitXml'` in `windows/tests/Invoke-UnitTests.ps1`) and `proxy-test` (`go test` through [gotestsum](https://github.com/gotestyourself/gotestsum), `--junitfile`) store JUnit XML with `store_test_results`, also when a test fails, so CircleCI's Test Insights shows the tests, their timing and the flaky ones, and a rerun can start from the failed tests. The shell tests print `CHECK` and `RESULT` lines and produce no XML.
+
 **Executor images.** These were checked against the CircleCI docs on 2026-10-12:
 
 - `ubuntu-2604:2026.05.1` is the newest Linux machine image and also the one that the Arm resource classes (`arm.medium`) offer.
@@ -715,6 +717,7 @@ The versions in use:
 | Mermaid script of the site | 12.0.0, the version of the `lint-docs-mermaid` image | `params.mermaid.base` in `site/hugo.yaml` |
 | markdownlint-cli2 | 0.18.1 | `lint-markdown` |
 | Trivy | 0.75.0 | `trivy` command |
+| gotestsum | 1.13.0 (installed with `go install`, checked by the Go checksum database) | `proxy-test` |
 | git-cliff, cosign, crane, gh, Go (the release job; cosign and crane also in the image jobs) | 2.14.2, 3.1.3, 0.22.1, 2.102.0, 1.27.2, each SHA-256 checked | `ci/release.sh install-tools`, `ci/tools.sh` |
 | BuildKit, QEMU installer, `registry:2` (the image jobs and their test) | `moby/buildkit:v0.33.1`, `tonistiigi/binfmt`, `registry:2`, by digest | `ci/proxy-image.sh`, `ci/tests/proxy-image.sh` |
 | Nano Server bases of the Windows image | `ltsc2022` and `ltsc2025`, by digest | `ci/Build-ProxyImage.ps1` |

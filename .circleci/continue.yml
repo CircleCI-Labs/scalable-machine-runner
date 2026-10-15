@@ -382,7 +382,10 @@ jobs:
             else
               echo "windows/tests/Invoke-UnitTests.ps1 not found"; exit 1
             fi
-      # Invoke-UnitTests.ps1 writes NUnit XML; store_test_results only accepts JUnit XML.
+      # Invoke-UnitTests.ps1 writes JUnit XML (Pester 5: OutputFormat JUnitXml), which Test Insights reads.
+      - store_test_results:
+          path: /tmp/test-results
+          when: always
       - store_artifacts:
           path: /tmp/test-results
           destination: test-results
@@ -416,12 +419,20 @@ jobs:
     steps:
       - checkout
       - run:
-          name: gofmt, go vet and go test -race (proxy/)
+          name: gofmt, go vet and go test -race (proxy/), as JUnit XML through gotestsum
           command: |
+            # Pinned by version: go install checks the module against the Go checksum database. Renovate keeps the version only.
+            # renovate: datasource=github-releases depName=gotestyourself/gotestsum extractVersion=^v(?<version>.*)$
+            gotestsum_version=1.13.0
+            go install "gotest.tools/gotestsum@v${gotestsum_version}"
             cd proxy
             test -z "$(gofmt -l .)" || { gofmt -d .; echo "run gofmt -w proxy"; exit 1; }
             go vet ./...
-            go test -race -count=1 ./...
+            mkdir -p /tmp/test-results/go
+            "$(go env GOPATH)/bin/gotestsum" --junitfile /tmp/test-results/go/proxy.xml --format testname -- -race -count=1 ./...
+      - store_test_results:
+          path: /tmp/test-results
+          when: always
       - run:
           name: Static builds for every platform (ci/build-proxy.sh)
           command: |
@@ -906,6 +917,9 @@ jobs:
           command: |
             .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Distributor.ps1 -Report "reports\distributor-$env:WINDOWS_TAG.txt"
             exit $LASTEXITCODE
+      - store_test_results:
+          path: C:\test-results
+          when: always
       - store_artifacts:
           path: C:\test-results
           destination: test-results

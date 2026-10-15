@@ -10,7 +10,7 @@
        Server 2019 profile) for every script that is not a test.
     3. Every .ps1/.psm1/.psd1 under windows\ is ASCII, because Windows PowerShell 5.1 misreads UTF-8
        files that have no byte order mark.
-    4. Pester 5.x on windows\tests\*.Tests.ps1, with NUnit XML results when -ResultsDirectory is given.
+    4. Pester 5.x on windows\tests\*.Tests.ps1, with JUnit XML results when -ResultsDirectory is given (CircleCI's store_test_results reads that format).
 
     Exits non-zero on any finding or failed test.
 
@@ -91,7 +91,7 @@ $config.Output.Verbosity = 'Detailed'
 if ($ResultsDirectory) {
     New-Item -ItemType Directory -Force -Path $ResultsDirectory | Out-Null
     $config.TestResult.Enabled = $true
-    $config.TestResult.OutputFormat = 'NUnitXml'
+    $config.TestResult.OutputFormat = 'JUnitXml'
     $config.TestResult.OutputPath = (Join-Path $ResultsDirectory 'pester-windows.xml')
 }
 $result = Invoke-Pester -Configuration $config

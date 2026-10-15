@@ -73,7 +73,7 @@ try {
     Remove-Item -LiteralPath $context -Recurse -Force -ErrorAction SilentlyContinue
 }
 $info = Invoke-Docker @('image', 'inspect', $Name, '--format', '{{.Os}}/{{.Architecture}} {{.OsVersion}} user={{.Config.User}} {{.Size}} bytes')
-Write-Step "built $Name: $($info -join ' ')"
+Write-Step "built ${Name}: $($info -join ' ')"
 
 # --- test --------------------------------------------------------------------------------------------------------------------
 if ($Test) {

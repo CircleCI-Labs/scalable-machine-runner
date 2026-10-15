@@ -618,14 +618,17 @@ The context `scalable-machine-runner-dockerhub` holds two variables for the publ
 | `DOCKERHUB_USERNAME` | The Docker Hub user (or organization service account) that may push to `ccilabs/machine-runner-swarm-proxy` |
 | `DOCKERHUB_TOKEN` | An access token of that user with the permission to read and write that repository. Never the password |
 
-Restrict the context to `main`, like the other contexts, so that no other branch and no rerun with SSH can read the token:
+Restrict the context to this project and to `main`, like the other contexts, so that no other branch, no rerun with SSH and no pipeline started through the API can read the token. Anyone who can push a branch could otherwise add the context to a job of that branch, print the token, and push a malicious image under the tag that the stack files name. Two restrictions, where `<org>` is the organization slug and `<project-id>` is `7bbdbb66-6ba8-4f6c-982e-d4fb401ec257`:
 
 ```console
+circleci context restriction create scalable-machine-runner-dockerhub --org <org> --type project --value <project-id>
 circleci context restriction create scalable-machine-runner-dockerhub --org <org> --type expression \
-  --restriction-value 'pipeline.git.branch == "main"'
+  --value 'pipeline.git.branch == "main" and not job.ssh.enabled and not (pipeline.config_source starts-with "api")'
 ```
 
-Only jobs that run on `main` carry the context (the publish variants of the image jobs, `proxy-image-publish` and `release`), and the setup phase never attaches it. **Until both values exist, nothing is pushed and everything stays green:** the image jobs build and test, then print `NOT PUSHED` with the reason, and the release builds its bundle but does not create the release.
+The flag is `--value` (not `--restriction-value`), and the first command is needed: an expression alone does not tie the context to this project. The live context of this repository has both restrictions already (the maintainers created them with these commands). The CLI cannot list restrictions. Check them in the web app (Organization Settings, then Contexts, then the context), or with the API: `curl --header "circle-token: ${CIRCLECI_TOKEN}" https://circleci.com/api/v2/context/<context-id>/restrictions` (the id is in the output of `circleci context list --org <org>`). It must show one `project` and one `expression` restriction.
+
+Only jobs that run on `main` carry the context (the publish variants of the image jobs, `proxy-image-publish`, `proxy-image-edge` and `release`), and the setup phase never attaches it. **Until both values exist, a pipeline that is not the production `main` pushes nothing and stays green:** the image jobs build and test, then print `NOT PUSHED` with the reason, and the release builds its bundle but does not create the release. On the production `main` (both e2e tokens present) the missing values fail those jobs ([Publishing fails closed on main](#publishing-fails-closed-on-main)).
 
 ## Deploys
 

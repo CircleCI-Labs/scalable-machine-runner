@@ -41,10 +41,10 @@ func TestShutdownWaitsForAClaimThatIsInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	var handled atomic.Bool
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newServer("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		e.p.ServeHTTP(w, r)
 		handled.Store(true)
-	})}
+	}))
 	served := make(chan error, 1)
 	go func() { served <- serve(ctx, srv, ln, 10*time.Second) }()
 
@@ -92,7 +92,7 @@ func TestShutdownGivesUpAfterTheGrace(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	served := make(chan error, 1)
-	go func() { served <- serve(ctx, &http.Server{Handler: e.p}, ln, 200*time.Millisecond) }()
+	go func() { served <- serve(ctx, newServer("", e.p), ln, 200*time.Millisecond) }()
 	go http.Post("http://"+ln.Addr().String()+claimPath, "application/json", strings.NewReader("{}"))
 	time.Sleep(200 * time.Millisecond)
 	cancel()

@@ -50,9 +50,14 @@ const (
 	claimPath  = "/api/v3/runner/claim"
 	scalePath  = "/api/v3/runner/scale"
 	healthPath = "/healthz"
+
 	// classEnvPrefix: every environment variable with this prefix holds one -class value. Stack files merge
 	// environment variables by name but replace a command, so an add-on stack file adds its class this way.
 	classEnvPrefix = "MACHINE_RUNNER_SWARM_PROXY_CLASS_"
+
+	maxClaimBody  = 64 << 10 // a claim is a small JSON document
+	releasePolls  = 30       // seconds of polls that DNS must omit a latched IP before the latch is released
+	restoreWithin = 25 * time.Second
 )
 
 var version = "dev" // -ldflags "-X main.version=..."
@@ -85,12 +90,19 @@ type proxy struct {
 	store    *store // nil: no persistence: a restart asks CircleCI (scale) which runners may claim
 	stateErr error  // the last failure to write the state, which makes the proxy unhealthy and refuses claims
 
-	scaleTries int           // attempts of the scale call at start (at least 1)
-	scaleWait  time.Duration // between the attempts
+	scaleTries      int           // attempts of the scale call at start (at least 1)
+	scaleWait       time.Duration // between the attempts
+	restoreDeadline time.Duration // all the scale calls of the start together; a class without an answer by then is latched
+	releaseAfter    int           // polls without a class listing a latched IP before the latch goes (at least 1)
 
-	releaseAfter int // polls without a class listing a latched IP before the latch goes (at least 1)
+	limit    *limiter      // claims per source address
+	cacheTTL time.Duration // how long a claim may use the DNS answer of an earlier lookup
 
-	mu sync.Mutex // guards the latched and busy maps of every class, and the state file
+	mu sync.Mutex // guards the latched, absent and busy maps of every class, stateErr and the state file
+
+	cacheMu sync.Mutex // one DNS lookup at a time for the claims
+	cache   map[*class]map[string]bool
+	cacheAt time.Time
 }
 
 // describe lists what DNS says for every class, for the log line of a claim from an address that belongs to none: a runner that
@@ -131,22 +143,57 @@ func (c *class) token() (string, error) {
 	return s, nil
 }
 
-// resolve returns the runner IPs of every class. An unknown name (no running task) is an empty set; any other DNS failure is an error
-// and changes nothing.
+// resolve returns the runner IPs of every class, looked up side by side. An unknown name (no running task) is an empty set; any other
+// DNS failure is an error and changes nothing.
 func (p *proxy) resolve(ctx context.Context) (map[*class]map[string]bool, error) {
-	sets := map[*class]map[string]bool{}
-	for _, c := range p.classes {
-		addrs, err := p.lookup(ctx, c.dns)
-		var dnsErr *net.DNSError
-		if err != nil && !(errors.As(err, &dnsErr) && dnsErr.IsNotFound) {
-			return nil, fmt.Errorf("%s: %w", c.dns, err)
-		}
-		set := map[string]bool{}
-		for _, a := range addrs {
-			set[norm(a)] = true
-		}
-		sets[c] = set
+	type answer struct {
+		set map[string]bool
+		err error
 	}
+	answers := make([]answer, len(p.classes))
+	var wg sync.WaitGroup
+	for i, c := range p.classes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			addrs, err := p.lookup(lctx, c.dns)
+			var dnsErr *net.DNSError
+			if err != nil && !(errors.As(err, &dnsErr) && dnsErr.IsNotFound) {
+				answers[i].err = fmt.Errorf("%s: %w", c.dns, err)
+				return
+			}
+			set := map[string]bool{}
+			for _, a := range addrs {
+				set[norm(a)] = true
+			}
+			answers[i].set = set
+		}()
+	}
+	wg.Wait()
+	sets := map[*class]map[string]bool{}
+	for i, c := range p.classes {
+		if answers[i].err != nil {
+			return nil, answers[i].err
+		}
+		sets[c] = answers[i].set
+	}
+	return sets, nil
+}
+
+// membership is resolve for the claims: an answer that is younger than cacheTTL is reused, and the lookups of concurrent claims are one.
+func (p *proxy) membership(ctx context.Context) (map[*class]map[string]bool, error) {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	if p.cache != nil && time.Since(p.cacheAt) < p.cacheTTL {
+		return p.cache, nil
+	}
+	sets, err := p.resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p.cache, p.cacheAt = sets, time.Now()
 	return sets, nil
 }
 
@@ -158,6 +205,9 @@ func (p *proxy) poll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	p.cacheMu.Lock()
+	p.cache, p.cacheAt = sets, time.Now()
+	p.cacheMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	changed := false
@@ -179,6 +229,7 @@ func (p *proxy) poll(ctx context.Context) error {
 	if changed || p.stateErr != nil { // a state that could not be written is tried again
 		p.persist()
 	}
+	p.limit.gc()
 	return nil
 }
 
@@ -273,10 +324,17 @@ func (p *proxy) scaleOnce(ctx context.Context, tok string) (running, unclaimed i
 	return running, unclaimed, nil
 }
 
-// restore sets the latches at start and returns what it did, for the log. A class with a saved state (the IPs that claimed) gets
-// exactly those latched, whether DNS lists them yet or not. A class with none cannot know who has claimed, so it asks CircleCI (scale): no running task of the
-// class means that no runner present holds one, and they may claim; otherwise, or when the answer is missing, every IP present
-// is latched, which only costs those runners their claim (they leave and are replaced).
+// storeError is a failure of the state directory at start, which no retry mends: the proxy stops.
+type storeError struct{ err error }
+
+func (e *storeError) Error() string { return e.err.Error() }
+func (e *storeError) Unwrap() error { return e.err }
+
+// restore sets the latches at start and returns what it did, for the log. A class with a saved state (the IPs that claimed) gets exactly
+// those latched, whether DNS lists them yet or not. A class with none cannot know who has claimed, so it asks CircleCI (scale), all the
+// classes at once and within restoreDeadline: no running task of the class means that no runner present holds one, and they may claim;
+// otherwise, or when the answer is missing or late, every IP present is latched, which only costs those runners their claim (they leave
+// and are replaced). An error from DNS is worth a retry; a *storeError is not.
 func (p *proxy) restore(ctx context.Context) (string, error) {
 	sets, err := p.resolve(ctx)
 	if err != nil {
@@ -284,7 +342,7 @@ func (p *proxy) restore(ctx context.Context) (string, error) {
 	}
 	kind, saved, err := p.store.load()
 	if err != nil {
-		return "", err
+		return "", &storeError{err}
 	}
 	why := map[startKind]string{
 		stateOK:      "state restored",
@@ -296,44 +354,81 @@ func (p *proxy) restore(ctx context.Context) (string, error) {
 		latch []string // IPs to latch
 		what  string
 	}
-	verdicts := map[*class]verdict{}
-	var lines []string
-	for _, c := range p.classes {
-		set := sets[c]
+	verdicts := make([]verdict, len(p.classes))
+	pctx, cancel := context.WithTimeout(ctx, orDefault(p.restoreDeadline, restoreWithin))
+	defer cancel()
+	var wg sync.WaitGroup
+	for i, c := range p.classes {
 		var ips []string
-		for ip := range set {
+		for ip := range sets[c] {
 			ips = append(ips, ip)
 		}
 		sort.Strings(ips)
-		var v verdict
-		if kind == stateOK && saved[c.dns] != nil {
+		v := &verdicts[i]
+		switch {
+		case kind == stateOK && saved[c.dns] != nil:
 			v.latch = saved[c.dns]
 			v.what = fmt.Sprintf("%d runner(s) have claimed and stay refused; the others may claim", len(v.latch))
-		} else if len(ips) == 0 {
+		case len(ips) == 0:
 			v.what = "no runner present"
-		} else if running, unclaimed, err := p.scale(ctx, c); err != nil {
-			v.latch = ips
-			v.what = fmt.Sprintf("CircleCI does not say how many tasks run (%v): failing safe, latching the %d runner(s) present", err, len(ips))
-		} else if running > 0 {
-			v.latch = ips
-			v.what = fmt.Sprintf("CircleCI reports %d running task(s), %d unclaimed: failing safe, latching the %d runner(s) present", running, unclaimed, len(ips))
-		} else {
-			v.what = fmt.Sprintf("CircleCI reports 0 running tasks, %d unclaimed: the %d runner(s) present may claim", unclaimed, len(ips))
+		default:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if running, unclaimed, err := p.scale(pctx, c); err != nil {
+					v.latch = ips
+					v.what = fmt.Sprintf("CircleCI does not say how many tasks run (%v): failing safe, latching the %d runner(s) present", err, len(ips))
+				} else if running > 0 {
+					v.latch = ips
+					v.what = fmt.Sprintf("CircleCI reports %d running task(s), %d unclaimed: failing safe, latching the %d runner(s) present", running, unclaimed, len(ips))
+				} else {
+					v.what = fmt.Sprintf("CircleCI reports 0 running tasks, %d unclaimed: the %d runner(s) present may claim", unclaimed, len(ips))
+				}
+			}()
 		}
-		verdicts[c] = v
-		lines = append(lines, c.dns+": "+v.what)
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return "", ctx.Err()
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for c, v := range verdicts {
-		for _, ip := range v.latch {
+	var lines []string
+	for i, c := range p.classes {
+		for _, ip := range verdicts[i].latch {
 			c.latched[ip] = true
 		}
+		lines = append(lines, c.dns+": "+verdicts[i].what)
 	}
 	if err := p.persist(); err != nil {
-		return "", err
+		return "", &storeError{err}
 	}
 	return why + "; " + strings.Join(lines, "; "), nil
+}
+
+// start is restore, tried again after every failure of DNS (the network of a new proxy may not be up yet), wait apart. A failure of the
+// state directory (*storeError), or the end of ctx, ends it.
+func (p *proxy) start(ctx context.Context, wait time.Duration) (string, error) {
+	for {
+		what, err := p.restore(ctx)
+		var se *storeError
+		if err == nil || ctx.Err() != nil || errors.As(err, &se) {
+			return what, err
+		}
+		log.Printf("waiting for DNS: %v", err)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+func orDefault(d, def time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return def
 }
 
 // persist writes the latched IPs to the state directory, if there is one, and returns the failure: a latch that is not on disk is not
@@ -352,6 +447,16 @@ func (p *proxy) persist() error {
 // errNotLatched: the upstream answered a claim with a task, but its latch could not be saved. The runner does not get the task.
 var errNotLatched = errors.New("the latch of the claim could not be saved")
 
+// refuse answers a claim that is not allowed. The reason goes to the log only: the body says nothing about the classes or the runners.
+func refuse(w http.ResponseWriter, ip, why string, code int) {
+	log.Printf("claim from %s refused: %s", ip, why)
+	body := "claim refused"
+	if code != http.StatusForbidden {
+		body = "unavailable"
+	}
+	http.Error(w, body, code)
+}
+
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == healthPath {
 		p.health(w)
@@ -363,7 +468,33 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ap, _ := netip.ParseAddrPort(r.RemoteAddr)
 	ip := ap.Addr().Unmap().String()
-	sets, err := p.resolve(r.Context())
+	if !p.limit.allow(ip) {
+		log.Printf("claim from %s refused: too many claims", ip)
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many claims", http.StatusTooManyRequests)
+		return
+	}
+	if r.ContentLength > maxClaimBody {
+		http.Error(w, "claim too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxClaimBody)
+	// An address that has claimed, or has a claim in flight, is refused from memory: no DNS lookup is spent on it.
+	p.mu.Lock()
+	why := ""
+	for _, k := range p.classes {
+		if k.latched[ip] {
+			why = "this runner has already claimed a task"
+		} else if k.busy[ip] && why == "" {
+			why = "a claim from this runner is in flight"
+		}
+	}
+	p.mu.Unlock()
+	if why != "" {
+		refuse(w, ip, why, http.StatusForbidden)
+		return
+	}
+	sets, err := p.membership(r.Context())
 	if err != nil {
 		log.Printf("claim from %s refused: cannot resolve the runners: %v", ip, err)
 		http.Error(w, "cannot resolve the runners", http.StatusServiceUnavailable)
@@ -372,7 +503,6 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var c *class
 	code := http.StatusForbidden
 	p.mu.Lock()
-	why := ""
 	owners := 0
 	for _, k := range p.classes {
 		if sets[k][ip] {
@@ -385,7 +515,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		why = "not a runner of any class (" + describe(p.classes, sets) + ")"
 	case owners > 1: // overlapping networks: do not guess whose token this is
 		why = "the address belongs to several classes"
-	case c.latched[ip]:
+	case c.latched[ip]: // it claimed while the lookup ran
 		why = "this runner has already claimed a task"
 	case c.busy[ip]:
 		why = "a claim from this runner is in flight"
@@ -396,12 +526,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	p.mu.Unlock()
 	if why != "" {
-		log.Printf("claim from %s refused: %s", ip, why)
-		if code == http.StatusForbidden {
-			http.Error(w, "claim refused: "+why, code)
-		} else {
-			http.Error(w, "unavailable", code)
-		}
+		refuse(w, ip, why, code)
 		return
 	}
 	defer func() { p.mu.Lock(); delete(c.busy, ip); p.mu.Unlock() }()
@@ -529,6 +654,18 @@ func checkHealth(listen string) int {
 	return 0
 }
 
+// newServer is the server of the proxy, with limits on what a runner network can send it.
+func newServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Minute, // headers and body of one request: the calls that pass through carry job output
+		IdleTimeout:       time.Minute,
+		MaxHeaderBytes:    32 << 10,
+	}
+}
+
 // serve runs srv on ln until ctx is done, then shuts it down within grace, and returns only after that: a claim that CircleCI has
 // answered and that is latched must reach its runner before the process exits.
 func serve(ctx context.Context, srv *http.Server, ln net.Listener, grace time.Duration) error {
@@ -549,6 +686,42 @@ func serve(ctx context.Context, srv *http.Server, ln net.Listener, grace time.Du
 	return nil
 }
 
+// pollLoop polls every interval until ctx is done. A poll that fails is logged, at most once a minute.
+func (p *proxy) pollLoop(ctx context.Context, interval time.Duration) {
+	failing := logEvery{every: time.Minute}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := p.poll(ctx); err != nil && ctx.Err() == nil {
+				failing.printf("poll: cannot resolve the runners, no latch is released: %v", err)
+			}
+		}
+	}
+}
+
+// logEvery limits a message that repeats (every poll fails the same way) to one line for each interval.
+type logEvery struct {
+	every time.Duration
+	last  time.Time
+	held  int // messages since the last line, that one included
+}
+
+func (l *logEvery) printf(format string, args ...any) {
+	l.held++
+	if !l.last.IsZero() && time.Since(l.last) < l.every {
+		return
+	}
+	if l.held > 1 {
+		format += fmt.Sprintf(" (%d times)", l.held)
+	}
+	log.Printf(format, args...)
+	l.last, l.held = time.Now(), 0
+}
+
 func main() {
 	var cf classFlags
 	flag.Var(&cf, "class", "SERVICE=TOKEN-FILE: the runner service of one resource class (tasks.<service> is resolved) and the file with its token, bare or a runner config with auth_token (repeatable; also "+classEnvPrefix+"* variables)")
@@ -567,7 +740,7 @@ func main() {
 	}
 	u, err := url.Parse(*upstream)
 	classes, cerr := parseClasses(cf, os.Environ())
-	if err != nil || u.Host == "" || cerr != nil { // usage
+	if err != nil || u.Host == "" || cerr != nil || *poll <= 0 { // usage
 		if cerr != nil {
 			log.Print(cerr)
 		}
@@ -577,8 +750,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("state directory: %v", err) // fail closed: a proxy that cannot keep its state does not start
 	}
-	p := &proxy{upstream: u, classes: classes, store: st, lookup: lookupHost, scaleTries: 3, scaleWait: 2 * time.Second,
-		releaseAfter: int(math.Ceil(30 * float64(time.Second) / float64(*poll)))}
+	p := &proxy{
+		upstream: u, classes: classes, store: st, lookup: lookupHost,
+		scaleTries: 3, scaleWait: 2 * time.Second, restoreDeadline: restoreWithin,
+		releaseAfter: int(math.Ceil(releasePolls * float64(time.Second) / float64(*poll))),
+		limit:        newLimiter(2, 10), cacheTTL: time.Second,
+	}
 	for _, c := range classes { // fail closed: no token, no proxy
 		if _, err := c.token(); err != nil {
 			log.Fatalf("token file of %s: %v", c.dns, err)
@@ -587,24 +764,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 	// a restarted proxy must know who has claimed (state.go): from its state, or else it fails safe
-	for {
-		what, err := p.restore(ctx)
-		if err == nil {
-			log.Print(what)
-			break
-		}
+	what, err := p.start(ctx, time.Second)
+	if err != nil {
 		if ctx.Err() != nil {
 			return
 		}
-		log.Printf("waiting for DNS: %v", err)
-		time.Sleep(time.Second)
+		log.Fatalf("state: %v", err) // a full disk or a permission is not mended by waiting
 	}
-	go func() {
-		for range time.Tick(*poll) {
-			p.poll(ctx)
-		}
-	}()
-	srv := &http.Server{Addr: *listen, Handler: p, ReadHeaderTimeout: 10 * time.Second}
+	log.Print(what)
+	go p.pollLoop(ctx, *poll)
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		log.Fatal(err)
@@ -614,7 +782,7 @@ func main() {
 		names = append(names, c.dns)
 	}
 	log.Printf("machine-runner-swarm-proxy %s listening on %s, upstream %s, classes %s", version, *listen, u.Host, strings.Join(names, ","))
-	if err := serve(ctx, srv, ln, 8*time.Second); err != nil {
+	if err := serve(ctx, newServer(*listen, p), ln, 8*time.Second); err != nil {
 		log.Fatal(err)
 	}
 }

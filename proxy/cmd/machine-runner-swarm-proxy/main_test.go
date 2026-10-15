@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -289,7 +290,8 @@ func TestEachClassAsksWithItsOwnToken(t *testing.T) {
 	if _, err := e.p.restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.scaleCalls) != 2 || e.scaleCalls[0] != "Bearer "+tokenA || e.scaleCalls[1] != "Bearer "+tokenB {
+	got := strings.Join(slices.Sorted(slices.Values(e.scaleCalls)), ",")
+	if want := "Bearer " + tokenA + ",Bearer " + tokenB; got != want {
 		t.Errorf("want one scale call per class with the token of that class, got %d calls", len(e.scaleCalls))
 	}
 	if strings.Contains(e.logs.String(), tokenA) || strings.Contains(e.logs.String(), tokenB) {
@@ -702,3 +704,5 @@ func TestHealthcheckFlag(t *testing.T) {
 		t.Errorf("bad address: exit %d, want 1", got)
 	}
 }
+
+func writeBytes(path, content string) error { return os.WriteFile(path, []byte(content), 0o600) }

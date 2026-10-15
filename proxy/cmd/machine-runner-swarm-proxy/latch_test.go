@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,4 +182,21 @@ func TestOnlyPollsCountAndOnlyAnswersCount(t *testing.T) {
 	e.dnsErr = nil
 	e.dns[dnsA] = []string{runnerA1, runnerA2}
 	e.check(e.claim(runnerA1), 403, "two missing polls, then failures that count for nothing")
+}
+
+func TestARefusalSaysNothingAboutTheClasses(t *testing.T) {
+	e := newEnv(t, runnerA1)
+	e.check(e.claim(runnerA1), 200, "claim")
+	for name, from := range map[string]string{"latched": runnerA1, "not a runner": "10.9.9.9"} {
+		r := httptest.NewRequest("POST", claimPath, nil)
+		r.RemoteAddr = from + ":1"
+		w := httptest.NewRecorder()
+		e.p.ServeHTTP(w, r)
+		if w.Code != 403 || w.Body.String() != "claim refused\n" {
+			t.Errorf("%s: %d %q, want 403 and a generic body", name, w.Code, w.Body.String())
+		}
+	}
+	if !strings.Contains(e.logs.String(), "not a runner of any class (tasks.class-a lists [10.0.1.5]") {
+		t.Errorf("the detail is not in the log:\n%s", e.logs.String())
+	}
 }

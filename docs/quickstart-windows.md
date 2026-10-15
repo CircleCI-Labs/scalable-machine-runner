@@ -6,13 +6,14 @@ page-description: Run a first job on a Windows Server Docker Swarm node with Cir
 
 # Quickstart on Windows Server
 
-This page takes you from nothing to a first job on one Windows Server node with the shipped stack file and the setup helper. It explains little. [Install on Windows Server with Docker Swarm](install-windows.md) has every step by hand with the reasons, and [Concepts](concepts.md) explains the model. Nothing is built and nothing is installed on the host: the service uses the stock Server Core image, and the distributor service of the stack installs the runner and Git.
+This page takes you from nothing to a first job on one Windows Server node with the shipped stack file and the setup helper, from a signed release. It explains little. [Install on Windows Server with Docker Swarm](install-windows.md) has every step by hand with the reasons, and [Concepts](concepts.md) explains the model. Nothing is built and nothing is installed on the host: the service uses the stock Server Core image, and the distributor service of the stack installs the runner and Git.
 
 ## Before you start
 
 - A Windows Server 2022 or 2025 host that is not a domain controller, with Docker Engine in Windows-container mode, a clock on NTP, and outbound HTTPS. Refer to [Prerequisites](install-windows.md#prerequisites) for the details, and to [Sizing](#sizing-and-pending-replicas) for the CPU and memory.
 - Your organization's runner namespace, and an organization admin who agreed to the [CircleCI Runner Terms](https://circleci.com/legal/runner-terms/).
 - The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. It can run on your workstation.
+- [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 2.4 or later on the host, to verify the release. [Verify a release](install-windows.md#verify-a-release) says how to install it.
 - An elevated Windows PowerShell 5.1 session on the host for the steps that start with `docker` or `.\windows`.
 
 Replace `<namespace>` with your runner namespace, and `<org>` with your organization slug such as `gh/my-org`, or its UUID.
@@ -25,12 +26,36 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
    circleci runner resource-class create <namespace>/windows-default --org <org> --generate-token
    ```
 
-2. On the host, get the files at a release tag, or extract the `machine-runner-swarm-<version>.zip` bundle of a [release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases). The paths below are relative to the checkout.
+2. On the host, download a [release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases), verify it, and unpack it. A release is the install path: its stack file names the token proxy image of that release by tag and digest, and the CircleCI job that made it signed it with a keyless cosign signature. A `git clone` of a branch or a tag gets the stack files with the default image `latest`, which is not pinned. The three checks must pass: the signature, the ref in the certificate (the release job ran for `main`), and the checksum. Stop if one fails.
 
    ```powershell
-   git clone --branch <release-tag> https://github.com/CircleCI-Labs/scalable-machine-runner.git
-   cd scalable-machine-runner
+   $version = '0.1.0'   # the release that you want
+   $base = "https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download/v$version"
+   $zip = "machine-runner-swarm-$version.zip"
+   foreach ($f in $zip, 'SHA256SUMS', 'SHA256SUMS.sigstore.json') { Invoke-WebRequest -UseBasicParsing -Uri "$base/$f" -OutFile $f }
+
+   # 1. the signature: the CircleCI project and pipeline definition of this repository signed SHA256SUMS
+   cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json `
+     --certificate-identity 'https://circleci.com/api/v2/projects/7bbdbb66-6ba8-4f6c-982e-d4fb401ec257/pipeline-definitions/8b2a66db-3f28-5c80-88e4-03f4694b5b60' `
+     --certificate-oidc-issuer 'https://oidc.circleci.com'
+   if ($LASTEXITCODE -ne 0) { throw 'the signature does not verify: stop' }
+
+   # 2. the ref: a job of any branch can sign with that identity, so the certificate must also say that the job ran for refs/heads/main
+   #    (the long string is the OID 1.3.6.1.4.1.57264.1.14 followed by the value refs/heads/main)
+   $material = (Get-Content -Raw -LiteralPath SHA256SUMS.sigstore.json | ConvertFrom-Json).verificationMaterial
+   if ($material.certificate) { $cert = $material.certificate.rawBytes } else { $cert = $material.x509CertificateChain.certificates[0].rawBytes }
+   $hex = -join ([Convert]::FromBase64String($cert) | ForEach-Object { $_.ToString('x2') })
+   if ($hex -notmatch '2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e') { throw 'NOT signed for refs/heads/main: stop' }
+
+   # 3. the file: its checksum is in the signed list
+   $want = ((Get-Content SHA256SUMS | Where-Object { $_ -match [regex]::Escape($zip) }) -split '\s+')[0]
+   if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLower() -ne $want) { throw "the checksum of $zip is not the signed one: stop" }
+
+   Expand-Archive -LiteralPath $zip -DestinationPath .
+   cd "machine-runner-swarm-$version"
    ```
+
+   The paths below are relative to the unpacked bundle. [How the signature works](https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/docs/releasing.md#how-the-signature-works) explains the ref check.
 
 3. Pull the base image before you create the Swarm, because the network of the host drops for a few seconds after `docker swarm init`. A Server 2025 host runs this `ltsc2022` image too.
 
@@ -44,7 +69,7 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
    Copy-Item -Recurse windows\stack deploy
    ```
 
-5. Run the helper. It creates the Swarm, labels the node with the image tags it can run and as the node of the token proxy, asks for the token with hidden input, creates the secrets `windows-default-token` (the token proxy holds it) and `runner-placeholder-token` (what the runners read), and deploys your copy. Use the IPv4 address of the host. This is the whole install: the service `runner-distributor-windows` downloads and verifies CircleCI's current runner, the pinned portable Git and the token proxy of this release on its own.
+5. Run the helper. It creates the Swarm, labels the node with the image tags it can run (the node is a manager, where the token proxy runs by default, so it needs no other label), asks for the token with hidden input, creates the secrets `windows-default-token` (the token proxy holds it) and `runner-placeholder-token` (what the runners read), and deploys your copy. Use the IPv4 address of the host. This is the whole install: the service `runner-distributor-windows` downloads and verifies the runner that the stack pins (the newest version that CI tests) and the pinned portable Git on its own, and Swarm pulls the token proxy image of this release by its digest.
 
    ```powershell
    .\windows\Setup.ps1 -InitSwarm -AdvertiseAddr <host IPv4 address> -Class windows-default -StackFile .\deploy\runners.yaml -Deploy

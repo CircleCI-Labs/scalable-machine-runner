@@ -26,19 +26,31 @@
     {{- end -}}
   {{- end -}}
 
-  {{- $snippet := `# Create the resource classes, and one token for each
-for class in linux-default linux-java linux-hardened; do
-  circleci runner resource-class create <namespace>/$class --org <org> --generate-token
-done
+  {{- $snippet := `# Create a resource class, and a token for it
+circleci runner resource-class create <namespace>/linux-default --org <org> --generate-token
 
-# On the node: get a release, check the node, create the Swarm, install the runner
-git clone --branch <release-tag> https://github.com/CircleCI-Labs/scalable-machine-runner.git
-cd scalable-machine-runner
-sudo linux/setup.sh --check --swarm-init --install
+# On the node: download a release, verify its signature, the ref in its certificate and its checksum, and unpack it
+version=0.1.0   # the release that you want
+base="https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download/v${version}"
+curl -fsSLO "${base}/machine-runner-swarm-${version}.tar.gz" -O "${base}/SHA256SUMS" -O "${base}/SHA256SUMS.sigstore.json"
+cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://circleci.com/api/v2/projects/7bbdbb66-6ba8-4f6c-982e-d4fb401ec257/pipeline-definitions/8b2a66db-3f28-5c80-88e4-03f4694b5b60" \
+  --certificate-oidc-issuer "https://oidc.circleci.com"
+jq -r '.verificationMaterial | (.certificate // .x509CertificateChain.certificates[0]).rawBytes' SHA256SUMS.sigstore.json | base64 -d \
+  | od -An -v -tx1 | tr -d ' \n' | grep -Eq '2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' \
+  && echo "signed for refs/heads/main" || { echo "NOT signed for refs/heads/main: stop"; false; }
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf "machine-runner-swarm-${version}.tar.gz" && cd "machine-runner-swarm-${version}"
 
-# Store the tokens as Swarm secrets, then deploy your copy of the stack file
-sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened
-mkdir deploy && cp linux/stack/runners.yaml deploy/runners.yaml
+# Check the node and create the Swarm
+sudo linux/setup.sh --check --swarm-init
+
+# Store the token as a Swarm secret, and a placeholder for the runners
+sudo linux/setup.sh --secret linux-default
+printf %s machine-runner-swarm-placeholder | sudo linux/setup.sh --secret runner-placeholder
+
+# Deploy your copy of the stack: the runner-distributor service installs the runner on every node
+cp -r linux/stack deploy
 sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml` -}}
 
   {{- /* The sidebar is the drawer of the navigation on small screens (the hamburger menu of the theme needs it). */ -}}
@@ -64,10 +76,10 @@ sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml` -}}
           <figure class="cci-terminal" aria-label="Output of docker stack services runners">
             <figcaption><span>Terminal</span></figcaption>
 <pre><code><span class="cci-t-prompt">$</span> docker stack services runners
-<span class="cci-t-head">NAME                     MODE         REPLICAS<span class="cci-t-image">   IMAGE</span></span>
-runners_linux-default    replicated   <span class="cci-t-ok">2/2</span><span class="cci-t-image">        cimg/base:2026.10</span>
-runners_linux-java       replicated   <span class="cci-t-ok">1/1</span><span class="cci-t-image">        cimg/openjdk:21.0</span>
-runners_linux-hardened   replicated   <span class="cci-t-ok">1/1</span><span class="cci-t-image">        cimg/base:2026.10</span></code></pre>
+<span class="cci-t-head">NAME                         MODE         REPLICAS</span>
+runners_linux-default        replicated   <span class="cci-t-ok">2/2</span>
+runners_token-proxy          replicated   <span class="cci-t-ok">1/1</span>
+runners_runner-distributor   global       <span class="cci-t-ok">1/1</span></code></pre>
           </figure>
         </div>
       </div>
@@ -100,7 +112,7 @@ runners_linux-hardened   replicated   <span class="cci-t-ok">1/1</span><span cla
                 {{- partial "components/codeblock" (dict "filename" "" "lang" "bash" "base_url" "" "content" $snippet "options" "") -}}
                 {{- partialCached "components/codeblock-copy-button" (dict "filename" "") "" -}}
               </div>
-              <p class="cci-snippet-note">The shipped stack file defines three classes. <a href="{{ "docs/get-started/quickstart-linux/" | relURL }}">Quickstart on Linux</a> explains each step, and has the cluster fork and a first job.</p>
+              <p class="cci-snippet-note">The shipped stack file defines one class, <code>linux-default</code>. <a href="{{ "docs/get-started/quickstart-linux/" | relURL }}">Quickstart on Linux</a> explains each step, and has the cluster fork and a first job.</p>
             </div>
             {{ $after | safeHTML }}
           {{- else -}}

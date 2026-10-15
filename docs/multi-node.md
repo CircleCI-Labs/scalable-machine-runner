@@ -115,7 +115,7 @@ One cluster can have `x86_64` and `aarch64` nodes. Nothing else is needed on the
 - **Which build a node gets.** Each `runner-distributor` task reads the architecture of its own node (`x86_64` is `amd64`, `aarch64` is `arm64`), downloads `circleci-runner_linux_<arch>.tar.gz` of that architecture, and checks its SHA-256 against the entry of that architecture in the manifest. If you set `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, list the hash of every architecture in the cluster. One pinned version, or `current`, gives each node the build for its own architecture. A tarball that does not match its entry installs nothing on that node, and the other nodes still install.
 - **Placement.** A class without an architecture constraint can run on both kinds of node. Add `node.platform.arch == aarch64` or `node.platform.arch == x86_64` to the `deploy.placement.constraints` of the classes that need one. The constraint is added to the shared ones of `runners.yaml`. When the nodes of that architecture are drained or gone, the class stays `Pending` with `no suitable node`. It never moves to the other architecture.
 - **What is tested.** [`linux/tests/mixed-arch.sh`](../linux/tests/mixed-arch.sh) (the optional CI job `linux-mixed-arch`, see [CI](ci.md)) runs the shipped stack file on a Swarm of an amd64 manager and an arm64 worker. It checks that each node installs the runner of its own architecture (the ELF header of the binary, and the tarball SHA-256 of that architecture), that a release whose arm64 tarball does not match its manifest entry installs on the amd64 node and not on the arm64 node, that the real arm64 runner prints its version in a stock `cimg/base`, and that classes constrained by `node.platform.arch` run only on their architecture, also when the other node is drained.
-- **What is emulated, and what is real.** The arm64 worker of that test is a `docker:dind` container under QEMU user-mode emulation on an x86_64 host, not Arm hardware. QEMU cannot run `runc` or program `iptables` itself, so the emulated engine uses native copies of those helpers, and IPVS (the virtual IP of a service) and IPsec on overlays do not work there. The test therefore proves the install, the verification and the placement logic, and not the speed or the system call behavior of an Arm node. A real arm64 node is tested by the single-node jobs `linux-arm64` (the distributor and the shipped stack) and `e2e-linux-arm64` (a real runner on an Arm VM).
+- **What is emulated, and what is real.** The arm64 worker of that test is a `docker:dind` container under QEMU user-mode emulation on an x86_64 host, not Arm hardware. QEMU cannot run `runc` or program `iptables` itself, so the emulated engine uses native copies of those helpers, and IPVS (the virtual IP of a service) and IPsec on overlays do not work there. The test therefore proves the install, the verification and the placement logic, and not the speed or the system call behavior of an Arm node. It deploys the plain-overlay copy of the stack files, the opt-out of [Encrypted class networks](#encrypted-class-networks), because IPsec cannot run under emulation. The test `placement.sh` runs the shipped, encrypted files on two nodes and checks that a replica reaches its peer on the other node. A real arm64 node is tested by the single-node jobs `linux-arm64` (the distributor and the shipped stack) and `e2e-linux-arm64` (a real runner on an Arm VM).
 
 ### Windows nodes
 
@@ -225,6 +225,7 @@ Swarm needs these ports between all nodes of the cluster. Open them only for the
 | 2377 | TCP | Cluster management | Managers only receive it |
 | 7946 | TCP and UDP | Node discovery | All nodes |
 | 4789 | UDP | Overlay network (VXLAN) | All nodes |
+| IP protocol 50 (ESP) | IPsec | Encrypted overlay networks (the Linux class networks). It is a protocol, not a port | All nodes with Linux services |
 
 The runner containers need no inbound ports, and the stack publishes none. Outbound HTTPS from each node is the only other requirement. A Linux node reaches the release bucket of CircleCI for the runner download of the distributor, or your mirror. Refer to [Egress hosts](security.md#egress-hosts).
 
@@ -234,6 +235,7 @@ Ubuntu with `ufw`:
 $ sudo ufw allow from <cluster subnet> to any port 2377 proto tcp
 $ sudo ufw allow from <cluster subnet> to any port 7946
 $ sudo ufw allow from <cluster subnet> to any port 4789 proto udp
+$ sudo ufw allow from <cluster subnet> proto esp
 ```
 
 RHEL with `firewalld`:
@@ -242,8 +244,19 @@ RHEL with `firewalld`:
 $ sudo firewall-cmd --permanent --new-zone=swarm
 $ sudo firewall-cmd --permanent --zone=swarm --add-source=<cluster subnet>
 $ sudo firewall-cmd --permanent --zone=swarm --add-port=2377/tcp --add-port=7946/tcp --add-port=7946/udp --add-port=4789/udp
+$ sudo firewall-cmd --permanent --zone=swarm --add-protocol=esp
 $ sudo firewall-cmd --reload
 ```
+
+In a cloud, add the protocol to the security group of the nodes: a rule for the protocol number 50 (ESP), with the security group of the nodes as the source. Most consoles list it as "Custom protocol 50" or "ESP".
+
+### Encrypted class networks
+
+The Linux stack files create the class networks as encrypted overlays: `driver: overlay` with `driver_opts: {encrypted: "true"}`. The runners reach the token proxy over `http://token-proxy:8080`, and that traffic carries task tokens, the job configuration with the secrets of its contexts, and step output. Between nodes it would cross the network in clear text, and anyone on that network could also inject packets into the overlay, which the source-address guarantee of the proxy depends on. Swarm encrypts the VXLAN traffic between the nodes with IPsec instead, and a node that cannot reach another over ESP drops that traffic: tasks on different nodes then cannot reach each other, which looks like a runner that cannot find `token-proxy`. If a runner cannot reach the proxy from another node, check ESP first, with the ports above.
+
+- **What you pay.** IPsec costs CPU on every node and some throughput, which a class of long jobs with little network traffic never notices. A single-node Swarm sends nothing between nodes, so it needs nothing open.
+- **Opt out.** If the network between your nodes is yours (a private network, or a link that you encrypt another way), delete the line `driver_opts: {encrypted: "true"}` from every class network of your copy of the Linux stack files (`runners.yaml` and the add-on files you use), remove the stack, and deploy again. A Swarm network cannot change after it exists, so a plain `docker stack deploy` leaves an existing network as it is: run `docker stack rm runners`, wait until the networks are gone (`docker network ls`), and deploy again. Without the option, ESP is not needed.
+- **Windows.** Docker does not support encrypted overlay networks for Windows containers, so the Windows stack files set no `driver_opts`, and their overlay carries the traffic of the Windows classes and `token-proxy-windows` in clear text between nodes. Keep the Windows nodes on a network that you trust, or encrypt the link between them at the host (for example with Windows Firewall connection security rules for IPsec). The Windows stack files also create no network of their own for each class, so all of their classes share the default overlay of the stack.
 
 Windows Server:
 

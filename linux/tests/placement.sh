@@ -57,6 +57,18 @@ nodes=$(idocker "$SWARM_TEST_MGR" service ps --filter desired-state=running --fo
 echo "RESULT test=placement step=spread service=linux-default nodes=$nodes"
 [[ $nodes == "$SWARM_TEST_MGR,$SWARM_TEST_WRK" || $nodes == "$SWARM_TEST_WRK,$SWARM_TEST_MGR" ]] || fail "replicas were not spread over both nodes: $nodes"
 
+# 4b. the class network is an encrypted overlay (IPsec between the nodes, docs/multi-node.md), and it carries traffic from one node to the other:
+# a listener in the replica on the worker answers the replica on the manager
+net_opts=$(idocker "$SWARM_TEST_MGR" network inspect "${STACK}_linux-default" --format '{{json .Options}}')
+[[ $net_opts == *'"encrypted":"true"'* ]] || fail "the class network of linux-default is not an encrypted overlay: $net_opts"
+cm=$(idocker "$SWARM_TEST_MGR" ps -q --filter "label=com.docker.swarm.service.name=${STACK}_linux-default" | head -n 1)
+cw=$(idocker "$SWARM_TEST_WRK" ps -q --filter "label=com.docker.swarm.service.name=${STACK}_linux-default" | head -n 1)
+ip_w=$(idocker "$SWARM_TEST_WRK" inspect -f "{{(index .NetworkSettings.Networks \"${STACK}_linux-default\").IPAddress}}" "$cw")
+docker exec "$SWARM_TEST_WRK" docker exec -d "$cw" python3 -m http.server 8000
+wait_for 30 bash -c "docker exec $SWARM_TEST_MGR docker exec $cm bash -c 'timeout 3 bash -c \"</dev/tcp/$ip_w/8000\"'" ||
+  fail "the replica on the manager cannot reach the replica on the worker over the encrypted class network (is IP protocol 50, ESP, open between the nodes?)"
+echo "RESULT test=placement step=encrypted_overlay network=linux-default encrypted=true cross_node_connection=ok"
+
 default_tasks() { # "node|state" of every current linux-default task (a pending task has no node)
   idocker "$SWARM_TEST_MGR" service ps --filter desired-state=running --format '{{.Node}}|{{.CurrentState}}' "${STACK}_linux-default"
 }

@@ -88,7 +88,7 @@ services:
           - spread: node.id
 
 networks:
-  linux-default-ssh: {driver: overlay}
+  linux-default-ssh: {driver: overlay, driver_opts: {encrypted: "true"}}
 
 secrets:
   runner-placeholder-token: {external: true}

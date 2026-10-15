@@ -119,8 +119,8 @@ services:
 
 networks:
   # One overlay per class, as in runners.yaml.
-  linux-java: {driver: overlay}
-  linux-hardened: {driver: overlay}
+  linux-java: {driver: overlay, driver_opts: {encrypted: "true"}}
+  linux-hardened: {driver: overlay, driver_opts: {encrypted: "true"}}
 
 secrets:
   runner-placeholder-token: {external: true}   # every runner: a made-up token (runners.yaml)

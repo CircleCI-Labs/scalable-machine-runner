@@ -248,6 +248,8 @@ check_install() {
 # ---------------------------------------------------------------------------------------------
 publish real "$REAL"
 create_secrets "$MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" "${EXTRA_SERVICES[@]}"
+# the arm64 worker is QEMU user-mode emulation, where IPsec on an overlay does not work (docs/multi-node.md): deploy the documented plain-overlay copy
+export SWARM_TEST_PLAIN_OVERLAY=1
 deploy "$REAL" 0 0 0
 dist_up() { [[ $(tasks_of runner-distributor | grep -c ' Running') -eq 2 ]]; }
 wait_until dist_up

@@ -211,8 +211,8 @@ services:
 
 networks:
   # One overlay per class, as in runners.yaml. The forwarder and the keeper are on both.
-  linux-microvm: {driver: overlay}
-  linux-microvm-docker: {driver: overlay}
+  linux-microvm: {driver: overlay, driver_opts: {encrypted: "true"}}
+  linux-microvm-docker: {driver: overlay, driver_opts: {encrypted: "true"}}
 
 secrets:
   runner-placeholder-token: {external: true}   # every runner: a made-up token (runners.yaml)

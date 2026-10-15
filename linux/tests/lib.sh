@@ -374,6 +374,9 @@ deploy_stack() {
     args+=(-c "/stack/$f")
   done
   cp "$override" "$tmp/override.yaml"
+    # SWARM_TEST_PLAIN_OVERLAY=1: the documented opt-out of the encrypted class networks (delete driver_opts in the copy), for a node that cannot do IPsec
+    # (a worker under QEMU user-mode emulation). Every other test runs the shipped file, encrypted.
+    [[ -z ${SWARM_TEST_PLAIN_OVERLAY:-} ]] || sed -i 's/, driver_opts: {encrypted: "true"}//' "$tmp/$f"
   docker cp "$tmp/override.yaml" "$node:/stack/override.yaml"
   rm -rf "$tmp"
   for f in ${EXTRA_OVERRIDES:-}; do

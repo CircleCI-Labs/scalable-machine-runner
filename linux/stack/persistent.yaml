@@ -67,7 +67,7 @@ services:
           - node.hostname == CHANGE-ME   # the node that holds the volume
 
 networks:
-  linux-persistent: {driver: overlay}
+  linux-persistent: {driver: overlay, driver_opts: {encrypted: "true"}}
 
 volumes:
   runner-bin: {}   # the volume that runner-distributor fills (runners.yaml)

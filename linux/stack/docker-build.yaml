@@ -78,7 +78,7 @@ services:
           - node.labels.machine-runner-swarm.microvm != true   # the socket cannot cross into a Kata VM (microvm.yaml)
 
 networks:
-  linux-docker-build: {driver: overlay}
+  linux-docker-build: {driver: overlay, driver_opts: {encrypted: "true"}}
 
 secrets:
   runner-placeholder-token: {external: true}

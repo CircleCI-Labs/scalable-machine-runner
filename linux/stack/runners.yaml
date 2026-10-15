@@ -217,8 +217,10 @@ services:
           - "${MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node.role == manager}"   # the node that keeps proxy-state; choose one that runs no jobs when you can
 
 networks:
-  # One overlay per class: classes cannot reach each other (replicas of a class still can).
-  linux-default: {driver: overlay}
+  # One overlay per class: classes cannot reach each other (replicas of a class still can). Encrypted: the runners reach the token-proxy over plain
+  # http, and that traffic (task tokens, job configuration with context secrets, step output) crosses nodes through IPsec, which needs IP protocol 50
+  # (ESP) open between the nodes next to 2377, 7946 and 4789. To opt out, delete driver_opts in your copy: docs/multi-node.md, "Encrypted class networks".
+  linux-default: {driver: overlay, driver_opts: {encrypted: "true"}}
 
 secrets:
   runner-placeholder-token: {external: true}   # every runner: a made-up token (see the top of this file)

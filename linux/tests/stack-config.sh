@@ -25,6 +25,17 @@ for files in "runners.yaml" "classes-extra.yaml" "ssh-rerun.yaml" "microvm.yaml"
   cfg=$(docker stack config "${args[@]}") || { echo "FAIL: docker stack config rejected: $files"; exit 1; }
 done
 
+# Every class network is an encrypted overlay: the traffic between a runner and the token proxy (task tokens, context secrets, step output) is plain http and crosses
+# the nodes, so Swarm encrypts it with IPsec (ESP, IP protocol 50: docs/multi-node.md). The opt-out is to delete driver_opts in a copy of the file.
+cfg_all=$(docker stack config -c "$dir/runners.yaml" -c "$dir/classes-extra.yaml" -c "$dir/docker-build.yaml" -c "$dir/persistent.yaml" -c "$dir/ssh-rerun.yaml" -c "$dir/microvm.yaml")
+nets=$(awk '/^networks:/ { f = 1; next } /^[^ ]/ { f = 0 } f && /^  [^ ]+:$/ { sub(/^  /, ""); sub(/:$/, ""); print }' <<< "$cfg_all")
+for n in $nets; do
+  if ! awk -v n="$n" '/^networks:/ { f = 1; next } /^[^ ]/ { f = 0 } f && $0 == "  " n ":" { g = 1; next } f && /^  [^ ]/ { g = 0 } g' <<< "$cfg_all" | tr -d '\n' | grep -q 'driver: overlay *driver_opts: *encrypted: "true"'; then
+    echo "  network $n: not an encrypted overlay (driver: overlay, driver_opts: {encrypted: \"true\"})"
+    problems=$((problems + 1))
+  fi
+done
+[[ $(wc -w <<< "$nets") -eq 8 ]] || { echo "  expected 8 class networks in the Linux stack files, found $(wc -w <<< "$nets"): $nets"; problems=$((problems + 1)); }
 # The shipped runners.yaml is ONE class (a first job needs one resource class, one token and one network): the others are add-on stack files.
 cfg_base=$(docker stack config -c "$dir/runners.yaml")
 base_runners=$(awk '/^services:/ { f = 1; next } /^[^ ]/ { f = 0 } f && /^  [^ ]+:$/ { sub(/^  /, ""); sub(/:$/, ""); print }' <<< "$cfg_base" | sort | paste -sd' ' -)

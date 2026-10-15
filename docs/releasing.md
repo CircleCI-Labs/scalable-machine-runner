@@ -55,7 +55,7 @@ git cliff --unreleased --tag "$(git cliff --bumped-version)" --strip header   # 
 
 git-cliff writes the notes of the new version for the body of the GitHub release. Breaking changes come first. Then come features, bug fixes, performance changes, and reverts. Each entry shows the scope and the message. GitHub adds `(#123)` to the title of a squash merge, and the notes link that number to the pull request. An entry without a pull request number links to its commit instead.
 
-[CHANGELOG.md](../CHANGELOG.md) in the repository is a short page, not a list of changes. The release bundle holds a generated `CHANGELOG.md` with the notes of every release, from `git cliff`.
+[CHANGELOG.md](../CHANGELOG.md) in the repository is not a list of changes: it points to [GitHub Releases](https://github.com/CircleCI-Labs/scalable-machine-runner/releases), where the notes of every release are. The release bundle holds a generated `CHANGELOG.md` with the notes of every release, from `git cliff`.
 
 ## What a release contains
 

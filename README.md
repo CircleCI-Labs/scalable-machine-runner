@@ -83,7 +83,7 @@ Linux runs on Ubuntu LTS and RHEL 8 or later, on amd64, arm64, ppc64le and s390x
 | [Examples](examples) | Job configs for every class, starting with [`linux-hello.yml`](examples/linux-hello.yml) |
 | [CI/CD](docs/ci.md), [Releasing](docs/releasing.md), [Contributing](CONTRIBUTING.md) | What the pipeline tests, how a release is made, and how to contribute |
 
-Each [release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) carries a bundle with the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, with a keyless signature. Refer to [Verify a release](docs/install-linux.md#verify-a-release). The project uses [Semantic Versioning](https://semver.org/) and starts at `0.x`, so review the [changelog](CHANGELOG.md) before you upgrade.
+Each [release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) carries a bundle with the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, with a keyless signature. Refer to [Verify a release](docs/install-linux.md#verify-a-release). The project uses [Semantic Versioning](https://semver.org/) and starts at `0.x`, so read the [release notes on GitHub](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) before you upgrade ([CHANGELOG.md](CHANGELOG.md) points there).
 
 ## Support
 

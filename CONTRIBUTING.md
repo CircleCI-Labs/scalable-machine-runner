@@ -48,7 +48,20 @@ Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): 
 | `chore` | Maintenance with no user-visible change |
 | `refactor`, `perf` | Code changes that keep behavior, or improve speed |
 
-Common scopes are `linux`, `windows`, `docs`, `readme`, and `ci`. Add `!` after the type or scope, or a `BREAKING CHANGE:` footer, for a breaking change. For example: `feat(linux)!: rename the persistent service`.
+Common scopes are `linux`, `windows`, `docs`, `readme`, and `ci`.
+
+A breaking change appears first in the release notes. Mark it in the commit message, in one of two ways, and write what the user has to change:
+
+- Add `!` after the type or scope: `feat(linux)!: rename the persistent service`.
+- Add a `BREAKING CHANGE:` footer:
+
+  ```text
+  feat(linux): rename the persistent service
+
+  BREAKING CHANGE: the service is now linux-persistent. Rename it in your stack file.
+  ```
+
+While the version is `0.x`, a breaking change raises the minor number.
 
 Keep each commit small and atomic.
 

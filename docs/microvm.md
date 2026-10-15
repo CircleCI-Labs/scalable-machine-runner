@@ -8,7 +8,7 @@ page-description: Run each job in its own microVM with Kata Containers on labele
 
 A container shares the kernel of its node. A [Kata Containers](https://katacontainers.io/) microVM does not: every container starts in a small virtual machine with its own Linux kernel, and a job that breaks out of its container reaches the guest, not the node. The add-on stack file `linux/stack/microvm.yaml` runs resource classes this way. It is optional, and the default classes do not change.
 
-Use it when jobs need a boundary stronger than a container, or when a job needs privileges that are unsafe on a shared kernel. The second class, `linux-microvm-docker`, lets a job run its own Docker daemon inside its VM, so an image build needs no host Docker socket. It is a safer answer than the [docker-build class](docker-builds.md#pattern-a-the-host-docker-engine) for the same need.
+Use it when jobs need a boundary stronger than a container, or when a job needs privileges that are unsafe on a shared kernel. The second class, `linux-microvm-docker`, lets a job run its own Docker daemon inside its VM, so an image build needs no host Docker socket. It is a safer answer than the [docker-build class](docker-builds.md#pattern-a-the-host-docker-engine) for the same need. It builds images: `docker run`, Compose and service containers do not work in it ([Run Docker inside the VM](#run-docker-inside-the-vm)).
 
 > [!NOTE]
 > This add-on is tested on amd64 with Kata 4.2.0, Cloud Hypervisor and QEMU, in nested virtualization on AWS, with a fake CircleCI API. Real jobs, other clouds, and arm64 are not tested. Refer to [What is tested](#what-is-tested).
@@ -32,8 +32,9 @@ Swarm has no per-service container runtime: a service cannot ask for Kata. The D
 | Job user | `circleci`, with sudo | `circleci`, with sudo | `circleci`, with sudo |
 | Class token in the job | No, the proxy holds it | No | No |
 | The runner | The per-node volume, read-only | Downloaded by the container, then verified | Downloaded by the container, then verified |
-| Capabilities | Docker's defaults, minus `NET_RAW` and `MKNOD` | The same | Docker's defaults, plus `SYS_ADMIN` and `NET_ADMIN` |
-| Docker in the job | No | No | Its own `dockerd` in the VM, on a tmpfs |
+| Capabilities | Docker's defaults, minus `NET_RAW` and `MKNOD` | The same | Docker's defaults, plus `SYS_ADMIN` (no `NET_ADMIN`, and `NET_RAW` stays) |
+| Replicas | 2 | 2 | 1, and keep it at 1 ([Security](#security)) |
+| Docker in the job | No | No | Its own `dockerd` in the VM, on a tmpfs, for builds |
 
 ## Requirements
 
@@ -173,7 +174,9 @@ The file [`examples/linux-microvm.yml`](../examples/linux-microvm.yml) has a job
 
 ## Run Docker inside the VM
 
-A job on `linux-microvm-docker` starts its own Docker daemon in the VM and builds with it. No socket of the node is involved, so the job cannot reach other jobs or the node. The class has `SYS_ADMIN` and `NET_ADMIN`, and a 6 GiB tmpfs at `/var/lib/docker`, because overlayfs cannot sit on the virtiofs root of the VM. Images and the build cache therefore live in the memory of the VM and vanish with the job.
+A job on `linux-microvm-docker` starts its own Docker daemon in the VM and builds with it. No socket of the node is involved, so the job cannot reach other jobs or the node. The class has `SYS_ADMIN` and no `NET_ADMIN`, and a 6 GiB tmpfs at `/var/lib/docker`, because overlayfs cannot sit on the virtiofs root of the VM. Images and the build cache therefore live in the memory of the VM and vanish with the job.
+
+Without `NET_ADMIN` a job cannot change the address of its container, which the [token proxy](security.md#the-token-proxy) trusts to tell runners apart. The price is the network of the daemon: start it with `--bridge=none --iptables=false`, because it cannot create a bridge or firewall rules, and build with `--network=host`, so the build steps use the network of the VM.
 
 The VM mounts `/sys`, `/sys/fs/cgroup`, and `/proc/sys` read-only, and the job must remount them before `dockerd` can start containers:
 
@@ -181,12 +184,19 @@ The VM mounts `/sys`, `/sys/fs/cgroup`, and `/proc/sys` read-only, and the job m
 $ sudo mount -o remount,rw /sys
 $ sudo mount -o remount,rw /sys/fs/cgroup
 $ sudo mount -o remount,rw /proc/sys
-$ sudo sh -c 'dockerd > /tmp/dockerd.log 2>&1 &'
+$ sudo sh -c 'dockerd --bridge=none --iptables=false > /tmp/dockerd.log 2>&1 &'
 $ timeout 60 sh -c 'until sudo docker info > /dev/null 2>&1; do sleep 1; done'
-$ sudo docker build -t app .
+$ sudo docker build --network=host -t app .
 ```
 
-Rootless BuildKit does not work in the VM, because file capabilities do not survive virtiofs, and a rootful `dockerd` or `buildkitd` does. The class drops no capability: the containers that `dockerd` starts get Docker's default set, and `runc` fails with `unable to apply caps` when the VM container lacks one of them, such as `NET_RAW` or `MKNOD`. The guest kernel has no seccomp profile around the job, so the VM, not the container, is the boundary.
+What works and what does not:
+
+- **Builds work**, and so do `docker load`, `docker save`, `docker create` with `docker cp`, and a push to a registry. Every `RUN` step needs `--network=host`. A Dockerfile cannot ask for it, so pass the flag to every build, also in `docker buildx build`.
+- **`docker run`, Compose and service containers do not work.** Starting a container needs `NET_ADMIN` (`failed to create default sandbox: operation not permitted`, also with `--network=host` and `--network=none`). Use another class for jobs that start containers. If you need it here, add `NET_ADMIN` to `cap_add` in your copy of the stack file, and keep the class at one replica on its own overlay, for trusted projects only: a job with `NET_ADMIN` can take over the address of another container.
+- **The class keeps `NET_RAW`.** BuildKit starts every `RUN` step with Docker's default capabilities, and `runc` fails with `unable to apply caps` when the VM container has dropped one of them, such as `NET_RAW` or `MKNOD`, so the class drops none. Raw sockets stay possible, so a job can send packets with another source address into its overlay. Refer to [Security](#security) for why one replica keeps that harmless.
+- **Rootless BuildKit does not work** in the VM, because file capabilities do not survive virtiofs. A rootful `dockerd` or `buildkitd` does.
+
+The guest kernel has no seccomp profile around the job, so the VM, not the container, is the boundary.
 
 ## Rolling updates
 
@@ -200,6 +210,7 @@ The service `microvm-netkeep` closes the gap. It is global, so one small VM slee
 - **What it does not add.** The VM does not filter egress, and replicas of a class still share an overlay network. The job holds no class token: its runner has the placeholder, and the proxy adds the token of the class to the claim of each container once.
 - **No dedicated nodes for the runner.** No volume is shared between VMs, so a job with `SYS_ADMIN` has nothing writable of the node or of other jobs to reach, and the classes can share nodes. A bug in virtiofs, the VMM, or the guest kernel could still reach the node. If that residual risk matters to you, give `linux-microvm-docker` nodes of its own: label them `machine-runner-swarm.class.linux-microvm-docker=true`, as [Multi-Node Clusters](multi-node.md#labels-used-by-this-repository) describes, add `node.labels.machine-runner-swarm.class.linux-microvm-docker == true` to the constraints of `linux-microvm-docker` in your copy of the stack file, and `!= true` to those of `linux-microvm`.
 - **Tampering with the runner.** A job that changes the runner in its VM changes its own copy, which dies with the VM ([above](#the-runner-in-a-vm)). The entrypoint still checks the binary against its record at the start, as for every class.
+- **Why one replica.** The token proxy accepts a claim from an address that Swarm lists for the class, once for each container. The classes of the stack files drop `NET_RAW`, so a job cannot send packets from another address. `linux-microvm-docker` cannot drop it (BuildKit needs it), and it has no `NET_ADMIN` either, so a job there can send raw packets but cannot take over an address. With one replica, no other runner of the class is on its overlay to impersonate, because each class has its own overlay. The stack-config test requires `replicas: 1` and `SYS_ADMIN` as the only added capability. To run more builds at once, copy the service under another name (and resource class), with its own network, secret and proxy entries ([Add a class](resource-classes.md#define-a-class)), and do not raise `replicas`.
 - **The guard.** `linux-microvm-docker` adds `SYS_ADMIN`. On runc that is a host escape. The label and the constraints keep the class on microVM nodes, and the entrypoint check keeps it off a node that has the label but not the runtime. The stack-config test requires `MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true` on every service that adds `SYS_ADMIN`, in every stack file.
 - **A bigger attack surface under it.** The node now runs `virtiofsd`, a VMM, and the Kata shim for every job. Keep Kata and the node kernel current.
 
@@ -229,7 +240,7 @@ Dragonball is the built-in VMM of runtime-rs and works with the same steps. It s
 - The real runner claims through the real token proxy from inside a VM and runs a task as the job user. The class token is in no file, variable, or process of the VM.
 - The runner of a VM: it is downloaded into the VM and verified, nothing is mounted at its path, a root shell that rewrites the binary and the record changes nothing for the next VM, a download with a wrong SHA-256 is refused (exit 80), and a floating version resolves in the VM.
 - A forced rolling update of a class replaces its VM, because `microvm-netkeep` holds the overlay. A control without it shows the hang.
-- `dockerd` starts in the VM, uses `overlay2` on the tmpfs, builds an image, and runs it.
+- `dockerd` starts in the VM with `--bridge=none --iptables=false`, uses `overlay2` on the tmpfs, and builds an image with `--network=host` (its `RUN` step ran on the guest kernel). The class has `SYS_ADMIN` and no `NET_ADMIN`, and the stack-config test pins both and the replica count.
 - The guard: the label on a runc node makes both classes exit 80.
 - QEMU passes the same checks (`SWARM_TEST_KATA_VMM=qemu`).
 

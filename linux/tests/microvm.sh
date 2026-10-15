@@ -13,7 +13,7 @@
 #                     work through the forwarder (a plain Kata service shows the problem it fixes), /etc/resolv.conf is read-only, the VM's size,
 #                     and a rolling update replaces a VM (microvm-netkeep)
 #   3. the proxy      the real runner claims through the real token proxy from a VM, and the API sees the class token that the proxy added
-#   4. dockerd in VM  a job starts dockerd in its VM (remounts, tmpfs data-root), builds an image and runs a container, no host socket. Then the
+#   4. dockerd in VM  a job starts dockerd in its VM (remounts, tmpfs data-root), builds an image (no container is started: no NET_ADMIN, no bridge), no host socket. Then the
 #                     runner: it was downloaded into the VM, there is no shared volume to write, a guest with SYS_ADMIN that rewrites its own copy
 #                     (binary and record) changes nothing for the next VM, which downloads a fresh one; a download that does not match the SHA-256
 #                     is refused (exit 80); a floating version resolves in the VM
@@ -338,6 +338,11 @@ dc=$(cid_on "$KN" linux-microvm-docker)
 wait_for "$TIMEOUT" job_up linux-microvm-docker || fail "the fake job did not start in the docker class"
 caps=$(job "$KN" "$dc" 'grep CapBnd /proc/self/status | cut -f2')
 echo "RESULT test=microvm step=docker_class_caps bounding_set=$caps"
+# SYS_ADMIN (bit 21) for dockerd's mounts, and no NET_ADMIN (bit 12): a job that can reconfigure eth0 could take over the address of another container.
+# NET_RAW (bit 13) stays: BuildKit's RUN steps request it, and nested runc fails with "unable to apply caps" when the VM container has dropped it (docs/microvm.md).
+bnd=$((16#$caps))
+(((bnd >> 21) & 1)) || fail "linux-microvm-docker lacks SYS_ADMIN (bounding set $caps)"
+(((bnd >> 12) & 1)) && fail "linux-microvm-docker has NET_ADMIN (bounding set $caps)"
 
 # dockerd in the VM: the job's steps (docs/microvm.md)
 # the base image of the build: pinned by digest, pulled on this host when it is missing (the CI machine has none), and loaded into the VM under a local tag
@@ -349,7 +354,7 @@ set -eu
 sudo mount -o remount,rw /sys
 sudo mount -o remount,rw /sys/fs/cgroup
 sudo mount -o remount,rw /proc/sys
-sudo sh -c 'dockerd > /tmp/dockerd.log 2>&1 &'
+sudo sh -c 'dockerd --bridge=none --iptables=false > /tmp/dockerd.log 2>&1 &'
 i=0
 until sudo docker info > /dev/null 2>&1; do
   i=$((i + 1))
@@ -360,14 +365,17 @@ echo "driver=$(sudo docker info --format '{{.Driver}}') data_root_fs=$(stat -f -
 sudo docker load -q -i /tmp/build-base.tar > /dev/null
 mkdir -p /tmp/b && cd /tmp/b
 printf 'FROM smr-test/build-base:1\nRUN echo "built in $(uname -r)" > /built\nCMD ["cat", "/built"]\n' > Dockerfile
-sudo docker build -q -t built . > /dev/null
-echo "build=ok run=$(sudo docker run --rm built)"
+# no NET_ADMIN, no bridge: the build steps share the network of the VM container, and the result is read without starting a container
+sudo docker build --network=host -q -t built . > /dev/null
+c=$(sudo docker create built)
+echo "build=ok built=$(sudo docker cp "$c:/built" - | tar -xO)"
+sudo docker rm "$c" > /dev/null
 SH
 docker exec -i "$KN" docker exec -i "$dc" sh -c 'cat > /tmp/build.sh' < "$work/build.sh"
 out=$(job "$KN" "$dc" 'sh /tmp/build.sh 2>&1') || fail "dockerd in the VM: $out"
 echo "RESULT test=microvm step=dockerd_in_vm $(tr '\n' ' ' <<< "$out")"
 [[ $out == *"driver=overlay2 data_root_fs=tmpfs"* ]] || fail "dockerd in the VM does not use overlay2 on a tmpfs data-root: $out"
-[[ $out == *"build=ok run=built in $guest_kernel"* ]] || fail "the image build or run in the VM failed, or ran on another kernel: $out"
+[[ $out == *"build=ok built=built in $guest_kernel"* ]] || fail "the image build or run in the VM failed, or ran on another kernel: $out"
 
 # The runner is the container's own copy: there is no shared volume to remount, so root with SYS_ADMIN in the VM can rewrite its own binary and its record and
 # nothing else. The change dies with the VM: the next container downloads a fresh runner.

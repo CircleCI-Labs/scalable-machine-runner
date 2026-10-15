@@ -12,7 +12,7 @@
 # other class (runners.yaml and the other add-on stack files) carries machine-runner-swarm.microvm != true, so it stays off them.
 #
 #   linux-microvm         like linux-default (jobs keep sudo), in a microVM
-#   linux-microvm-docker  jobs can run their OWN dockerd inside the VM (SYS_ADMIN, NET_ADMIN, a tmpfs data-root): image builds
+#   linux-microvm-docker  jobs can run their OWN dockerd inside the VM (SYS_ADMIN, a tmpfs data-root, no bridge): image builds
 #                         without the host Docker socket. In a VM that is safe; on runc it would be a host escape, so
 #                         MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true makes the entrypoint exit 80 outside a Kata VM
 #
@@ -131,9 +131,12 @@ services:
       <<: *env
       CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-microvm-docker-{{.Task.Slot}}"
     networks: [linux-microvm-docker]
-    # No cap_drop: the containers that dockerd starts get Docker's default capabilities, and runc fails with "unable to apply caps" when the VM
-    # container has dropped one of them (NET_RAW, MKNOD).
-    cap_add: [SYS_ADMIN, NET_ADMIN]   # only ever inside a VM: the entrypoint guard keeps this off runc
+    # SYS_ADMIN only: dockerd's mounts need it. NO NET_ADMIN: with it a job could change the address of its container and take over another's, which
+    # the token proxy trusts (docs/security.md). Without it dockerd runs with --bridge=none --iptables=false, builds use --network=host, and
+    # "docker run" does not work (docs/microvm.md). No cap_drop either: BuildKit's RUN steps request Docker's default set, and runc fails with "unable
+    # to apply caps" when the VM container has dropped one of them (NET_RAW, MKNOD), so NET_RAW stays. The class therefore has ONE replica: a
+    # sibling in its overlay would be a target for a forged source address. Run a second class (its own overlay) for more jobs.
+    cap_add: [SYS_ADMIN]   # only ever inside a VM: the entrypoint guard keeps this off runc
     volumes:
       - *resolv
       - type: tmpfs

@@ -69,7 +69,7 @@ for s in "${services[@]}"; do
     check "$s" 'the microVM isolation constraint (microvm != true)' '^          - node.labels.machine-runner-swarm.microvm != true$'
   fi
   check "$s" 'a logging block with rotation' '^        max-size: 20m$'
-  # linux-microvm-docker has none by design: runc inside its VM needs Docker's default set (checked below)
+  # linux-microvm-docker has none by design: BuildKit and runc inside its VM need Docker's default set, NET_RAW included (checked below)
   [[ $s == linux-microvm-docker ]] || check "$s" 'cap_drop' '^    cap_drop:$'
   check "$s" 'CIRCLECI_RUNNER_NAME with the node and slot' "^      CIRCLECI_RUNNER_NAME: '\\{\\{\\.Node\\.Hostname\\}\\}-$s-\\{\\{\\.Task\\.Slot\\}\\}'$"
   if [[ $s == linux-persistent ]]; then
@@ -284,7 +284,14 @@ fi
 check linux-microvm 'MKNOD dropped like linux-default' '^      - MKNOD$'
 block=$(service_block linux-microvm-docker)
 check linux-microvm-docker 'SYS_ADMIN (dockerd inside the VM)' '^      - SYS_ADMIN$'
-check linux-microvm-docker 'NET_ADMIN' '^      - NET_ADMIN$'
+# NET_ADMIN would let a job change the address of its container (dockerd then runs with --bridge=none --iptables=false and builds use --network=host).
+# Nothing else is added either.
+if grep -qE '^      - NET_ADMIN$|^      - NET_RAW$|^      - ALL$' <<< "$block" || [[ $(awk '/^    cap_add:$/ { f = 1; next } /^    [a-z]/ { f = 0 } f' <<< "$block" | wc -l) -ne 1 ]]; then
+  echo "  linux-microvm-docker: cap_add must be SYS_ADMIN alone (NET_ADMIN lets a job take over the address of another container)"
+  problems=$((problems + 1))
+fi
+# One replica: the class keeps NET_RAW (BuildKit's build steps need it), so a sibling in its overlay would be a target for a forged source address.
+check linux-microvm-docker 'one replica (it keeps NET_RAW, so no sibling may share its overlay)' '^      replicas: 1$'
 check linux-microvm-docker 'a tmpfs data-root at /var/lib/docker' '^        target: /var/lib/docker$'
 check linux-microvm-docker 'the tmpfs mount type' '^      - type: tmpfs$'
 check linux-microvm-docker 'sudo for the job (the remounts and dockerd need root)' '^      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"$'

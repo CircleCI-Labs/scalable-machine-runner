@@ -13,7 +13,7 @@ set -euo pipefail
 
 session_begin
 publish_runner fake
-create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
+create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" "${EXTRA_SERVICES[@]}"
 cpus=$(($(idocker "$SWARM_TEST_MGR" node inspect self --format '{{.Description.Resources.NanoCPUs}}') / 1000000000))
 # Every replica reserves 2 CPUs. Leave room for the one linux-hardened replica; ask for 2 more
 # linux-default replicas than fit, and those two must stay Pending.
@@ -21,7 +21,7 @@ cpus=$(($(idocker "$SWARM_TEST_MGR" node inspect self --format '{{.Description.R
 fit=$((cpus / 2 - 1))
 replicas=$((fit + 2))
 make_override "$work/ov.yaml" "linux-default 1 CIRCLECI_RUNNER_MODE=continuous FAKE_JOB_INTERVAL=300" "linux-hardened 1 CIRCLECI_RUNNER_MODE=continuous FAKE_JOB_INTERVAL=300"
-deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml"
+deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml classes-extra.yaml   # the hardened class is in classes-extra.yaml
 
 running() { idocker "$SWARM_TEST_MGR" service ps --filter desired-state=running --format '{{.CurrentState}}' "${STACK}_$1" | grep -c '^Running' || true; }
 wait_for 180 bash -c "[ \$(docker exec $SWARM_TEST_MGR docker service ps --filter desired-state=running --format '{{.CurrentState}}' ${STACK}_linux-hardened | grep -c '^Running') -ge 1 ]" ||

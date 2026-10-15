@@ -207,7 +207,7 @@ services:
       MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: "$MIRROR_URL"
       MACHINE_RUNNER_SWARM_RUNNER_VERSION: "$1"
 EOF
-  deploy_stack "$MGR" "$work/ov.yaml"
+  deploy_stack "$MGR" "$work/ov.yaml" runners.yaml classes-extra.yaml   # linux-java and linux-hardened are the classes of classes-extra.yaml
 }
 
 dk() { docker exec "$1" docker "${@:2}"; } # lib.sh idocker reads stdin, which would eat the lines of a while-read loop
@@ -245,7 +245,7 @@ check_install() {
 # 1 + 2: the real runner, both architectures: install, ELF, SHA-256, a version print in a stock image
 # ---------------------------------------------------------------------------------------------
 publish real "$REAL"
-create_secrets "$MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
+create_secrets "$MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" "${EXTRA_SERVICES[@]}"
 deploy "$REAL" 0 0 0
 dist_up() { [[ $(tasks_of runner-distributor | grep -c ' Running') -eq 2 ]]; }
 wait_until dist_up

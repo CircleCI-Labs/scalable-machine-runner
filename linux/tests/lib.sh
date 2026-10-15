@@ -26,7 +26,8 @@ stack_dir=$repo_dir/linux/stack
 DIND_IMAGE=${SWARM_TEST_DIND_IMAGE:-docker:29-dind}
 CIMG_IMAGE=${SWARM_TEST_CIMG_IMAGE:-cimg/base:2026.10}
 cache_dir=${SWARM_TEST_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/swarm-tests}
-BASE_SERVICES=(linux-default linux-java linux-hardened)   # the runner classes of runners.yaml (runner-distributor is the other service)
+BASE_SERVICES=(linux-default)   # the runner class of runners.yaml (runner-distributor and token-proxy are the other services); classes-extra.yaml adds linux-java and linux-hardened
+EXTRA_SERVICES=(linux-java linux-hardened)   # the classes of classes-extra.yaml
 # shellcheck disable=SC2016  # the pattern holds a literal ${...}
 STACK_RUNNER_PIN=$(sed -n 's/^  MACHINE_RUNNER_SWARM_RUNNER_VERSION: \${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-\([0-9][0-9.]*\)}.*/\1/p' "$stack_dir/runners.yaml")
 TEST_RUNNER_VERSION=${SWARM_TEST_RUNNER_VERSION:-$STACK_RUNNER_PIN}
@@ -311,6 +312,10 @@ make_override() {
   for spec in "$@"; do
     read -r name _ <<< "$spec"
     [[ " ${svcs[*]} " == *" $name "* ]] || svcs+=("$name")
+    # a class of classes-extra.yaml: the whole file is deployed, so its other class is listed too (and scaled to 0 when it has no SPEC)
+    if [[ " ${EXTRA_SERVICES[*]} " == *" $name "* ]]; then
+      for s in "${EXTRA_SERVICES[@]}"; do [[ " ${svcs[*]} " == *" $s "* ]] || svcs+=("$s"); done
+    fi
   done
   {
     echo "services:"

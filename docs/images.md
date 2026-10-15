@@ -16,11 +16,11 @@ The result is that the image contains none of the runner. You can use `cimg/base
 
 The shipped file uses these images:
 
-| Service | Image |
-|---|---|
-| `linux-default` | `cimg/base:2026.10` |
-| `linux-java` | `cimg/openjdk:21.0` |
-| `linux-hardened` | `cimg/base:2026.10` |
+| Service | File | Image |
+|---|---|---|
+| `linux-default` | `runners.yaml` | `cimg/base:2026.10` |
+| `linux-java` | `classes-extra.yaml` | `cimg/openjdk:21.0` |
+| `linux-hardened` | `classes-extra.yaml` | `cimg/base:2026.10` |
 
 ### What an image needs
 

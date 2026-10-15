@@ -30,7 +30,7 @@ flowchart TB
   subgraph services["Swarm services: one for each resource class"]
     direction LR
     s1["linux-default<br/>replicas: 2"]
-    s2["linux-hardened<br/>replicas: 1"]
+    s2["linux-python<br/>replicas: 1"]
     s3["windows-default<br/>replicas: 2"]
   end
 
@@ -58,7 +58,7 @@ The service `token-proxy` of the Linux `runners.yaml` (on Windows `token-proxy-w
 flowchart LR
   subgraph cls["Class overlay networks"]
     r1["linux-default runners<br/>placeholder token"]
-    r2["linux-java runners<br/>placeholder token"]
+    r2["linux-python runners<br/>placeholder token"]
   end
   p["token-proxy<br/>one replica<br/>holds every class token"]
   api["runner.circleci.com"]
@@ -205,8 +205,8 @@ What happens next depends on one setting, `MACHINE_RUNNER_SWARM_JOB_SUDO`.
 
 | Class type | Setting | Jobs have sudo | Can a job read the class token |
 |---|---|---|---|
-| Default (`linux-default`, `linux-java`) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"` | Yes, passwordless, as in the Docker executor | No, the container holds a placeholder. Only a job that escapes the container onto the node of the proxy can |
-| Hardened (`linux-hardened`) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` | No | No, for the same reason |
+| Default (`linux-default`, and `linux-java` of `classes-extra.yaml`) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"` | Yes, passwordless, as in the Docker executor | No, the container holds a placeholder. Only a job that escapes the container onto the node of the proxy can |
+| Hardened (`linux-hardened` of `classes-extra.yaml`) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` | No | No, for the same reason |
 | Persistent (`linux-persistent`, no proxy) | `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"` | Yes | Yes, if the job uses sudo. Refer to [The persistent class](security.md#the-persistent-class) |
 
 **The default class.** Jobs keep the passwordless sudo that many orgs and orbs expect, for example `sudo apt-get install`. A job that uses sudo is root in its container: it can read the placeholder and the files of the runner, and become the runner user. It finds no class token. The test `linux/tests/token.sh` measures what the user of a job can read in the runner's config file, and `linux/tests/proxy.sh` scans the containers as root and finds no class token.
@@ -258,7 +258,7 @@ A plain `docker compose up` restarts the same container, so the environment is n
 | Node | A host in the Swarm, a manager or a worker. Node labels and service constraints decide where a replica may run |
 | Single-task mode, continuous mode | The two modes of machine runner 3. Single-task runs one job and exits, which gives a clean environment. Continuous keeps the runner up for many jobs. Refer to [Single-task and continuous mode](#single-task-and-continuous-mode) |
 | Persistent class | A class that runs in continuous mode with a named volume, so jobs share state. It gives up the clean environment |
-| Default class, hardened class | The Linux default classes (`linux-default`, `linux-java`) keep passwordless sudo for jobs. The hardened class (`linux-hardened`) removes sudo and steps every job down with `setpriv --no-new-privs`. Refer to [Users and the runner token on Linux](#users-and-the-runner-token-on-linux) |
+| Default class, hardened class | The Linux default classes (`linux-default`, and `linux-java` of `classes-extra.yaml`) keep passwordless sudo for jobs. The hardened class (`linux-hardened` of `classes-extra.yaml`) steps every job down with `setpriv --no-new-privs`, so sudo cannot raise the job user. Refer to [Users and the runner token on Linux](#users-and-the-runner-token-on-linux) |
 | Token secret | The Swarm secret `<service>-token`. It is a runner config file that holds the token of the resource class. The token proxy mounts it, or, in a persistent class, the runner does |
 | Token proxy | The service `token-proxy` of `runners.yaml`: it holds the class tokens of the Linux single-task classes and adds the token of a class to the claims of that class's runners. Refer to [The token proxy](#the-token-proxy) |
 | Placeholder secret | The Swarm secret `runner-placeholder-token`: a runner config with a made-up token, which every proxied runner reads instead of a real token |

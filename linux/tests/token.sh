@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # token.sh: can a job read the runner token? Token-free (a sentinel stands in for the token).
 #
-# Deploys the real linux/stack/runners.yaml services linux-default (MACHINE_RUNNER_SWARM_JOB_SUDO=true) and
-# linux-hardened (MACHINE_RUNNER_SWARM_JOB_SUDO=false) into a single-node Swarm inside DinD, with the REAL
+# Deploys the real linux/stack services linux-default of runners.yaml (MACHINE_RUNNER_SWARM_JOB_SUDO=true) and
+# linux-hardened of classes-extra.yaml (MACHINE_RUNNER_SWARM_JOB_SUDO=false) into a single-node Swarm inside DinD, with the REAL
 # circleci-runner binary pointed at an unreachable API so it stays up with the sentinel token. The
 # token is a Swarm secret, a runner config file owned by the runner (uid 2000, mode 0400); it is in no
 # environment variable. The "job" is a probe run with `docker exec -u circleci`: same user, same
@@ -29,11 +29,11 @@ set -euo pipefail
 
 session_begin
 publish_runner real
-create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
+create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" "${EXTRA_SERVICES[@]}"
 make_override "$work/ov.yaml" \
   "linux-default 1 CIRCLECI_RUNNER_API_URL=http://127.0.0.1:9" \
   "linux-hardened 1 CIRCLECI_RUNNER_API_URL=http://127.0.0.1:9"
-deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml"
+deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml classes-extra.yaml   # linux-hardened is in classes-extra.yaml
 
 cexec() { # container user script...
   local c=$1 u=$2

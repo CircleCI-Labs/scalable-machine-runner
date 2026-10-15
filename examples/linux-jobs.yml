@@ -1,8 +1,9 @@
 # Example .circleci/config.yml for jobs on the machine-runner-swarm Linux classes. For a minimal job that
 # runs as it is, use linux-hello.yml; the jobs here assume project files such as build.gradle and build.sh.
 # Replace my-namespace with your organization's runner namespace. Each resource class is one service
-# in linux/stack/runners.yaml (linux-default is my-namespace/linux-default, and so on). Every job
-# below runs in a brand-new container; nothing from an earlier job is visible.
+# of the stack files (linux-default of runners.yaml is my-namespace/linux-default, and so on; linux-java and
+# linux-hardened come from classes-extra.yaml). Every job below runs in a brand-new container; nothing from an
+# earlier job is visible.
 version: 2.1
 
 jobs:
@@ -23,7 +24,7 @@ jobs:
           name: Which container ran this job
           command: echo "runner $CIRCLECI_RUNNER_NAME in container $(hostname)"
 
-  # cimg/openjdk:21.0 environment (service linux-java). Caches go to CircleCI storage, not to the host.
+  # cimg/openjdk:21.0 environment (service linux-java of linux/stack/classes-extra.yaml). Caches go to CircleCI storage, not to the host.
   test-java:
     machine: true
     resource_class: my-namespace/linux-java
@@ -40,8 +41,8 @@ jobs:
       - store_test_results:
           path: build/test-results
 
-  # Hardened class: no sudo, so tools must be in the image or in the job's home. The runner token is
-  # not reachable from here.
+  # Hardened class (service linux-hardened of linux/stack/classes-extra.yaml): no sudo, so tools must be in the image or in the
+  # job's home. The runner token is not reachable from here.
   build-hardened:
     machine: true
     resource_class: my-namespace/linux-hardened

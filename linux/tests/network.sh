@@ -17,9 +17,9 @@ set -euo pipefail
 
 session_begin
 publish_runner fake
-create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}"
+create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" "${EXTRA_SERVICES[@]}"
 make_override "$work/ov.yaml" "linux-default 2 FAKE_RUNNER_SERVE=1" "linux-hardened 1 FAKE_RUNNER_SERVE=1"
-deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml"
+deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml classes-extra.yaml   # a second class: linux-hardened of classes-extra.yaml
 
 containers_of() { idocker "$SWARM_TEST_MGR" ps -q --filter "label=com.docker.swarm.service.name=${STACK}_$1"; }
 ip_of() { idocker "$SWARM_TEST_MGR" inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$1" | awk '{ print $1 }'; }

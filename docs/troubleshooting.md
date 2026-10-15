@@ -57,7 +57,7 @@ The restart delay is a pause between starts, not a back-off. Swarm creates the r
 
 ### Error: secret not found
 
-`docker stack deploy` fails with `secret not found: linux-java-token`.
+`docker stack deploy` fails with `secret not found: linux-default-token`.
 
 **Cause.** A service references an external secret that does not exist. Every service in the file needs its `<service>-token` secret, and on Linux every runner service also needs `runner-placeholder-token`.
 

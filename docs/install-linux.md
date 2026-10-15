@@ -28,7 +28,7 @@ The manual steps come first and use ordinary `docker` commands. Nothing is insta
 - Root access, or membership of the `docker` group. Docker and a Swarm join are all that a node needs: no runner, entrypoint, or tool is installed on a node.
 - A node clock that is synchronized with NTP. TLS to CircleCI fails silently when the clock drifts.
 - Outbound HTTPS access from each node to the hosts in [Egress hosts](security.md#egress-hosts), which include the release bucket of CircleCI (the runner download) and the registries that serve the stock image `alpine` (the distributor) and the token proxy image (Docker Hub). No inbound access is required. For nodes without internet access, refer to [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror).
-- Enough CPU and memory for the services. The shipped file reserves 10 CPUs and 20 GB of memory in total, and replicas that do not fit stay pending.
+- Enough CPU and memory for the services. The shipped file reserves 4 CPUs and 8 GB of memory in total, and replicas that do not fit stay pending.
 
 Membership of the `docker` group is equivalent to root on the node. Limit it to administrators.
 
@@ -128,12 +128,10 @@ Create a namespace if your organization has none. Each organization can have one
 $ circleci namespace create <namespace> --org <org>
 ```
 
-Create one resource class for each service in the stack file. The class name must equal the service name. The shipped file `linux/stack/runners.yaml` has the services `linux-default`, `linux-java`, and `linux-hardened`. For a first run, keep these names. To rename or drop a service, edit your copy of the file first ([step 5](#5-review-the-stack-file)), and then create the classes and secrets of the services you keep.
+Create one resource class for each service in the stack file. The class name must equal the service name. The shipped file `linux/stack/runners.yaml` has one service, `linux-default`. For a first run, keep this name. To rename it, edit your copy of the file first ([step 5](#5-review-the-stack-file)), and then create the class and the secret under the new name. More classes come later, one resource class each, from the add-on stack files of step 5 or from [Resource Classes](resource-classes.md#define-a-class).
 
 ```console
 $ circleci runner resource-class create <namespace>/linux-default --org <org> --generate-token
-$ circleci runner resource-class create <namespace>/linux-java --org <org> --generate-token
-$ circleci runner resource-class create <namespace>/linux-hardened --org <org> --generate-token
 ```
 
 Each command prints a token once. Store each token in your secret manager. If you lose a token, create a new one with `circleci runner token create <namespace>/<class> --nickname <nickname>`.
@@ -203,7 +201,7 @@ The token proxy mounts these secrets at `/run/secrets/<service>-token`, owned by
 Create the secrets with a hidden prompt, so that the token does not reach your shell history or the process list. This loop uses only POSIX features, so it works in bash, zsh, and dash. Do not replace it with `read -rsp`: that form is bash only, and zsh reads `-p` as a coprocess and fails, which leaves `TOKEN` empty and creates a secret without a token. The loop stops at an empty token.
 
 ```sh
-for class in linux-default linux-java linux-hardened; do
+for class in linux-default; do   # one class; add the names of the other classes you deploy
   printf 'Token for %s (hidden): ' "$class"
   stty -echo; IFS= read -r TOKEN; stty echo; echo
   [ -n "$TOKEN" ] || { echo "no token entered for $class" >&2; break; }
@@ -213,7 +211,7 @@ unset TOKEN
 printf 'api:\n  auth_token: machine-runner-swarm-placeholder\n' | docker secret create runner-placeholder-token -
 ```
 
-Run every `docker` command in these steps with `sudo`, or as a user in the `docker` group. Without either, `docker` cannot reach the daemon. The setup helper below does the same in one command: `sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened`, and then `printf %s machine-runner-swarm-placeholder | sudo linux/setup.sh --secret runner-placeholder` for the placeholder.
+Run every `docker` command in these steps with `sudo`, or as a user in the `docker` group. Without either, `docker` cannot reach the daemon. The setup helper below does the same in one command: `sudo linux/setup.sh --secret linux-default`, and then `printf %s machine-runner-swarm-placeholder | sudo linux/setup.sh --secret runner-placeholder` for the placeholder.
 
 The secret name is the service name plus `-token`. `docker stack deploy` fails with `secret not found` when a service references a secret that does not exist. Create every secret that the file references, or delete the services you do not need from your copy of the file. Each optional class in step 5 needs its own secret.
 
@@ -233,12 +231,12 @@ Keep the service `runner-distributor` and the top-level `configs:` and `volumes:
 
 | Setting | Default | Change it to |
 |---|---|---|
-| Service names | `linux-default`, `linux-java`, `linux-hardened` | Your resource class names |
-| `image` | `cimg/base:2026.10`, `cimg/openjdk:21.0` | Your image, pinned by digest. Refer to [Images](images.md) |
-| `deploy.replicas` | 2, 1, 1 | The number of concurrent jobs you need |
-| `deploy.resources` | 2 CPUs and 4 GB, or 4 CPUs and 8 GB | The size of one runner. Limits and reservations are equal |
+| Service name | `linux-default` | Your resource class name |
+| `image` | `cimg/base:2026.10` | Your image, pinned by digest. Refer to [Images](images.md) |
+| `deploy.replicas` | 2 | The number of concurrent jobs you need |
+| `deploy.resources` | 2 CPUs and 4 GB | The size of one runner. Limits and reservations are equal |
 | `placement.constraints` | `node.platform.os == linux` | Add architecture or zone constraints |
-| `x-distributor-env` | The runner version `current`, major version 3, a check every 24 hours | A pinned version, or a mirror. These are variables of `docker stack deploy` and need no edit. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux) |
+| `x-distributor-env` | An exact runner version (an exact pin: `3.1.13` in this release) with the SHA-256 values of its tarballs, major version 3, a check every 24 hours | Nothing for a first run. A newer pin or a floating version, or a mirror, are variables of `docker stack deploy` and need no edit. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux) |
 
 Check that the file parses. This needs no running Swarm.
 
@@ -250,6 +248,7 @@ The optional classes are separate add-on stack files. Add each with another `-c`
 
 | File | Service | Purpose |
 |---|---|---|
+| `linux/stack/classes-extra.yaml` (in `deploy/` after the copy) | `linux-java`, `linux-hardened` | An image swap (`cimg/openjdk`) and a hardened class without sudo. They show how to add a class. Reserves 6 more CPUs and 12 GB. Refer to [Resource Classes](resource-classes.md#define-a-class) |
 | `linux/stack/docker-build.yaml` (in `deploy/` after the copy) | `linux-docker-build` | Builds images with the host Docker engine. Needs a labeled worker node. Refer to [Docker Builds](docker-builds.md) |
 | `linux/stack/microvm.yaml` (in `deploy/` after the copy) | `linux-microvm`, `linux-microvm-docker`, and the DNS forwarder `microvm-dns` | Runs each job in a Kata Containers microVM. Needs KVM and a node setup. Refer to [MicroVM jobs](microvm.md) |
 | `linux/stack/persistent.yaml` (in `deploy/` after the copy) | `linux-persistent` | A long-lived runner with a named volume. Needs the node name edited in the file. Refer to [Persistent mode](resource-classes.md#persistent-mode) |
@@ -281,9 +280,8 @@ This command is the whole install. The service `runner-distributor` starts on ev
    $ docker stack services runners
    ID             NAME                        MODE         REPLICAS   IMAGE
    ...            runners_linux-default       replicated   2/2        cimg/base:2026.10
-   ...            runners_linux-java          replicated   1/1        cimg/openjdk:21.0
-   ...            runners_linux-hardened      replicated   1/1        cimg/base:2026.10
    ...            runners_runner-distributor  global       1/1        alpine:3
+   ...            runners_token-proxy         replicated   1/1        ccilabs/machine-runner-swarm-proxy:edge
    ```
 
    The distributor shows one task for each Linux node, so `1/1` on a single node and `3/3` on three.
@@ -319,11 +317,11 @@ With no step, it runs `--check`. The steps always run in the order of the table,
 
 ```bash
 sudo linux/setup.sh --check --swarm-init
-sudo linux/setup.sh --secret linux-default --secret linux-java --secret linux-hardened   # a hidden prompt asks for each token
+sudo linux/setup.sh --secret linux-default   # a hidden prompt asks for the token
 sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml
 ```
 
-Create one secret for every service of the stack files you deploy. `--deploy` fails with `secret not found` when one is missing, and `linux-hardened` is in `runners.yaml` too. Every command needs `sudo` or membership of the `docker` group, because each one talks to the Docker daemon. The helper is a bash script with a `#!/usr/bin/env bash` line, so it runs from any shell, including zsh. To script one secret, pipe the token: `printf %s "$TOKEN" | sudo linux/setup.sh --secret linux-default`. Several `--secret` values need a terminal, because stdin carries one token.
+Create one secret for every service of the stack files you deploy. `--deploy` fails with `secret not found` when one is missing. Every command needs `sudo` or membership of the `docker` group, because each one talks to the Docker daemon. The helper is a bash script with a `#!/usr/bin/env bash` line, so it runs from any shell, including zsh. To script one secret, pipe the token: `printf %s "$TOKEN" | sudo linux/setup.sh --secret linux-default`. Several `--secret` values need a terminal, because stdin carries one token.
 
 The distributor reads its settings from the environment of `--deploy`: `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`, `MACHINE_RUNNER_SWARM_CHECK_INTERVAL`, `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL`, and `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, and for the token proxy the variables `MACHINE_RUNNER_SWARM_PROXY_*`. A host with `sudo` drops the environment, so to deploy with these variables, run `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 linux/setup.sh --deploy`, or run `docker stack deploy` as a user in the `docker` group. Refer to [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux).
 
@@ -331,7 +329,7 @@ The helper accepts a token that has only letters, digits, `.`, `_`, and `-`, and
 
 ## Upgrade
 
-With the default settings, a new release of the runner reaches the nodes by itself, without a redeploy. Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images) to pin or roll back the runner version, or to move to a new image or a new release of this repository.
+With the default settings, the nodes run the exact runner version that the stack file pins, and a new release of the runner changes nothing until you change the pin or deploy a release of this repository that carries a newer one. Refer to [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images) to pin or roll back the runner version, or to move to a new image or a new release of this repository.
 
 ## Stop and uninstall
 

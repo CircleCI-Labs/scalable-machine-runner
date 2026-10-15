@@ -26,13 +26,13 @@
 # variable below, among them CIRCLECI_RUNNER_API_URL, which points at the proxy.
 #
 #   linux-default   cimg/base, jobs keep passwordless sudo (like the Docker executor)
-#   linux-java      cimg/openjdk:21.0, same model
-#   linux-hardened  jobs have NO sudo, so a job cannot become root in its container
-# Optional classes are separate files, deployed with an extra -c flag:
+# This file is ONE class on purpose: a first job needs one resource class, one token and one network. More classes are separate files,
+# deployed with an extra -c flag (each adds its classes to the token-proxy of this file, so deploy them together with it):
+#   classes-extra.yaml linux-java (cimg/openjdk, same model) and linux-hardened (jobs have NO sudo, so a job cannot become root in its container)
 #   docker-build.yaml  host Docker socket (root-equivalent)      persistent.yaml  long-lived runner + volume (keeps its token: no proxy)
 #   ssh-rerun.yaml     "Rerun job with SSH": publishes port 54782 on the node
 #   microvm.yaml       every job in its own Kata microVM, on nodes labelled machine-runner-swarm.microvm=true
-# docker-build.yaml, ssh-rerun.yaml and microvm.yaml add their classes to the token-proxy of this file: deploy them together with it.
+# Another class of your own is the service, network, secret and proxy entries of linux-default under another name (docs/resource-classes.md).
 #
 # Notes:
 # - Pin images by digest in production (image: cimg/base:2026.10@sha256:...). Tags such as 21.0 float.
@@ -130,47 +130,6 @@ services:
         reservations: {cpus: "2", memory: 4G}   # extra replicas stay pending instead of overcommitting the node
       placement: *placement
 
-  linux-java:
-    <<: *runner
-    image: cimg/openjdk:21.0
-    hostname: "{{.Node.Hostname}}-linux-java-{{.Task.Slot}}"
-    environment:
-      <<: *env
-      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-java-{{.Task.Slot}}"
-      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
-    networks: [linux-java]
-    cap_drop: [NET_RAW, MKNOD]
-    deploy:
-      replicas: 1
-      restart_policy: *restart
-      update_config: *update
-      resources:
-        limits: {cpus: "4", memory: 8G, pids: 4096}
-        reservations: {cpus: "4", memory: 8G}
-      placement: *placement
-
-  # Hardened class: the job user has no sudo and a setuid binary cannot lift it to root. With the token proxy the runner holds
-  # no real token either way; this class still keeps jobs from touching the runner's files and processes. Tools must be in the image.
-  linux-hardened:
-    <<: *runner
-    image: cimg/base:2026.10
-    hostname: "{{.Node.Hostname}}-linux-hardened-{{.Task.Slot}}"
-    environment:
-      <<: *env
-      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-hardened-{{.Task.Slot}}"
-      MACHINE_RUNNER_SWARM_JOB_SUDO: "false"
-    networks: [linux-hardened]
-    cap_drop: [ALL]
-    cap_add: [CHOWN, FOWNER, SETUID, SETGID, KILL, AUDIT_WRITE]   # entrypoint (chown and chmod), sudo step-down, docker-init signalling the runner
-    deploy:
-      replicas: 1
-      restart_policy: *restart
-      update_config: *update
-      resources:
-        limits: {cpus: "2", memory: 4G, pids: 4096}
-        reservations: {cpus: "2", memory: 4G}
-      placement: *placement
-
   # The runner on every Linux node (also on a Docker-build node), from the stock Alpine image: the script is a Swarm config. It
   # downloads and verifies the runner, writes its SHA-256 next to it, flips the link current and checks again every
   # MACHINE_RUNNER_SWARM_CHECK_INTERVAL. Pin the digest you trust. A download that fails or does not match its SHA-256 is retried
@@ -224,10 +183,8 @@ services:
     cap_drop: [ALL]
     secrets:
       - {source: linux-default-token, target: linux-default-token, uid: "65534", gid: "65534", mode: 0400}
-      - {source: linux-java-token, target: linux-java-token, uid: "65534", gid: "65534", mode: 0400}
-      - {source: linux-hardened-token, target: linux-hardened-token, uid: "65534", gid: "65534", mode: 0400}
     # The class overlays: the proxy sees each runner's own address there, and the class tokens reach no other network.
-    networks: [linux-default, linux-java, linux-hardened]
+    networks: [linux-default]
     healthcheck:
       test: ["CMD", "/machine-runner-swarm-proxy", "-healthcheck"]   # the image has no wget or curl
       interval: 10s
@@ -258,14 +215,10 @@ services:
 networks:
   # One overlay per class: classes cannot reach each other (replicas of a class still can).
   linux-default: {driver: overlay}
-  linux-java: {driver: overlay}
-  linux-hardened: {driver: overlay}
 
 secrets:
   runner-placeholder-token: {external: true}   # every runner: a made-up token (see the top of this file)
-  linux-default-token: {external: true}   # the class tokens: token-proxy only
-  linux-java-token: {external: true}
-  linux-hardened-token: {external: true}
+  linux-default-token: {external: true}   # the class token: token-proxy only
 
 configs:
   # Swarm configs cannot change, so the name carries the first 12 hex digits of the SHA-256 of the file: ci/config-names.sh --write

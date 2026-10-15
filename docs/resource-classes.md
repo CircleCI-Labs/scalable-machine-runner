@@ -10,6 +10,8 @@ Each Swarm service in a stack file is one CircleCI resource class. This page des
 
 ## Define a class
 
+The shipped `linux/stack/runners.yaml` has one class, `linux-default`. Every other class is yours to add, to your copy of the stack files (`deploy/runners.yaml`, as [Install on Linux](install-linux.md) describes), and you deploy your copy. The file `linux/stack/classes-extra.yaml` is a worked example: it adds `linux-java` and `linux-hardened` the way this section describes.
+
 To add a class:
 
 1. Create the resource class and a token in CircleCI. The class name must equal the service name.
@@ -18,12 +20,12 @@ To add a class:
    $ circleci runner resource-class create <namespace>/linux-python --org <org> --generate-token
    ```
 
-2. Copy an existing service in your stack file and change the values in the table below.
-3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#4-create-the-secrets) or [Create the secrets on Windows](install-windows.md#4-create-the-secrets). On Linux, a single-task class also needs three lines in the `token-proxy` service, as in the example below: its network, its secret, and one variable.
-4. Deploy the stack again, with the same set of `-c` files as before. Swarm creates the new service and leaves unchanged services alone.
+2. In your copy of the stack file, copy the service `linux-default` under another name and change the values in the table below.
+3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#4-create-the-secrets) or [Create the secrets on Windows](install-windows.md#4-create-the-secrets). On Linux, a single-task class also needs three lines in the existing `token-proxy` service, as in the example below: its network, its secret, and one variable.
+4. Deploy your copy again, with the same set of `-c` files as before. Swarm creates the new service and leaves unchanged services alone.
 
    ```console
-   $ docker stack deploy -c linux/stack/runners.yaml runners
+   $ docker stack deploy -c deploy/runners.yaml runners
    ```
 
 Each service needs its own values for these keys:
@@ -39,7 +41,7 @@ Each service needs its own values for these keys:
 
 The runner name must be unique across all runners of your organization. It has at most 64 characters and contains only letters, numbers, `.`, `(`, `)`, `_`, `-`, and spaces. A long hostname plus a long class name can exceed the limit, and the runner then exits with code 80.
 
-A complete Linux example, which reuses the anchors of `linux/stack/runners.yaml`:
+A complete Linux example, in three parts of your copy of `runners.yaml`, where the anchors `*runner`, `*env`, `*restart`, `*update` and `*placement` of that file resolve. First, the service, next to `linux-default` under `services:`:
 
 ```yaml
 services:
@@ -61,26 +63,36 @@ services:
         limits: {cpus: "2", memory: 4G, pids: 4096}
         reservations: {cpus: "2", memory: 4G}
       placement: *placement
+```
 
-  token-proxy:   # add the class to the proxy of runners.yaml: a variable, a network, and the class token
+Second, the class goes into the proxy, which has the key `token-proxy:` once in the file. Add these lines to the keys that it has, and do not repeat the key:
+
+```yaml
+  token-proxy:
     environment:
+      # ... the variables of the classes that are there
       MACHINE_RUNNER_SWARM_PROXY_CLASS_LINUX_PYTHON: linux-python=/run/secrets/linux-python-token
-    networks: [linux-python]
     secrets:
+      # ... the secrets of the classes that are there
       - {source: linux-python-token, target: linux-python-token, uid: "65534", gid: "65534", mode: 0400}
+    networks: [linux-default, linux-python]   # every class network, the new one included
+```
 
+Third, the network and the secret, at the top level:
+
+```yaml
 networks:
-  linux-python: {driver: overlay}
+  linux-python: {driver: overlay, driver_opts: {encrypted: "true"}}   # as the other class networks: see Multi-Node Clusters
 
 secrets:
   linux-python-token: {external: true}
 ```
 
-The runner service inherits the placeholder secret and the proxy URL from `*runner` and `*env`. If you write the example in an add-on stack file of your own, copy those two settings, and deploy it together with `runners.yaml`. Restart the proxy after you add a class, so that it picks the class up: `docker service update --force runners_token-proxy`, then replace the idle runners as in [Restart the proxy](operations.md#restart-the-proxy). A class that the proxy does not serve gets 403 on every claim, and the proxy log says `not a runner of any class`.
+The runner service inherits the placeholder secret and the proxy URL from `*runner` and `*env`. Restart the proxy after you add a class, so that it picks the class up: `docker service update --force runners_token-proxy`, then replace the idle runners as in [Restart the proxy](operations.md#restart-the-proxy). A class that the proxy does not serve gets 403 on every claim, and the proxy log says `not a runner of any class`.
 
-Use `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` with the capability settings of `linux-hardened` for a hardened class. Refer to [Concepts](concepts.md#users-and-the-runner-token-on-linux).
+Use `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` with the capability settings of `linux-hardened` in `linux/stack/classes-extra.yaml` for a hardened class. Refer to [Concepts](concepts.md#users-and-the-runner-token-on-linux).
 
-The anchor `*runner` brings the keys that a Linux class needs for the runner: `user: "0"`, `entrypoint: ["/circleci-runner-entrypoint"]`, the config `entrypoint`, the placeholder secret `runner-placeholder-token` (the token proxy holds the class token), and the volume `runner-bin` mounted read-only. A service in another stack file, or one written without the anchor, repeats them:
+To keep a class in a stack file of its own, as the add-on files do, write `token-proxy` there with only the additions (the variable, the secret and the network): Swarm merges the files by name. An anchor does not reach into another file, so repeat the settings of `*runner`, `*env`, `*restart`, `*update` and `*placement` in it, or copy the file `classes-extra.yaml` and change it. The anchor `*runner` brings the keys that a Linux class needs for the runner: `user: "0"`, `entrypoint: ["/circleci-runner-entrypoint"]`, the config `entrypoint`, the placeholder secret `runner-placeholder-token` (the token proxy holds the class token), and the volume `runner-bin` mounted read-only. A service written without the anchor repeats them:
 
 ```yaml
 services:
@@ -108,7 +120,7 @@ volumes:
 
 The name of the config carries the first 12 hex digits of the SHA-256 of the file, because a Swarm config cannot change. Refer to [Upgrade to a new release of this repository](operations.md#upgrade-to-a-new-release-of-this-repository). The shipped add-on files repeat the top-level `configs:` and `volumes:`, so each of them also loads alone.
 
-On Windows, copy a service such as `windows-default`, with its two mounts of the volume `runner-bin` (`subpath: current` and `subpath: 'git\current'`) and the top-level `volumes: runner-bin`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks. A single-task Windows class also needs the same lines in `token-proxy-windows` as the Linux example shows (its variable `MACHINE_RUNNER_SWARM_PROXY_CLASS_<NAME>` with the file `C:\ProgramData\Docker\secrets\<service>-token`, and its secret with that target; there are no networks), and reads the placeholder secret `runner-placeholder-token`.
+On Windows, copy a service such as `windows-default` in your copy of `windows\stack\runners.yaml`, with its two mounts of the volume `runner-bin` (`subpath: current` and `subpath: 'git\current'`) and the top-level `volumes: runner-bin`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks. A single-task Windows class also needs the same lines in `token-proxy-windows` as the Linux example shows (its variable `MACHINE_RUNNER_SWARM_PROXY_CLASS_<NAME>` with the file `C:\ProgramData\Docker\secrets\<service>-token`, and its secret with that target; there are no networks), and reads the placeholder secret `runner-placeholder-token`.
 
 ## Size the limits
 
@@ -127,7 +139,7 @@ Size one runner for the largest job of the class, not for the average job. A job
 Plan the node capacity from the reservations:
 
 - The sum of the reservations of all replicas on a node must fit in the node. Leave room for the operating system and Docker, for example one CPU and 2 GB of memory.
-- The shipped Linux file reserves 10 CPUs and 20 GB of memory in total. A node with fewer resources runs fewer replicas, and the others stay `Pending`. The `runner-distributor` service reserves nothing, and its limit is 0.5 CPU and 256 MB.
+- The shipped Linux file reserves 4 CPUs and 8 GB of memory in total (two replicas of `linux-default`), and `classes-extra.yaml` adds 6 CPUs and 12 GB. A node with fewer resources runs fewer replicas, and the others stay `Pending`. The `runner-distributor` service reserves nothing, and its limit is 0.5 CPU and 256 MB.
 - Swarm cannot limit disk for a container. Jobs share the Docker data disk of the node, so size it for the replicas plus the stopped containers that Swarm keeps. Refer to [Start Swarm](install-linux.md#3-start-swarm).
 
 ## Choose replica counts

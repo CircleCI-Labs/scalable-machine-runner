@@ -56,13 +56,12 @@ out=$(setup --deploy --stack-file /work/runners.yaml </dev/null || true)
 grep -q 'secret not found' <<< "$out" || fail "--deploy without the other secrets should fail with Docker's message: $out"
 echo "RESULT test=helper step=deploy_without_secrets refused=yes"
 
-for s in linux-java linux-hardened; do printf '%s' "$SENTINEL_TOKEN" | setup --secret "$s" >/dev/null; done
 # the runners' placeholder config, as runners.yaml tells you to create it
 printf '%s' machine-runner-swarm-placeholder | setup --secret runner-placeholder >/dev/null
 idocker "$node" secret inspect runner-placeholder-token >/dev/null || fail "--secret runner-placeholder did not create runner-placeholder-token"
 setup --deploy --stack-file /work/runners.yaml </dev/null >/dev/null
 services=$(idocker "$node" stack services runners --format '{{.Name}}' | sort | paste -sd, -)
 echo "RESULT test=helper step=deploy services=$services"
-[[ $services == runners_linux-default,runners_linux-hardened,runners_linux-java,runners_runner-distributor,runners_token-proxy ]] || fail "unexpected services: $services"
+[[ $services == runners_linux-default,runners_runner-distributor,runners_token-proxy ]] || fail "unexpected services: $services: the shipped stack is one class"
 
 pass "setup.sh: preflight, single-node swarm init, secrets from stdin (a runner config, never echoed), deploy; all idempotent"

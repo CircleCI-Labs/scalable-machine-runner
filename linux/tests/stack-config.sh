@@ -16,14 +16,22 @@ check() { # service description regex
 }
 service_block() { awk -v s="$1" '$0 == "  " s ":" { f = 1; next } f && (/^  [^ ]/ || /^[^ ]/) { f = 0 } f' <<< "$cfg"; }
 
-# every file combination must load (an add-on stack file also alone); the last one holds all six runner services and the proxy
-for files in "runners.yaml" "ssh-rerun.yaml" "microvm.yaml" "runners.yaml docker-build.yaml" "runners.yaml persistent.yaml" "runners.yaml ssh-rerun.yaml" \
-  "runners.yaml microvm.yaml" "runners.yaml docker-build.yaml persistent.yaml ssh-rerun.yaml microvm.yaml"; do
+# every file combination must load (an add-on stack file also alone); the last one holds all the runner services and the proxy
+for files in "runners.yaml" "classes-extra.yaml" "ssh-rerun.yaml" "microvm.yaml" "runners.yaml classes-extra.yaml" "runners.yaml docker-build.yaml" \
+  "runners.yaml persistent.yaml" "runners.yaml ssh-rerun.yaml" "runners.yaml microvm.yaml" \
+  "runners.yaml classes-extra.yaml docker-build.yaml persistent.yaml ssh-rerun.yaml microvm.yaml"; do
   args=()
   for f in $files; do args+=(-c "$dir/$f"); done
   cfg=$(docker stack config "${args[@]}") || { echo "FAIL: docker stack config rejected: $files"; exit 1; }
 done
 
+# The shipped runners.yaml is ONE class (a first job needs one resource class, one token and one network): the others are add-on stack files.
+cfg_base=$(docker stack config -c "$dir/runners.yaml")
+base_runners=$(awk '/^services:/ { f = 1; next } /^[^ ]/ { f = 0 } f && /^  [^ ]+:$/ { sub(/^  /, ""); sub(/:$/, ""); print }' <<< "$cfg_base" | sort | paste -sd' ' -)
+if [[ $base_runners != "linux-default runner-distributor token-proxy" ]]; then
+  echo "  runners.yaml has the services '$base_runners', expected linux-default, runner-distributor and token-proxy: more classes belong in an add-on stack file"
+  problems=$((problems + 1))
+fi
 services=(linux-default linux-java linux-hardened linux-docker-build linux-persistent linux-default-ssh linux-microvm linux-microvm-docker)
 for s in "${services[@]}"; do
   block=$(service_block "$s")
@@ -244,7 +252,7 @@ fi
 # the version policy can be set at deploy time, and the variables reach the distributor only
 cfg=$(MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 MACHINE_RUNNER_SWARM_RUNNER_MAJOR=4 MACHINE_RUNNER_SWARM_CHECK_INTERVAL=1h \
   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circleci-runner MACHINE_RUNNER_SWARM_RUNNER_SHA256=abc \
-  docker stack config -c "$dir/runners.yaml")
+  docker stack config -c "$dir/runners.yaml" -c "$dir/classes-extra.yaml")
 block=$(service_block runner-distributor)
 check runner-distributor 'a floating version from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_RUNNER_VERSION: "3.1"$'
 check runner-distributor 'the mirror from the environment of the deploy' '^      MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: https://mirror.example.com/circleci-runner$'
@@ -355,7 +363,7 @@ if ! out=$("$dir/../../ci/config-names.sh" 2>&1); then
   problems=$((problems + 1))
 fi
 
-echo "RESULT test=stack-config files=runners.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml,microvm.yaml services=${#services[@]} proxied_classes=${#proxied[@]} problems=$problems"
+echo "RESULT test=stack-config files=runners.yaml,classes-extra.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml,microvm.yaml services=${#services[@]} proxied_classes=${#proxied[@]} problems=$problems"
 if [[ $problems -eq 0 ]]; then
   echo "PASS (docker stack config accepts every file combination; every service meets the contract)"
 else

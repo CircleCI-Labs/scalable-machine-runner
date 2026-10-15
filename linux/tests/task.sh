@@ -9,7 +9,7 @@
 # working directory the way a checkout would.
 #
 #   default      linux-default: the agent runs as circleci, has sudo, cannot read the config secret
-#   hardened     linux-hardened: the same without sudo, and with the no-new-privs flag set (setpriv step-down)
+#   hardened     linux-hardened (classes-extra.yaml): the same without sudo, and with the no-new-privs flag set (setpriv step-down)
 #   cleanup      CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true fails: the runner (uid 2000) cannot remove the
 #                working directory the job user owns. This is why the stack and the entrypoint default it to false
 #   persistent   persistent.yaml (continuous mode): two tasks in one runner; the second sees the first's files
@@ -33,7 +33,7 @@ phase() {
   local name=$1 tasks=$2 spec=$3
   shift 3
   inner_reset "$SWARM_TEST_MGR"
-  create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" linux-persistent
+  create_secrets "$SWARM_TEST_MGR" "$SENTINEL_TOKEN" "${BASE_SERVICES[@]}" "${EXTRA_SERVICES[@]}" linux-persistent
   idocker "$SWARM_TEST_MGR" run -d --name fake-api --network host -v /fake-api.py:/fake-api.py:ro "$CIMG_IMAGE" python3 /fake-api.py 8099 "$tasks" >/dev/null
   make_override "$work/ov.yaml" "$spec $api"
   deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" "${@:-runners.yaml}"
@@ -50,7 +50,9 @@ wait_tasks() { # N
 }
 
 for class in default hardened; do
-  phase "$class" 1 "linux-$class 1"
+  files=(runners.yaml)
+  [[ $class == default ]] || files+=(classes-extra.yaml)   # linux-hardened is in classes-extra.yaml
+  phase "$class" 1 "linux-$class 1" "${files[@]}"
   wait_tasks 1
   line=$(task_lines | head -n 1)
   echo "RESULT test=task class=linux-$class $line"

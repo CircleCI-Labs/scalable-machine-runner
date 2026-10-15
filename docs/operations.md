@@ -685,7 +685,7 @@ On a node that runs a docker-build class, jobs also leave images, volumes, and b
 2. Remove the secrets, and the volumes of persistent classes.
 
    ```console
-   $ docker secret rm linux-default-token linux-java-token linux-hardened-token runner-placeholder-token
+   $ docker secret rm linux-default-token runner-placeholder-token   # and the <service>-token of every other class you deployed
    $ docker volume rm runners_persistent-home runners_proxy-state
    ```
 

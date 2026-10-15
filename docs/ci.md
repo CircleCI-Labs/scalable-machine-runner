@@ -2,8 +2,8 @@
 
 The pipeline lints everything, tests the Linux and Windows Swarm stacks, and proves with real
 CircleCI jobs that every job runs in a fresh container, whether the runner is hosted by a
-Swarm service on Linux or on Windows. It never publishes images. Scan reports and logs are kept
-as job artifacts.
+Swarm service on Linux or on Windows. It publishes one image, the token proxy, from `main` only, and makes
+the signed releases ([Releasing](releasing.md)). Scan reports and logs are kept as job artifacts.
 
 - Setup config: [`.circleci/config.yml`](../.circleci/config.yml)
 - Pipeline: [`.circleci/continue.yml`](../.circleci/continue.yml)

@@ -51,7 +51,7 @@ flowchart TB
   r1 & r2 & r3 & r4 & r5 --> api
 ```
 
-Nothing is built. On Linux, the global service `runner-distributor` keeps the runner in a volume on every node, and the stack mounts it into stock images such as `cimg/base`, so `docker stack deploy` is the whole install. On Windows, the global service `runner-distributor-windows` does the same for the runner and portable Git, which the stack mounts into stock Windows Server Core. Refer to [Concepts](docs/concepts.md) for the model, the job lifecycle, and what a clean environment covers.
+You build nothing. The one image that the project publishes is the token proxy, `ccilabs/machine-runner-swarm-proxy` on Docker Hub, which holds the class tokens: the stack pulls it, and a release bundle names the image of that release by digest. On Linux, the global service `runner-distributor` keeps the runner in a volume on every node, and the stack mounts it into stock images such as `cimg/base`, so `docker stack deploy` is the whole install. On Windows, the global service `runner-distributor-windows` does the same for the runner and portable Git, which the stack mounts into stock Windows Server Core. Refer to [Concepts](docs/concepts.md) for the model, the job lifecycle, and what a clean environment covers.
 
 ## Quickstart
 
@@ -83,7 +83,7 @@ Linux runs on Ubuntu LTS and RHEL 8 or later, on amd64, arm64, ppc64le and s390x
 | [Examples](examples) | Job configs for every class, starting with [`linux-hello.yml`](examples/linux-hello.yml) |
 | [CI/CD](docs/ci.md), [Releasing](docs/releasing.md), [Contributing](CONTRIBUTING.md) | What the pipeline tests, how a release is made, and how to contribute |
 
-Each [release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) carries a bundle with the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, with a keyless signature. Refer to [Verify a release](docs/install-linux.md#verify-a-release). The project uses [Semantic Versioning](https://semver.org/) and starts at `0.x`, so read the [release notes on GitHub](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) before you upgrade ([CHANGELOG.md](CHANGELOG.md) points there).
+Each [release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) carries a bundle with the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, with a keyless signature. The bundle is the way to install: both quickstarts download it, verify it and unpack it, and its `docs/` folder is the documentation of that release (the documentation site follows `main`). Refer to [Verify a release](docs/install-linux.md#verify-a-release). The project uses [Semantic Versioning](https://semver.org/) and starts at `0.x`, so read the [release notes on GitHub](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) before you upgrade ([CHANGELOG.md](CHANGELOG.md) points there).
 
 ## Support
 

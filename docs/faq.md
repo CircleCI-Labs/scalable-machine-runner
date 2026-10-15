@@ -23,7 +23,7 @@ Nothing, with one optional exception on Windows.
 | Linux | Nothing. The stack mounts the runner from a per-node volume, which its `runner-distributor` service fills, and the entrypoint from a Swarm config, into a stock image such as `cimg/base`. `docker stack deploy` is the whole install | A custom image when jobs need tools, because the hardened class cannot install packages at run time. It needs util-linux `setpriv`. Refer to [Images](images.md) |
 | Windows | Nothing. The service `runner-distributor-windows` of the stack installs the runner and portable Git into a volume that the stack mounts into the stock Server Core image | A custom image for your tools, and a DIY image that lets a job finish after a stop. Refer to [Windows images](images.md#windows-bring-your-own-image) and [the stop-timeout image](operations.md#optional-an-image-that-lets-a-job-finish-after-a-stop-diy) |
 
-This repository publishes no images. A Linux node needs a Docker engine and a Swarm join, and nothing else. A Windows node needs a Docker engine, the `ltsc2022` base image, and a Swarm join, and nothing else.
+You build no image. This repository publishes one, the token proxy (`ccilabs/machine-runner-swarm-proxy` on Docker Hub), which Swarm pulls when you deploy the stack, and the release bundle names the image of its release by digest. A Linux node needs a Docker engine and a Swarm join, and nothing else. A Windows node needs a Docker engine, the `ltsc2022` base image, and a Swarm join, and nothing else.
 
 ## What do `sudo -niHu` and `setpriv` mean?
 

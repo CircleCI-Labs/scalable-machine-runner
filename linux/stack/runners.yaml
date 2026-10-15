@@ -169,7 +169,7 @@ services:
   # runner that is in the DNS set tasks.<service> of its class, once per container, and gets that class's token. All other
   # calls pass through with the caller's own token. If it is down, runners cannot claim and the task agent cannot reach the API
   # until it is back (docs/operations.md). It is a published, signed, multi-architecture image (docs/install-linux.md, "The token
-  # proxy image"): ccilabs/machine-runner-swarm-proxy, the tag edge by default (the latest commit of main). A release bundle names
+  # proxy image"): ccilabs/machine-runner-swarm-proxy, the tag latest by default (the newest release). A release bundle names
   # the tag and the digest of its release instead; pin a digest yourself with MACHINE_RUNNER_SWARM_PROXY_IMAGE. In a checkout,
   # docker build -t machine-runner-swarm-proxy:dev proxy/ and deploy with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to that name. It keeps
   # the addresses of the runners that have claimed in the small volume proxy-state, so that a restart refuses only them. It runs

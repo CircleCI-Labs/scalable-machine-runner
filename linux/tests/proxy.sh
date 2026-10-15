@@ -72,7 +72,7 @@ EOF
 EXTRA_OVERRIDES="$work/proxy-ov.yaml"
 dep() { # PROXY_REPLICAS: the stack with one runner of each class (they idle for 10 minutes), the proxy as given
   make_override "$work/ov.yaml" "linux-default 1 CIRCLECI_RUNNER_IDLE_TIMEOUT=600s" "linux-java 1 CIRCLECI_RUNNER_IDLE_TIMEOUT=600s" "token-proxy $1"
-  deploy_stack "$mgr" "$work/ov.yaml"
+  deploy_stack "$mgr" "$work/ov.yaml" runners.yaml classes-extra.yaml   # three classes: linux-java and linux-hardened are in classes-extra.yaml
 }
 
 # --- helpers ------------------------------------------------------------------------------------------------------------

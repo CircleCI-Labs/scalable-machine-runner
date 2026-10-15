@@ -255,8 +255,8 @@ services:
   # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'. A claim is accepted from a runner in the DNS set tasks.<service> of
   # its class, once per container, and gets the token of that class; every other call passes through with the caller's own token. If it is
   # down, runners cannot claim and the calls of a running job wait until it is back (docs/operations.md). It is a published, signed
-  # image (docs/install-windows.md, "The token proxy image"): ccilabs/machine-runner-swarm-proxy, the tag edge by default (the latest
-  # commit of main). One tag covers Windows Server 2022 and 2025 (and the Linux platforms), and Docker picks the image of the node. A
+  # image (docs/install-windows.md, "The token proxy image"): ccilabs/machine-runner-swarm-proxy, the tag latest by default (the newest
+  # release). One tag covers Windows Server 2022 and 2025 (and the Linux platforms), and Docker picks the image of the node. A
   # release bundle names the tag and the digest of its release instead; pin a digest yourself with MACHINE_RUNNER_SWARM_PROXY_IMAGE. In a
   # checkout, build the image (docs/install-windows.md) and deploy with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to its name. The image
   # runs as ContainerAdministrator: a named volume is writable for it only.

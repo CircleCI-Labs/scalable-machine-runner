@@ -201,7 +201,7 @@ A pull request that changes only documentation runs the lint jobs and the docs s
 - **When it is not known, everything runs.** The first build of a branch, a pipeline started through the API, a base that the clone does not hold, a failed `git fetch` and an empty list all mean "not known". The pipeline parameter `full: true` also turns the shortcut off.
 - **The release gate stays whole.** `docs-only` turns `release` off together with the e2e flags, because the release requires every job and those jobs do not run. That is safe because [`cliff.toml`](../cliff.toml) makes no release for a commit of the type `docs`, `test`, `ci`, `chore`, `style`, `refactor` or `build`. It does release for `fix(docs):`, `feat(docs):` and any breaking change (`docs!:` or a `BREAKING CHANGE:` footer), because the docs ship in the release bundle. So on `main` the gate asks `ci/changed-files.sh --releasable` (it reads the skip pattern from `cliff.toml`): when a commit of the push would make a release, `docs-only` stays `false` and the whole pipeline runs, with the release. The answer errs towards a release. A `docs:` push that the release job would have ended as `Nothing to release` is the only one that loses a job.
 - **Publishing continues.** The workflow `docs-site` is not affected: a docs change on `main` is published and recorded as a deploy.
-- **Required checks.** A skipped job reports no status to GitHub. Do not make a job that docs-only skips (for example `linux-swarm`) a required status check of a branch ruleset. Require the lint jobs and `docs-site-build`, which run on every pipeline.
+- **Required checks.** GitHub gets one status for each workflow, not one for each job, and a docs-only pipeline still ends the workflow `ci` green. Require the status of the workflow `ci` and nothing else ([A ruleset for main](#a-ruleset-for-main)).
 
 `ci/tests/setup-gate.sh` has the table of rows (paths, branch, releasable, full), and `ci/tests/changed-files.sh` runs the script on throwaway repositories: a push of several commits, a base that is not known, a shallow clone, and one commit of each type against `cliff.toml`. `lint-circleci` also checks that every job of `ci` that is not a lint job or `docs-site-build` has a filter that a docs-only change turns off.
 
@@ -545,8 +545,30 @@ Nothing below is created by the repository. Without an item the pipeline still r
 | Context `scalable-machine-runner-docs` | CircleCI organization | Publishing the site to GitHub Pages, and Pages set to `gh-pages` | [GitHub Pages and the token](#github-pages-and-the-token) |
 | Context `scalable-machine-runner-pr-comments` (optional) | CircleCI organization | The comment with the preview address on a pull request, by `docs-site-comment` | [Docs site previews](#docs-site-previews) |
 | A schedule `weekly-security-scan` | The CircleCI project | The weekly security scan | [Create the schedule](#create-the-schedule) |
+| A ruleset on `main`, and one on `smr-swarm/*` | The GitHub repository | A `main` that nobody can push to, and e2e tokens that a stranger's branch cannot reach | [A ruleset for main](#a-ruleset-for-main), [The e2e context and smr-swarm/*](#the-e2e-context-and-smr-swarm) |
+| The project settings (auto-cancel off, no forked pull request builds) | The CircleCI project | Stable e2e runs, and no code of a fork on this project | [Secrets and public logs](#secrets-and-public-logs) |
 
 The Renovate GitHub App is already installed on the organization, and [`renovate.json`](../renovate.json) is its configuration ([Pinned versions](#pinned-versions)). The deploys of the [Deploys](#deploys) section need nothing: CircleCI creates the components and the environments on the first deploy.
+
+### A ruleset for main
+
+A push to `main` publishes the token proxy image, makes a release and writes the `gh-pages` branch, and the context `scalable-machine-runner-docs` holds a token with **Contents: Read and write** on the whole repository, so a job of `main` could also push to `main` itself. Nothing in the repository protects `main`: a maintainer adds a branch ruleset (Settings, Rules, Rulesets, **New branch ruleset**, target: the default branch) with:
+
+- **Require a pull request before merging**, with the number of reviews that you want. The release job never pushes a commit to `main`, so nobody and no job needs to.
+- **Block force pushes** and **restrict deletions**.
+- **No bypass list**, not even for administrators.
+- **Require status checks to pass**, with ONE check: the status of the workflow `ci`. Do not require anything else:
+  - GitHub gets one status for each workflow, not for each job. The workflows are `ci`, `docs-site`, the setup workflow of the branch (`setup-e2e` on `main` and `smr-swarm/*`, `setup-plain` elsewhere, `setup-scan`) and `security-scan`. A job name (`lint-shell`, `docs-site-build`, `linux-swarm`) is not a status, so a ruleset cannot require it.
+  - The setup workflow has a different name on different branches, so requiring `setup-plain` would block every pull request from `smr-swarm/*`, and the other way round.
+  - `ci` is on every pipeline, a docs-only one included, and it ends red when any job in it fails, so it stands for every lint and test job. Find the exact name of the status in a recent commit: `gh api repos/CircleCI-Labs/scalable-machine-runner/commits/main/status --jq '.statuses[].context'`.
+
+### The e2e context and smr-swarm/*
+
+The context `scalable-machine-runner-e2e` holds the runner tokens, and its restriction names `main` and every branch that starts with `smr-swarm/` ([Secrets and public logs](#secrets-and-public-logs)). The configuration of a job comes from its own branch, so anyone who can push a branch named `smr-swarm/anything` can change `.circleci/` in it, print the tokens in a public log, and read them. That is a deliberate trade for the time that the e2e work lives on a branch of its own, and it has an end:
+
+1. **After the merge, rotate both runner tokens** (`circleci runner token create <class> --nickname ci-YYYYMM`, replace the secret in the context, delete the old token: [Troubleshooting](#troubleshooting)). Any token that a branch could read before is untrusted.
+1. **Limit the context to `main`**, or to exact branch names: change the `when` of `setup-e2e` in `.circleci/config.yml`, the expression restriction of the context, `eligible` in `ci/setup-gate.sh` and the rows of `ci/tests/setup-gate.sh` and `ci/tests/setup-config.sh`.
+1. **Restrict who can create the branches** with a second ruleset: target `smr-swarm/**`, **Restrict creations** and **Restrict updates**, and a bypass list of the maintainers only. A stranger's push then cannot create a branch that the context accepts. Until the context is limited to `main`, the ruleset is what keeps the tokens in the hands of the maintainers.
 
 ## Security scan
 

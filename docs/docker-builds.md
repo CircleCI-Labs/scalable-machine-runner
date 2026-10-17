@@ -6,9 +6,7 @@ page-description: Build container images from jobs with an opt-in service that m
 
 # Docker builds
 
-By default, jobs on these runners cannot reach a Docker engine. Access to a Docker daemon is equivalent to root access to the machine, so this repository makes Docker builds opt-in, one dedicated class at a time.
-
-This page describes pattern A, which is built and tested, and patterns B and C, which are documented alternatives. Pattern D, a Docker daemon in the microVM of the job, is part of the [MicroVM add-on](microvm.md) and needs nodes with KVM.
+By default, jobs on these runners cannot reach a Docker engine, because access to a Docker daemon is root access to the machine. Docker builds are opt-in, one dedicated class at a time.
 
 ## Choose a pattern
 
@@ -26,42 +24,40 @@ CircleCI lists Docker layer caching among the features that self-hosted runners 
 A service of this class bind-mounts the engine endpoint of the node: `/var/run/docker.sock` on Linux, and the named pipe `\\.\pipe\docker_engine` on Windows.
 
 > [!CAUTION]
-> The engine endpoint is root-equivalent on its node, and administrator-equivalent on Windows. A job that can use it can start a privileged container, mount any host path, and read the data of other jobs and containers. Use pattern A only for trusted projects, on a dedicated node.
+> The engine endpoint is root-equivalent on its node (administrator-equivalent on Windows). A job that can use it can start a privileged container, mount any host path, and read the data of other jobs and containers. Use pattern A only for trusted projects, on a dedicated node.
 
 Four controls limit the damage:
 
-- **Worker nodes only.** The service runs only where `node.role == worker`. On a Swarm manager the socket also controls the Swarm, so a job can create a service that mounts any secret and read the token of every class. A single-node Swarm has only a manager, so do not use pattern A there.
-- **Labeled nodes only.** The service runs only on nodes that carry `machine-runner-swarm.docker-build=true`.
-- **No neighbors.** The engine shows every container on the node. Keep other classes off the node. Refer to [Keep the docker-build node to itself](multi-node.md#keep-the-docker-build-node-to-itself).
-- **Trusted projects only.** Restrict the class with a config policy, and keep production contexts away from it. Refer to [CircleCI-side controls](security.md#circleci-side-controls).
+- **Worker nodes only.** The service runs only where `node.role == worker`. On a manager the socket also controls the Swarm, so a job could read the token of every class. A single-node Swarm has only a manager, so do not use pattern A there.
+- **Labeled nodes only.** The service runs only on nodes with `machine-runner-swarm.docker-build=true`. Every other service carries `!= true`, so labeling a node moves the other classes off it.
+- **No neighbors.** The engine shows every container on the node. Refer to [Keep the docker-build node to itself](multi-node.md#keep-the-docker-build-node-to-itself).
+- **Trusted projects only.** Restrict the class with a config policy, and keep production contexts away from it ([CircleCI-side controls](security.md#circleci-side-controls)).
 
-State also persists. The images, containers, volumes, and build cache of the host engine outlive the job, so the environment is not clean. Remove what a job creates in a final step. Nothing else prunes this engine, so the disk of the node fills with layers and cache over time: schedule `docker builder prune` and `docker image prune` on it, as in [Free disk space](operations.md#free-disk-space). Never run `docker volume prune` there: the node also holds the volume `runner-bin`.
+State persists: the images, containers, volumes, and build cache of the host engine outlive the job, and nothing else prunes this engine. Remove what a job creates in a final step, and schedule `docker builder prune` and `docker image prune` on the node ([Free disk space](operations.md#free-disk-space)). Never run `docker volume prune` there: the node also holds the volume `runner-bin`.
 
 ### Deploy on Linux
 
-1. Join a dedicated worker node. Refer to [Multi-Node Clusters](multi-node.md). Nothing is installed on it: the `runner-distributor` service also runs on a docker-build node and installs the runner there.
+1. Join a dedicated worker node ([Multi-Node Clusters](multi-node.md)). Nothing is installed on it: `runner-distributor` installs the runner there.
 2. Label the node:
 
-   ```console
-   $ docker node update --label-add machine-runner-swarm.docker-build=true <worker node>
+   ```bash
+   docker node update --label-add machine-runner-swarm.docker-build=true <WORKER_NODE>
    ```
 
-3. Create the resource class `<namespace>/linux-docker-build` and the secret `linux-docker-build-token`. Refer to [Resource Classes](resource-classes.md#define-a-class).
+3. Create the resource class `<namespace>/linux-docker-build` and the secret `linux-docker-build-token` ([Resource Classes](resource-classes.md#define-a-class)).
 4. Deploy the add-on stack file with the main file. Pass the same list of files on every later deploy ([why](concepts.md#add-on-stack-files-and-how-they-merge)).
 
-   ```console
-   $ docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml runners
+   ```bash
+   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml runners
    ```
 
-The file `linux/stack/docker-build.yaml` defines `linux-docker-build`. It mounts the socket, and constrains the service to `node.platform.os == linux`, `node.role == worker`, and `node.labels.machine-runner-swarm.docker-build == true`. Every other service in the stack files carries `node.labels.machine-runner-swarm.docker-build != true`, so labeling a node moves the other classes off it. The class mounts the runner volume read-only, like every class, and the entrypoint adds the job user to the group of the socket, so jobs need no sudo to run `docker`. A job that controls the engine can also change the volume `runner-bin` of its node, which only this class uses there. The `cimg/base` image includes the Docker CLI.
-
-Use the class in a job:
+`linux/stack/docker-build.yaml` defines `linux-docker-build`. It mounts the socket and adds the job user to the group of the socket, so jobs need no sudo to run `docker`. The runner volume stays read-only, but a job that controls the engine can change `runner-bin` of its node, which only this class uses there. The `cimg/base` image includes the Docker CLI.
 
 ```yaml
 jobs:
   image:
     machine: true
-    resource_class: <namespace>/linux-docker-build
+    resource_class: <NAMESPACE>/linux-docker-build
     steps:
       - checkout
       - run: docker build -t "app:${CIRCLE_SHA1:0:12}" .
@@ -75,9 +71,14 @@ The file [`examples/linux-docker-build.yml`](../examples/linux-docker-build.yml)
 
 ### Deploy on Windows
 
-The add-on stack file `windows\stack\docker-build.yaml` defines `windows-docker-build`. It mounts the named pipe `\\.\pipe\docker_engine`, which `docker stack deploy` supports, and the host directory `C:\Program Files\Docker` at `C:\docker`, read-only. It appends `C:\docker` to the `PATH`. Adjust the bind source if `docker.exe` lives elsewhere on your nodes. It runs on a worker node only (`node.role == worker`), as on Linux, so it needs a Windows worker that joined the Swarm ([Multi-Node Clusters](multi-node.md)). The single-node Swarm of the Windows quickstart has only a manager, and the class stays `Pending` there.
+`windows\stack\docker-build.yaml` defines `windows-docker-build`. It mounts the named pipe `\\.\pipe\docker_engine` and the host directory `C:\Program Files\Docker` read-only at `C:\docker`, which it appends to the `PATH`. Adjust the bind source if `docker.exe` lives elsewhere. It runs on a worker only, as on Linux, so it needs a Windows worker in the Swarm ([Multi-Node Clusters](multi-node.md)). The single-node Swarm of the Windows quickstart has only a manager, and the class stays `Pending` there.
 
-1. Label the worker node: `docker node update --label-add machine-runner-swarm.docker-build=true <node name>`.
+1. Label the worker node:
+
+   ```powershell
+   docker node update --label-add machine-runner-swarm.docker-build=true <NODE_NAME>
+   ```
+
 2. Create the resource class `<namespace>/windows-docker-build` and the secret `windows-docker-build-token`.
 3. Deploy the add-on stack file with the main file. Pass the same list of files on every later deploy ([why](concepts.md#add-on-stack-files-and-how-they-merge)).
 
@@ -85,22 +86,18 @@ The add-on stack file `windows\stack\docker-build.yaml` defines `windows-docker-
    docker stack deploy -c windows\stack\runners.yaml -c windows\stack\docker-build.yaml runners
    ```
 
-Jobs can build Windows images only, because the engine runs in Windows-container mode. Linux images cannot be built there. The file [`examples/windows-docker-build.yml`](../examples/windows-docker-build.yml) has a job. Registry credentials for `docker login` and `docker push` belong in a restricted context.
+Jobs can build Windows images only, because the engine runs in Windows-container mode. The file [`examples/windows-docker-build.yml`](../examples/windows-docker-build.yml) has a job. Keep registry credentials for `docker login` and `docker push` in a restricted context.
 
 ## Pattern B: rootless BuildKit on the host
 
-Run a rootless BuildKit daemon on the host under a dedicated unprivileged account, and mount only its socket into a runner service. Jobs send builds to that daemon with a BuildKit client. The daemon exposes only the BuildKit build API, not the Docker API, so a job cannot start arbitrary containers or mount host paths through it.
-
-The risk shrinks, but it does not disappear. The daemon runs on the host and shares its kernel, and every job that uses it shares its build cache. This repository documents the pattern only. It has no stack file, helper, or test for it.
+Run a rootless BuildKit daemon on the host under a dedicated unprivileged account, and mount only its socket into a runner service. Jobs send builds to it with a BuildKit client. The daemon exposes the build API, not the Docker API, so a job cannot start arbitrary containers or mount host paths. The risk shrinks but stays: the daemon shares the host kernel, and every job shares its build cache. This repository has no stack file, helper, or test for it.
 
 ## Pattern C: a daemonless builder in the job
 
-Run a daemonless builder inside the job container, such as a maintained fork of Kaniko or Buildah. The job needs no access to the host engine, and nothing of the host is exposed.
-
-These builders have their own privilege needs. Rootless Buildah relies on user namespaces, and Kaniko expects to run as root inside its container. Swarm ignores `security_opt` and `privileged` in a stack file, so test your builder in a class that matches your policy before you rely on it. This repository documents the pattern only.
+Run a daemonless builder inside the job container, such as a maintained fork of Kaniko or Buildah. Nothing of the host is exposed. These builders have their own privilege needs: rootless Buildah relies on user namespaces, and Kaniko expects to run as root inside its container. Swarm ignores `security_opt` and `privileged` in a stack file, so test your builder in a class that matches your policy first. This repository has no stack file or test for it.
 
 ## What to avoid
 
 - Mounting the Docker socket into any class that is not dedicated to builds.
-- Starting a privileged Docker-in-Docker container from a job. Swarm ignores `privileged`, so it does not work in a stack, and it is root-equivalent where it does work.
+- Starting a privileged Docker-in-Docker container from a job. Swarm ignores `privileged`, and it is root-equivalent where it works.
 - Running pattern A on a manager, or on a node that also runs production workloads.

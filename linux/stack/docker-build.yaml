@@ -1,0 +1,92 @@
+# Optional class: image builds with the HOST Docker engine ("pattern A"). Deploy with an extra -c flag:
+#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/docker-build.yaml runners
+# Create the secret first (same format as in runners.yaml): linux-docker-build-token. Like the classes of runners.yaml, this
+# class claims through the token-proxy of runners.yaml (the service below only adds this class to it), so deploy the two files
+# together. The runner here holds the placeholder, so the class token is never on the Docker-build node.
+#
+#   !!! The Docker socket is ROOT-EQUIVALENT on its node. A job that can use it can start a privileged
+#   !!! container, mount the host's filesystem and read other jobs' data. Keep this class on a dedicated,
+#   !!! expendable node, and never on a Swarm MANAGER: on a manager the socket also controls the Swarm,
+#   !!! so a job could read the secrets of every class, among them the tokens in token-proxy.
+#
+# It only schedules where BOTH constraints hold, so label a worker node first:
+#   docker node update --label-add machine-runner-swarm.docker-build=true <worker-node>
+# The job user can use the socket through its group (the entrypoint adds it); jobs need no sudo for docker.
+# Alternatives that do not hand out the engine: a rootless BuildKit daemon on the host (mount only its
+# socket), or daemonless builds (Kaniko, Buildah) inside an ordinary job. Keep the common settings in
+# sync with runners.yaml.
+
+x-env: &env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"   # the container is discarded after the job, and the runner (uid 2000) cannot remove job-owned files
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy:8080   # through the token proxy of runners.yaml
+
+services:
+  # Adds this class to the token proxy of runners.yaml: the proxy serves a class for every secret <service>-token that it holds, so the
+  # class needs its secret and (on Linux) its network there, and nothing else (stack files merge networks and secrets by name).
+  token-proxy:
+    secrets:
+      - {source: linux-docker-build-token, target: linux-docker-build-token, uid: "65534", gid: "65534", mode: 0400}
+    networks: [linux-docker-build]
+
+  linux-docker-build:
+    image: cimg/base:2026.10   # includes the Docker CLI
+    user: "0"
+    entrypoint: ["/circleci-runner-entrypoint"]
+    configs:
+      - {source: entrypoint, target: /circleci-runner-entrypoint, mode: 0555}
+    init: true
+    stop_grace_period: 5h5m
+    hostname: "{{.Node.Hostname}}-linux-docker-build-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-docker-build-{{.Task.Slot}}"
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"
+    secrets:
+      - source: runner-placeholder-token   # made up: the real token is in token-proxy only
+        target: circleci_runner_config.yaml
+        uid: "2000"
+        gid: "2000"
+        mode: 0400
+    networks: [linux-docker-build]
+    cap_drop: [NET_RAW, MKNOD]
+    ulimits:
+      nofile: {soft: 65536, hard: 65536}
+      core: 0
+    logging:
+      driver: local
+      options: {max-size: 20m, max-file: "3"}
+    volumes:
+      - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}   # the runner of this node (runners.yaml)
+      - type: bind
+        source: /var/run/docker.sock   # root-equivalent, see above
+        target: /var/run/docker.sock
+    deploy:
+      replicas: 1
+      restart_policy: {condition: any, delay: 10s}
+      update_config: {order: stop-first, parallelism: 1}
+      resources:
+        limits: {cpus: "4", memory: 8G, pids: 4096}
+        reservations: {cpus: "4", memory: 8G}
+      placement:
+        constraints:
+          - node.platform.os == linux
+          - node.role == worker
+          - node.labels.machine-runner-swarm.docker-build == true
+          - node.labels.machine-runner-swarm.microvm != true   # the socket cannot cross into a Kata VM (microvm.yaml)
+          - node.labels.machine-runner-swarm.proxy != true   # never on the node of the token proxy: a job there shares a host with every class token
+
+networks:
+  linux-docker-build: {driver: overlay, driver_opts: {encrypted: "true"}}
+
+secrets:
+  runner-placeholder-token: {external: true}
+  linux-docker-build-token: {external: true}
+
+configs:   # as in runners.yaml (ci/config-names.sh keeps the name in step with the file), so that this file also loads alone
+  entrypoint: {name: machine-runner-swarm-entrypoint-219dd9e6972a, file: circleci-runner-entrypoint}
+
+volumes:
+  runner-bin: {}   # the volume that runner-distributor fills (runners.yaml)

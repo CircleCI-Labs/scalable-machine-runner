@@ -1,0 +1,121 @@
+# Optional class: your own image on top of stock Server Core. Deploy with an extra -c flag:
+#   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\custom-image.yaml runners
+# Create the secret first (the runner config with the token, as in runners.yaml): windows-custom-token.
+# Like windows-default, this class claims through the token-proxy-windows of runners.yaml (the service
+# below only adds this class to it), so deploy the two files together. The runner holds
+# the placeholder secret runner-placeholder-token.
+# Replace the image below with yours: windows\images\example\Dockerfile adds Node.js to stock Server Core and shows the pattern.
+# Your image holds the tools only. The runner and Git are mounted from the volume runner-bin as in runners.yaml (its service
+# runner-distributor-windows fills it, so deploy this file together with runners.yaml), and PATH is set in this file,
+# so add the directory of your tools to it below.
+#
+# This file repeats the anchors it uses from runners.yaml (an anchor does not reach into another file): keep the common
+# settings in sync.
+
+x-runner-env: &runner-env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy-windows:8080   # through the token proxy of runners.yaml
+  CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
+  CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
+  # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
+  # HTTPS_PROXY / NO_PROXY: set here when the host needs a proxy (jobs inherit the runner's environment)
+  MACHINE_RUNNER_SWARM_INSTANCE_ID: "{{.Task.ID}}"           # lets a job tell which container it ran in
+  # Git for Windows ships Git Credential Manager; nothing in a container can answer its prompts.
+  GIT_TERMINAL_PROMPT: "0"
+  GCM_INTERACTIVE: never
+  GIT_CONFIG_COUNT: "1"                     # the system gitconfig is in the read-only Git tree
+  GIT_CONFIG_KEY_0: core.longpaths
+  GIT_CONFIG_VALUE_0: "true"
+
+x-runner-deploy: &runner-deploy
+  endpoint_mode: dnsrr                      # no VIP: nothing connects to a runner
+  restart_policy:
+    condition: any                          # every exit (job done, idle timeout, exit 80) -> a NEW container
+    delay: 10s                              # also the pause between attempts when the runner exits 80
+  update_config:
+    order: stop-first
+    parallelism: 1
+    failure_action: pause
+
+x-runner: &runner
+  isolation: process                        # the image build must match the host (the node label windows-<image tag>)
+  stop_grace_period: 5h5m                   # runner max_run_time (5h) plus 5 minutes to drain
+  logging:
+    driver: json-file                       # rotation; "local" also works on Windows
+    options:
+      max-size: 20m
+      max-file: "3"
+  labels:
+    machine-runner-swarm.role: runner
+
+# The stock image's PATH is replaced, so it is spelled out as in runners.yaml, plus the tools of the example image.
+x-stock-env: &stock-env
+  # yamllint disable-line rule:line-length
+  PATH: 'C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin;C:\Program Files\nodejs'
+
+x-stock: &stock
+  entrypoint: ['C:\machine-runner-swarm\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
+
+x-runner-mount: &runner-mount               # the runner, read-only, from the volume that runner-distributor-windows of runners.yaml fills
+  type: volume
+  source: runner-bin
+  target: 'C:\machine-runner-swarm'
+  read_only: true
+  volume:
+    subpath: current                        # a link to versions\<version>, resolved when the container is created
+
+x-git-mount: &git-mount                     # portable Git, where the task agent expects it
+  type: volume
+  source: runner-bin
+  target: 'C:\Program Files\Git'
+  read_only: true
+  volume:
+    subpath: 'git\current'
+
+services:
+  # Adds this class to the token proxy of runners.yaml: the proxy serves a class for every secret <service>-token that it holds, so the
+  # class needs its secret there, and nothing else (stack files merge secrets by name).
+  token-proxy-windows:
+    secrets:
+      - source: windows-custom-token
+        target: windows-custom-token
+
+  # Build your image (it starts FROM stock Server Core) and push it to a registry every Windows node can pull from.
+  windows-custom:
+    <<: [*runner, *stock]
+    image: registry.example.com/ci/machine-runner-swarm-windows-example:ltsc2022   # replace with your image
+    environment:
+      <<: [*runner-env, *stock-env]
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-custom-{{.Task.Slot}}"
+      CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h
+    volumes:
+      - *runner-mount
+      - *git-mount
+    secrets:
+      - source: runner-placeholder-token   # made up: the real token is in token-proxy-windows only
+        target: circleci_runner_config.yaml
+    deploy:
+      <<: *runner-deploy
+      replicas: 1
+      resources:
+        limits: {cpus: "2", memory: 4g}
+        reservations: {cpus: "2", memory: 4g}
+      placement:
+        constraints:
+          - node.platform.os == windows
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: a job there can read other classes' tokens
+          - node.labels.machine-runner-swarm.proxy != true   # never on the node that runs the token proxy: a job there can read every class token
+          - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
+        preferences:
+          - spread: node.id
+
+volumes:
+  runner-bin: {}                            # declared by runners.yaml too: this file must also deploy (and lint) alone
+
+secrets:
+  runner-placeholder-token:
+    external: true
+  windows-custom-token:
+    external: true

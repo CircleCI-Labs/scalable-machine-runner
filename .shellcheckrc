@@ -1,0 +1,13 @@
+# shellcheck configuration. CI runs shellcheck -S warning on every *.sh file
+# and every file whose shebang is sh or bash (see lint-shell in
+# .circleci/continue.yml).
+
+# Follow `source`/`.` to files given on the command line or found relative to
+# the script, so sourced helpers are checked with the caller.
+external-sources=true
+source-path=SCRIPTDIR
+
+# Optional checks that catch real bugs in supervisor-style scripts.
+enable=check-unassigned-uppercase
+enable=deprecate-which
+enable=avoid-nullary-conditions

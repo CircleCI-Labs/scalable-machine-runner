@@ -1,0 +1,42 @@
+# The sidebar of the docs site: its order, its groups and the labels of its pages (docs/ci.md, "Docs site").
+#
+#   == Group title | Group lead (optional)   starts a sidebar group. The lead becomes the group index description.
+#   ==                                          ends the group: the pages below it are top-level pages again.
+#   path | Sidebar label | Description (optional)   a page; the description is used when the page has no page-description.
+#
+# stage.sh fails on a docs/*.md file that is not listed here, and on a listed file that does not exist, so a new,
+# renamed or removed page always shows up in this file. STAGE_LENIENT=1 turns both errors into warnings.
+# The landing page (README.md) is not listed: it is the home page of the site.
+
+== Get started
+docs/quickstart-linux.md | Quickstart on Linux
+docs/quickstart-windows.md | Quickstart on Windows Server
+docs/concepts.md
+
+== Install | The quickstart already installed one node from a release. Use these pages for production, RHEL, a by-hand install and multi-node clusters.
+docs/install-linux.md | Linux
+docs/install-windows.md | Windows Server
+docs/multi-node.md
+
+== Configure
+docs/resource-classes.md
+docs/images.md
+docs/docker-builds.md
+docs/microvm.md | MicroVM jobs
+
+== Operate
+docs/operations.md
+docs/troubleshooting.md
+
+==
+docs/security.md
+docs/faq.md
+
+== Reference
+CHANGELOG.md | Changelog | Release notes are on GitHub Releases. Read every release between yours and the one you install before you upgrade.
+docs/migration.md | Migrate from Docker Compose
+
+== Contribute
+docs/ci.md | CI/CD | What the pipeline tests, how the docs site is built, and how releases are signed and published.
+docs/releasing.md | Releasing
+CONTRIBUTING.md | Contributing | How to report a bug, propose a change and open a pull request for machine runner swarm, a CircleCI Labs project.

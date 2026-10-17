@@ -1,0 +1,56 @@
+{{- /* The footer of the site: the project, the documentation, the community, and the license and security contact. */ -}}
+{{- $repo := partial "repo-url.html" . -}}
+<div class="cci-footer">
+  <div class="cci-footer-grid">
+    <div class="cci-footer-about">
+      <p class="cci-footer-org">
+        <img class="cci-footer-icon" src="{{ "images/circleci-labs-icon.png" | relURL }}" alt="" width="32" height="32" loading="lazy" />
+        <span>CircleCI Labs</span>
+      </p>
+      <p>
+        <strong>CircleCI Labs project.</strong> Not an official CircleCI product and not supported by CircleCI Support.
+        {{ site.Title }} is a solution that field engineers at CircleCI built with customers.
+      </p>
+    </div>
+    <nav class="cci-footer-col" aria-label="Documentation">
+      <h2>Documentation</h2>
+      <ul>
+        <li><a href="{{ "docs/get-started/" | relURL }}">Get started</a></li>
+        <li><a href="{{ "docs/install/" | relURL }}">Install</a></li>
+        <li><a href="{{ "docs/configure/" | relURL }}">Configure</a></li>
+        <li><a href="{{ "docs/operate/" | relURL }}">Operate</a></li>
+        <li><a href="{{ "docs/security/" | relURL }}">Security</a></li>
+      </ul>
+    </nav>
+    <nav class="cci-footer-col" aria-label="Project">
+      <h2>Project</h2>
+      <ul>
+        <li><a href="{{ $repo }}">GitHub repository</a></li>
+        <li><a href="{{ $repo }}/releases">Releases</a></li>
+        <li><a href="{{ "docs/reference/changelog/" | relURL }}">Changelog</a></li>
+        <li><a href="{{ $repo }}/issues">Issues</a></li>
+        <li><a href="{{ "docs/contribute/contributing/" | relURL }}">Contributing</a></li>
+      </ul>
+    </nav>
+    <nav class="cci-footer-col" aria-label="Community and support">
+      <h2>Community</h2>
+      <ul>
+        <li><a href="https://discuss.circleci.com/">CircleCI Discuss</a></li>
+        <li><a href="https://circleci.com/docs/">CircleCI docs</a></li>
+        <li><a href="https://support.circleci.com/hc/en-us">CircleCI support</a></li>
+        <li><a href="https://circleci.com/">circleci.com</a></li>
+      </ul>
+    </nav>
+  </div>
+  <div class="cci-footer-legal">
+    <p>
+      <strong>CircleCI Labs project. Not an official CircleCI product and not supported by CircleCI Support.</strong>
+      Field engineers maintain it on a best-effort basis. Read the <a href="{{ site.Home.RelPermalink }}#support">support notice</a>.
+    </p>
+    <p>
+      Released under the <a href="{{ $repo }}/blob/main/LICENSE">MIT license</a>.
+      Report a security vulnerability to <a href="mailto:security@circleci.com">security@circleci.com</a>, not in a public issue.
+      <a href="{{ $repo }}/blob/main/SECURITY.md">Read the security policy</a>.
+    </p>
+  </div>
+</div>

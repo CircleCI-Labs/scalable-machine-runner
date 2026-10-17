@@ -1,0 +1,84 @@
+# Optional class: a persistent runner. Deploy with an extra -c flag, after editing the hostname below:
+#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/persistent.yaml runners
+# Create the secret first (same format as in runners.yaml): linux-persistent-token.
+#
+# Unlike the other classes this one does NOT claim through the token proxy: a continuous runner claims a task after
+# every job, and the proxy allows one claim per container. The runner keeps the real class token in its secret file,
+# so a job that becomes root in the container (sudo) can read it. That is why jobs here have NO sudo by default
+# (MACHINE_RUNNER_SWARM_JOB_SUDO "false": the step-down is setpriv --no-new-privs, so the token file stays unreadable to the job user, and
+# tools must be in the image). Set "true" for the passwordless sudo of the other classes, and the token is then readable to a job that uses it.
+# The class is weaker than the proxied ones either way: give it a class of its own and keep it for trusted projects
+# (docs/security.md, "The persistent class").
+#
+# Continuous mode runs many jobs in ONE long-lived container, so state from one job (files, installed
+# tools, processes) is visible to the next, and a job can change what later jobs see. Use it only for
+# trusted projects that need warm caches: give it its own resource class restricted to those projects
+# (config policy), keep production contexts away from it, put cleanup steps at the start of its jobs (the
+# runner does not clean the working directory), and recycle it regularly (docker service update --force runners_linux-persistent; it drains first).
+# The named volume lives on ONE node, so the service is pinned to it with node.hostname. Keep the
+# common settings in sync with runners.yaml.
+
+services:
+  linux-persistent:
+    image: cimg/base:2026.10
+    user: "0"
+    entrypoint: ["/circleci-runner-entrypoint"]
+    configs:
+      - {source: entrypoint, target: /circleci-runner-entrypoint, mode: 0555}
+    init: true
+    stop_grace_period: 5h5m
+    hostname: "{{.Node.Hostname}}-linux-persistent-{{.Task.Slot}}"
+    environment:
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-persistent-{{.Task.Slot}}"
+      CIRCLECI_RUNNER_MODE: continuous   # no idle timeout: the runner stays up between jobs
+      # The runner (uid 2000) cannot remove files the job user created, so it must not clean up the working
+      # directory ("failed to remove working directory"): jobs on this class clean up after themselves.
+      CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"
+      CIRCLECI_RUNNER_LOGGING_FORMAT: text
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "false"   # "true" is the opt-in: jobs get sudo, and a job that uses it reads the class token
+    secrets:
+      - source: linux-persistent-token
+        target: circleci_runner_config.yaml
+        uid: "2000"
+        gid: "2000"
+        mode: 0400
+    networks: [linux-persistent]
+    cap_drop: [NET_RAW, MKNOD]
+    ulimits:
+      nofile: {soft: 65536, hard: 65536}
+      core: 0
+    logging:
+      driver: local
+      options: {max-size: 20m, max-file: "3"}
+    volumes:
+      - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}   # the runner of this node (runners.yaml)
+      - type: volume
+        source: persistent-home   # caches (~/.gradle, ~/.npm, ...) survive container replacement
+        target: /home/circleci
+    deploy:
+      replicas: 1
+      restart_policy: {condition: any, delay: 10s}
+      update_config: {order: stop-first, parallelism: 1}
+      resources:
+        limits: {cpus: "4", memory: 8G, pids: 4096}
+        reservations: {cpus: "4", memory: 8G}
+      placement:
+        constraints:
+          - node.platform.os == linux
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node (see runners.yaml)
+          - node.labels.machine-runner-swarm.microvm != true   # nor on a microVM node (see runners.yaml)
+          - node.labels.machine-runner-swarm.proxy != true   # never on the node of the token proxy: a job there shares a host with every class token
+          - node.hostname == CHANGE-ME   # the node that holds the volume
+
+networks:
+  linux-persistent: {driver: overlay, driver_opts: {encrypted: "true"}}
+
+volumes:
+  runner-bin: {}   # the volume that runner-distributor fills (runners.yaml)
+  persistent-home: {}
+
+secrets:
+  linux-persistent-token: {external: true}
+
+configs:   # as in runners.yaml (ci/config-names.sh keeps the name in step with the file), so that this file also loads alone
+  entrypoint: {name: machine-runner-swarm-entrypoint-219dd9e6972a, file: circleci-runner-entrypoint}

@@ -1,0 +1,143 @@
+# Hugo configuration of the docs site (docs/ci.md, "Docs site"). Run site/stage.sh first: it writes content/.
+#
+# The GitHub Pages URL uses the repository name (scalable-machine-runner today; machine-runner-swarm after v0.1.0).
+# baseURL and the GitHub menu link below must match that name. GitHub redirects repository URLs after a rename,
+# but not the old Pages path. stage.sh derives blob/tree links from the GitHub menu URL.
+baseURL: https://circleci-labs.github.io/scalable-machine-runner/
+title: Machine runner swarm
+locale: en-US
+enableRobotsTXT: true
+disableKinds:
+  - taxonomy
+  - term
+
+module:
+  hugoVersion:
+    extended: true
+    min: 0.146.0
+  imports:
+    - path: github.com/imfing/hextra
+
+markup:
+  highlight:
+    # Required by the theme (dark mode of code blocks).
+    noClasses: false
+
+menu:
+  main:
+    - identifier: documentation
+      name: Documentation
+      pageRef: /docs
+      weight: 1
+    - identifier: security
+      name: Security
+      pageRef: /docs/security
+      weight: 2
+    - identifier: faq
+      name: FAQ
+      pageRef: /docs/faq
+      weight: 3
+    - name: Search
+      weight: 4
+      params:
+        type: search
+    - name: Theme
+      weight: 5
+      params:
+        type: theme-toggle
+    - name: GitHub
+      weight: 6
+      url: https://github.com/CircleCI-Labs/scalable-machine-runner
+      params:
+        icon: github
+    # Styled as the call to action of the header (assets/css/custom.css).
+    - identifier: get-started
+      name: Get started
+      pageRef: /docs/get-started
+      weight: 7
+
+params:
+  description: Run CircleCI machine runner 3 as Docker Swarm services, one service for each resource class.
+  externalLinkDecoration: false
+  repo: https://github.com/CircleCI-Labs/scalable-machine-runner
+
+  # The landing page (layouts/home.html). "When to use it" comes from README.md; the rest is in the template.
+  home:
+    title: Machine runner swarm
+    tagline: CircleCI machine runners on Docker Swarm, in containers
+    notice: >-
+      Not an official CircleCI product and not supported by CircleCI Support.
+      Pre-release 0.x: a minor release can change stack files. Field engineers maintain it on a best-effort basis.
+    lead: For platform teams that run Docker hosts or Windows Server and want a clean container for every job, without Kubernetes.
+    features:
+      - icon: layers
+        title: One service for each resource class
+        text: A Swarm service is a resource class, and deploy.replicas sets how many runners it has. Labels and constraints decide which nodes run it.
+        link: docs/get-started/concepts/#services-are-resource-classes
+        linkText: How a class maps to a service
+      - icon: refresh-cw
+        title: A clean environment for every job
+        text: By default a runner claims one job and exits, and Swarm starts a new one, so no job inherits files from an earlier job.
+        link: docs/get-started/concepts/#what-a-clean-environment-covers
+        linkText: What a clean environment covers
+      - icon: server
+        title: Linux and Windows Server
+        text: >-
+          Linux amd64 and arm64 and Windows Server 2022 and 2025 are tested with real jobs.
+          Multi-node clusters are tested in CI on two-node Swarms; ppc64le and s390x only under emulation.
+        link: docs/install/multi-node/
+        linkText: Multi-node clusters
+      - icon: shield-check
+        title: Hardening and a threat model
+        text: A documented threat model and token model, a hardened class without sudo, and guidance on egress.
+        link: docs/security/#threat-model
+        linkText: Threat model
+
+  banner:
+    # The banner cannot be dismissed: custom.css hides the close button, and custom/banner.html renders the text.
+    # A new key shows the banner again to visitors who closed an old one.
+    key: labs-disclaimer-pre-1-0
+    message: >-
+      **CircleCI Labs project, pre-1.0.** Not an official CircleCI product and not supported by CircleCI Support.
+      These pages track main. Each release bundle includes the docs for that release.
+
+  navbar:
+    displayTitle: true
+    displayLogo: false
+    width: normal
+
+  theme:
+    default: system
+    # The toggle is in the header (menu item of type theme-toggle), not in the sidebar.
+    displayToggle: false
+
+  footer:
+    enable: true
+    displayCopyright: false
+    displayPoweredBy: false
+    width: normal
+
+  search:
+    enable: true
+    type: flexsearch
+    flexsearch:
+      index: content
+      tokenize: forward
+
+  # The Mermaid script is downloaded at build time and served from the site. Pinned to the version that the
+  # lint-docs-mermaid job validates the diagrams with (minlag/mermaid-cli 12.0.1 bundles mermaid 12.0.0).
+  mermaid:
+    base: https://cdn.jsdelivr.net/npm/mermaid@12.0.0/dist
+
+  highlight:
+    copy:
+      enable: true
+      display: always
+
+  page:
+    width: normal
+    contextMenu:
+      enable: false
+
+  toc:
+    displayTags: false

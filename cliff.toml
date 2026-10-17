@@ -1,0 +1,79 @@
+# git-cliff configuration (https://git-cliff.org). It decides the next version and writes the
+# release notes and CHANGELOG.md from the Conventional Commits on main. CI runs it in the
+# `release` job (ci/release.sh); see docs/releasing.md.
+#
+#   git cliff --bumped-version                          the next version, for example v0.2.0
+#                                                       (v0.1.0 while nothing is tagged)
+#   git cliff --unreleased --tag v0.2.0 --strip header  the release notes of that version
+#   git cliff --tag v0.2.0                              the whole CHANGELOG.md, that version on top
+
+[changelog]
+header = """
+# Changelog
+
+Release notes are generated from [Conventional Commits](https://www.conventionalcommits.org/) by \
+`cliff.toml` and published as [GitHub Releases](https://github.com/CircleCI-Labs/scalable-machine-runner/releases). \
+This file holds the same text for every release.
+
+"""
+# git-cliff sorts groups by name: the hidden prefix (<!-- 0 -->) puts breaking changes first and
+# keeps the others in a fixed order. It also trims every template line, so a continuation line
+# gets its indent from an expression ({{ "  " }}).
+body = """
+{% if version %}\
+## {{ version | trim_start_matches(pat="v") }} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+
+{% for commit in commits %}\
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}\
+{{ commit.message | split(pat="\n") | first | trim }}\
+{% if "/pull/" not in commit.message %} ([{{ commit.id | truncate(length=7, end="") }}]\
+(https://github.com/CircleCI-Labs/scalable-machine-runner/commit/{{ commit.id }})){% endif %}
+{% if commit.breaking_description and commit.breaking_description != commit.message %}\
+{{ "  " }}{{ commit.breaking_description | trim | replace(from="\n", to=" ") }}
+{% endif %}\
+{% endfor %}\
+{% endfor %}
+
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+# main has three old commits that are not conventional, and GitHub merge commits ("Merge pull
+# request ...") are not either: they are left out.
+filter_unconventional = true
+split_commits = false
+sort_commits = "oldest"
+topo_order = false
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+# GitHub adds " (#123)" to the title of a squash merge: link it to the pull request.
+commit_preprocessors = [
+  { pattern = '\(#([0-9]+)\)', replace = "([#${1}](https://github.com/CircleCI-Labs/scalable-machine-runner/pull/${1}))" },
+]
+
+# Only these types are in the notes, and only they cause a release: a push that holds nothing
+# but docs, test, ci, chore, style, refactor or build commits is not released. A breaking change
+# ("type!:" or a BREAKING CHANGE footer) is listed first, whatever its type.
+commit_parsers = [
+  { message = "^[a-z]+(\\([^)]*\\))?!:", group = "<!-- 0 -->Breaking changes" },
+  { footer = "^BREAKING[ -]CHANGE", group = "<!-- 0 -->Breaking changes" },
+  { message = "^(docs|test|ci|chore|style|refactor|build)", skip = true },
+  { message = "^feat", group = "<!-- 1 -->Features" },
+  { message = "^fix", group = "<!-- 2 -->Bug fixes" },
+  { message = "^perf", group = "<!-- 3 -->Performance" },
+  { message = "^revert", group = "<!-- 4 -->Reverts" },
+]
+
+[bump]
+# 0.x rules (docs/releasing.md): a fix is a patch, a feature and a breaking change are a minor.
+# 1.0.0 is a deliberate, manual decision, so a breaking change never bumps the major.
+features_always_bump_minor = true
+breaking_always_bump_major = false
+initial_tag = "v0.1.0"

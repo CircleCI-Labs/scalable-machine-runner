@@ -1,0 +1,92 @@
+{{- /*
+  Landing page: hero, feature cards, "When to use it" from README.md, a short first-job path, and a support notice.
+*/ -}}
+{{ define "main" }}
+  {{- $home := site.Params.home -}}
+  {{- $repo := partial "repo-url.html" . -}}
+
+  {{- $content := .Content -}}
+  {{- $whenToUse := "" -}}
+  {{- $head := split $content "<h2 data-hextra-search-id=\"when-to-use-it\"" -}}
+  {{- if eq (len $head) 2 -}}
+    {{- $tail := split (index $head 1) "<h2 data-hextra-search-id=\"how-it-works\"" -}}
+    {{- if ge (len $tail) 1 -}}
+      {{- $whenToUse = printf "<h2 data-hextra-search-id=\"when-to-use-it\"%s" (index $tail 0) -}}
+    {{- end -}}
+  {{- end -}}
+
+  {{ partial "sidebar.html" (dict "context" . "disableSidebar" true) }}
+  <main id="content" class="cci-home">
+    {{ partial "custom/page-begin.html" . }}
+
+    <section class="cci-hero" aria-labelledby="cci-hero-title">
+      <div class="cci-wrap cci-hero-grid">
+        <div class="cci-hero-copy">
+          <h1 id="cci-hero-title" class="cci-mega">{{ $home.title }}</h1>
+          <p class="cci-hero-tagline">{{ $home.tagline }}</p>
+          <p class="cci-hero-lead">{{ $home.lead }}</p>
+          <div class="cci-actions">
+            <a class="cci-btn cci-btn-primary" href="{{ "docs/get-started/quickstart-linux/" | relURL }}">Start on Linux {{ partial "utils/icon.html" (dict "name" "arrow-right" "attributes" `height=20 aria-hidden="true"`) }}</a>
+            <a class="cci-btn cci-btn-secondary" href="{{ "docs/get-started/quickstart-windows/" | relURL }}">Start on Windows Server</a>
+          </div>
+          <p class="cci-notice" role="note"><strong>CircleCI Labs project, pre-1.0.</strong> {{ $home.notice }} <a href="#support">Read the support notice</a>.</p>
+        </div>
+
+        <div class="cci-hero-art">
+          <span class="cci-jelly" aria-hidden="true">{{ (resources.Get "icons/jelly-pixel-default.svg").Content | safeHTML }}</span>
+          <figure class="cci-terminal" aria-label="Output of docker stack services runners">
+            <figcaption><span>Terminal</span></figcaption>
+<pre><code><span class="cci-t-prompt">$</span> docker stack services runners
+<span class="cci-t-head">NAME                         MODE         REPLICAS</span>
+runners_linux-default        replicated   <span class="cci-t-ok">2/2</span>
+runners_token-proxy          replicated   <span class="cci-t-ok">1/1</span>
+runners_runner-distributor   global       <span class="cci-t-ok">1/1</span></code></pre>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="cci-features" aria-labelledby="cci-features-title">
+      <div class="cci-wrap">
+        <h2 id="cci-features-title" class="cci-section-title">Machine runners for the Docker hosts you already run</h2>
+        <ul class="cci-cards">
+          {{- range $home.features }}
+            <li class="cci-card">
+              <span class="cci-card-icon" aria-hidden="true">{{ (resources.Get (printf "icons/lucide/%s.svg" .icon)).Content | safeHTML }}</span>
+              <h3>{{ .title }}</h3>
+              <p>{{ .text }}</p>
+              <a class="cci-tertiary" href="{{ .link | relURL }}">{{ .linkText }} {{ partial "utils/icon.html" (dict "name" "arrow-right" "attributes" `height=18 aria-hidden="true"`) }}</a>
+            </li>
+          {{- end }}
+        </ul>
+      </div>
+    </section>
+
+    <section class="cci-readme">
+      <div class="cci-wrap cci-readme-wrap">
+        <div class="content cci-prose">
+          {{- if $whenToUse -}}
+            {{ $whenToUse | safeHTML }}
+          {{- end -}}
+
+          <section class="cci-first-job" aria-labelledby="cci-first-job-title">
+            <h2 id="cci-first-job-title" data-hextra-search-id="your-first-job">Your first job</h2>
+            <ol>
+              <li>Create a resource class and token with the CircleCI CLI (<a href="https://circleci.com/docs/guides/toolkit/circleci-cli/">install the CLI</a>, then <code>circleci auth login</code>).</li>
+              <li>Follow <a href="{{ "docs/get-started/quickstart-linux/" | relURL }}">Quickstart on Linux</a> or <a href="{{ "docs/get-started/quickstart-windows/" | relURL }}">Quickstart on Windows Server</a>: download a release, verify it, deploy the stack, and run a sample workflow.</li>
+              <li>Point a real workflow at your class. Start from <a href="{{ $repo }}/blob/main/examples/linux-hello.yml">examples/linux-hello.yml</a> on GitHub.</li>
+            </ol>
+            <p class="cci-first-job-more">Install paths, operations, and security are in the <a href="{{ "docs/" | relURL }}">documentation</a>.</p>
+          </section>
+
+          <section id="support" aria-labelledby="cci-support-title">
+            <h2 id="cci-support-title" data-hextra-search-id="support">Support</h2>
+            <p>CircleCI support does not cover this repository. Field engineering handles issues on a best-effort basis, without an SLA. Open a <a href="{{ $repo }}/issues">GitHub issue</a> for a bug or a feature request, or ask on <a href="https://discuss.circleci.com/">CircleCI Discuss</a>. Problems with the CircleCI platform or the runner agent go to <a href="https://support.circleci.com/hc/en-us">CircleCI support</a>. To report a security vulnerability, read <a href="{{ $repo }}/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    {{ partial "custom/page-end.html" . }}
+  </main>
+{{ end }}

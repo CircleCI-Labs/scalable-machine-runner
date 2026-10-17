@@ -1,0 +1,7 @@
+{
+  "name": "Machine runner swarm",
+  "short_name": "Runner swarm",
+  "theme_color": "#1a1a1a",
+  "background_color": "#ffffff",
+  "display": "standalone"
+}

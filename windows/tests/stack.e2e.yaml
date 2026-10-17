@@ -1,0 +1,85 @@
+# One real runner under Swarm for the CircleCI end-to-end test (the host job of the Windows e2e):
+#
+#   # the secret is the runner config with the token, never the bare token
+#   [IO.File]::WriteAllText($f, "api:`n  auth_token: $env:E2E_RUNNER_TOKEN_WINDOWS`n"); docker secret create windows-e2e-token $f; Remove-Item $f
+#   $env:E2E_IMAGE = 'mcr.microsoft.com/windows/servercore:ltsc2022'
+#   $env:SWARM_TEST_E2E_EVIDENCE = 'C:\e2e\evidence'
+#   docker stack deploy --resolve-image never -c windows\tests\stack.e2e.yaml swarme2e
+#
+# Same shape as windows\stack\runners.yaml (stock image, the runner as the main process, the volume runner-bin read-only at
+# C:\machine-runner-swarm and at C:\Program Files\Git as the stack's distributor fills it, process isolation, single-task,
+# restart_policy any), with one replica, short timeouts, an
+# evidence directory the probe jobs write to, and a label for finding the containers. Idle timeout 5m:
+# every claim in the e2e happens within seconds, so waiting longer only delays a failure. Count
+# containers with
+#   docker events --filter label=com.docker.swarm.service.name=swarme2e_runner --filter event=die
+# (one "die" per finished job) and compare MACHINE_RUNNER_SWARM_INSTANCE_ID and COMPUTERNAME between the probe jobs.
+# The PATH is the stock one from runners.yaml; keep the two in step.
+services:
+  runner:
+    image: ${E2E_IMAGE:?set E2E_IMAGE}
+    isolation: process
+    entrypoint: ['C:\machine-runner-swarm\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
+    environment:
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-e2e-{{.Task.Slot}}"
+      CIRCLECI_RUNNER_MODE: single-task
+      CIRCLECI_RUNNER_IDLE_TIMEOUT: 5m
+      CIRCLECI_RUNNER_MAX_RUN_TIME: 15m
+      CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
+      CIRCLECI_RUNNER_LOGGING_FORMAT: text
+      CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
+      CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
+      MACHINE_RUNNER_SWARM_INSTANCE_ID: "{{.Task.ID}}"
+      GIT_TERMINAL_PROMPT: "0"
+      GCM_INTERACTIVE: never
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: core.longpaths
+      GIT_CONFIG_VALUE_0: "true"
+      # yamllint disable-line rule:line-length
+      PATH: 'C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin'
+    volumes:
+      - type: volume
+        source: runner-bin
+        target: 'C:\machine-runner-swarm'
+        read_only: true
+        volume:
+          subpath: current
+      - type: volume
+        source: runner-bin
+        target: 'C:\Program Files\Git'
+        read_only: true
+        volume:
+          subpath: 'git\current'
+      - type: bind
+        source: '${SWARM_TEST_E2E_EVIDENCE:-C:\e2e\evidence}'
+        target: 'C:\e2e-evidence'
+    secrets:
+      - source: windows-e2e-token
+        target: circleci_runner_config.yaml
+    labels:
+      machine-runner-swarm.role: runner
+      machine-runner-swarm.e2e: "true"
+    stop_grace_period: 20m
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+    deploy:
+      replicas: 1
+      endpoint_mode: dnsrr
+      restart_policy:
+        condition: any
+        delay: 5s
+      placement:
+        constraints:
+          - node.platform.os == windows
+
+volumes:
+  runner-bin:
+    external: true
+    name: runners_runner-bin   # filled by the distributor of the shipped stack (stack name runners)
+
+secrets:
+  windows-e2e-token:
+    external: true

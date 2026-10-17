@@ -1,0 +1,6 @@
+{{- /* The repository URL: the URL of the GitHub link of the menu in hugo.yaml, the one place that names the repository. */ -}}
+{{- $url := "" -}}
+{{- range site.Menus.main -}}
+  {{- if eq .Params.icon "github" -}}{{- $url = .URL -}}{{- end -}}
+{{- end -}}
+{{- return (strings.TrimSuffix "/" $url) -}}

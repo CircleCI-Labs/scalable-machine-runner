@@ -1,0 +1,157 @@
+version: 2.1
+
+# Setup phase for CircleCI-Labs/scalable-machine-runner (see docs/ci.md).
+#
+# One small job decides what this pipeline runs and then continues the
+# pipeline with .circleci/continue.yml, which holds ONE workflow (`ci`). The
+# parameters below switch jobs in and out of that workflow with expression
+# filters, so a skipped job is never scheduled:
+#
+#   full-suite   main, or `full: true` (pipeline parameter, for a manual run through the API
+#                or a schedule) adds the Windows Server 2025 jobs and linux-mixed-arch.
+#                Only main and smr-swarm/* are eligible for e2e.
+#   windows, proxy-image, microvm
+#                the heavy suites: on main and with `full: true`, and on any other branch
+#                only when a changed file is one that the suite reads (ci/setup-gate.sh).
+#   strict       main with both e2e tokens (the production project): a missing publishing
+#                credential fails the jobs that publish instead of skipping them.
+#   e2e-linux    an e2e branch AND E2E_RUNNER_TOKEN_LINUX is non-empty
+#   e2e-windows  an e2e branch AND E2E_RUNNER_TOKEN_WINDOWS is non-empty
+#   release      the branch is main AND both e2e flags are true. The release job then
+#                waits for every other job of the same workflow (docs/releasing.md).
+#                It implies the three flags above, so the release never runs without
+#                the full suite and both e2e groups.
+#   docs-only    the push changes only documentation (docs/, site/, *.md): the pipeline runs lint
+#                and the docs site build, and turns full-suite, e2e and release off.
+#                ci/changed-files.sh lists the changes, ci/setup-gate.sh decides (docs/ci.md).
+#   security-scan  the weekly scan (a schedule sets the pipeline parameter of the same name). The
+#                continuation runs the workflow `security-scan` and none of the others.
+#
+# THREE setup workflows, mutually exclusive, so that the e2e runner tokens reach no other branch:
+#
+#   setup-e2e    branch main or smr-swarm/*. Its setup job has the scalable-machine-runner-e2e
+#                context, which holds the runner tokens. The context is restricted to the same
+#                branches by an expression (docs/ci.md), so a rerun on another branch or by API
+#                cannot use it either.
+#   setup-plain  every other branch. No context, so no token in the job: e2e is off, and the
+#                pipeline still runs lint, builds and local tests and stays green.
+#   setup-scan   the pipeline parameter security-scan is true, on any branch. No context either.
+#
+# The decision itself lives in ci/setup-gate.sh, with a table test in ci/tests/setup-gate.sh.
+#
+# A tag pipeline (the release creates the tag) runs nothing and cannot release: CircleCI
+# does not run a job for a tag unless the job has a tag filter, and neither this setup
+# job nor any job of continue.yml has one. The pipeline ends as "no workflow", so the
+# setup job never reaches the continuation call (and has nothing to end).
+#
+# Why the gate lives here and not in a job that calls `circleci-agent step halt`:
+# the e2e probe jobs target a self-hosted runner class. Once a workflow
+# schedules them, they queue until a runner claims them, which takes days
+# when no runner exists. Halting a guard job ends only that job, so the probes
+# would still queue. The decision therefore has to be made before the e2e
+# workflow is compiled.
+setup: true
+
+parameters:
+  full:
+    type: boolean
+    default: false
+    description: >
+      Run the full suite (the Windows Server 2025 jobs, linux-mixed-arch and every heavy suite) on
+      any branch. The e2e workflows still run only on main and smr-swarm/*. A schedule or an
+      API call can set it. It also switches the docs-only shortcut off.
+  security-scan:
+    type: boolean
+    default: false
+    description: >
+      The weekly security scan: Trivy on every pinned image and govulncheck on the proxy
+      (docs/ci.md, "Security scan"). Set by the schedule, with the branch main. It runs the
+      workflow security-scan of continue.yml and none of the others, with no context.
+
+jobs:
+  setup:
+    parameters:
+      e2e:
+        type: boolean
+        description: >
+          true only in the workflow whose job has the e2e context attached. The gate then looks
+          for the tokens. false never enables e2e, whatever the environment holds.
+      scan:
+        type: boolean
+        default: false
+        description: >
+          true only in the workflow setup-scan (the schedule): the gate then turns every suite of
+          the ci workflow off and the continuation runs the scan.
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+    resource_class: small
+    environment:
+      # The commit of the build that ran before: the base of a push to main (ci/changed-files.sh).
+      # An unset value arrives as "<nil>", and the script treats it as "not known".
+      BASE_REVISION: << pipeline.git.base_revision >>
+    steps:
+      - checkout
+      - run:
+          name: Find the files that this push changes (ci/changed-files.sh; when they are not known, everything runs)
+          command: |
+            mkdir -p /tmp/setup
+            : > /tmp/setup/changed.txt
+            echo true > /tmp/setup/releasable.txt
+            if [ "<< parameters.scan >>" != true ]; then
+              ci/changed-files.sh > /tmp/setup/changed.txt || : > /tmp/setup/changed.txt
+              ci/changed-files.sh --releasable > /tmp/setup/releasable.txt || echo true > /tmp/setup/releasable.txt
+            fi
+            echo "changed files: $(wc -l < /tmp/setup/changed.txt); a commit would make a release: $(cat /tmp/setup/releasable.txt)"
+            head -n 40 /tmp/setup/changed.txt | sed 's/^/  /'
+      - run:
+          name: Decide which suites run (e2e only on main and smr-swarm/*, and only with the context tokens)
+          command: |
+            ci/setup-gate.sh --e2e "<< parameters.e2e >>" --full "<< pipeline.parameters.full >>" --scan "<< parameters.scan >>" \
+              --changed /tmp/setup/changed.txt --releasable "$(cat /tmp/setup/releasable.txt)" > /tmp/setup/parameters.json
+            cat /tmp/setup/parameters.json
+      - run:
+          name: Continue the pipeline with .circleci/continue.yml
+          command: |
+            # Same API call as the circleci/continuation orb, without printing the
+            # request body (it carries the continuation key).
+            : "${CIRCLE_CONTINUATION_KEY:?setup workflows are not enabled for this project}"
+            jq -n \
+              --arg key "${CIRCLE_CONTINUATION_KEY}" \
+              --rawfile config .circleci/continue.yml \
+              --slurpfile params /tmp/setup/parameters.json \
+              '{"continuation-key": $key, "configuration": $config, "parameters": $params[0]}' \
+              > /tmp/setup/continue.json
+            code=$(curl -sS --retry 5 --retry-connrefused -o /tmp/setup/response.json -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' -H 'Accept: application/json' \
+              --data @/tmp/setup/continue.json https://circleci.com/api/v2/pipeline/continue)
+            rm -f /tmp/setup/continue.json
+            cat /tmp/setup/response.json; echo
+            [ "${code}" = 200 ]
+
+workflows:
+  setup-e2e:
+    when:
+      and:
+        - not: << pipeline.parameters.security-scan >>
+        - or: &e2e-branch
+            - equal: [main, << pipeline.git.branch >>]
+            - matches: {pattern: "^smr-swarm/.*$", value: << pipeline.git.branch >>}
+    jobs:
+      - setup:
+          e2e: true
+          context: [scalable-machine-runner-e2e]
+  setup-plain:
+    when:
+      and:
+        - not: << pipeline.parameters.security-scan >>
+        - not:
+            or: *e2e-branch
+    jobs:
+      - setup:
+          e2e: false
+  setup-scan:
+    when: << pipeline.parameters.security-scan >>
+    jobs:
+      - setup:
+          e2e: false
+          scan: true

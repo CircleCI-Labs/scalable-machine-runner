@@ -1,0 +1,1761 @@
+version: 2.1
+
+# Continuation config for CircleCI-Labs/scalable-machine-runner (see docs/ci.md).
+# .circleci/config.yml (the setup phase) sets the parameters below.
+#
+# One workflow, `ci`. Expression filters on the parameters switch jobs in and out:
+#   lint and docs   the lint jobs and the docs site build: every pipeline, docs-only changes included
+#   not docs-only   the builds and tests: Linux Swarm tests, arm64 smoke test, setup.sh preflight. A change of
+#                   documentation only skips them
+#   windows         the Windows Server 2022 Swarm tests. proxy-image: the token proxy image jobs. microvm: linux-microvm.
+#                   The heavy suites: always on main and with `full: true`, and on another branch only when a changed file
+#                   is one that the suite reads (ci/setup-gate.sh, docs/ci.md)
+#   full-suite      main and `full: true` only: the Windows Server 2025 Swarm tests and linux-mixed-arch
+#   e2e-linux       job A hosts a Swarm service, probes B1, B2, B3 run on it
+#   e2e-windows     the same on Windows (2022, then 2025)
+#   publish         main only, not for a change of documentation: the jobs that push the token proxy image
+#   release         the release job, which requires every job above
+#
+# A second workflow, `docs-site`, publishes the docs site to GitHub Pages on main only. It is not a job
+# of `ci`, so that the release never waits for the publication (docs/ci.md, "Docs site").
+#
+# With the parameter security-scan (the weekly schedule), neither of them runs: the workflow `security-scan` does
+# (docs/ci.md, "Security scan").
+#
+# The jobs of the token proxy image (docs/releasing.md, "The token proxy image") build it for every platform and test it in every pipeline,
+# and on main they push it to Docker Hub (sha-<12> only) with the context scalable-machine-runner-dockerhub. The job proxy-image-edge tags edge
+# after linux-swarm and the e2e groups have passed, and the release job gives the release tags (X.Y.Z, X.Y, X and latest, the default of the stack
+# files) to the image of its commit. No other job moves a tag. Scan reports and logs are stored as job artifacts.
+
+parameters:
+  full-suite:
+    type: boolean
+    default: false
+    description: >
+      main, or `full: true` (a manual run, or a schedule that sets it): the Windows Server 2025 jobs and linux-mixed-arch, the two most
+      expensive suites. It also switches the three heavy suites below on.
+  windows:
+    type: boolean
+    default: false
+    description: The Windows Server 2022 jobs. Always on main and with full, and on another branch for the changed files that they read.
+  proxy-image:
+    type: boolean
+    default: false
+    description: The token proxy image jobs (the plain ones, and the Windows 2022 image). Same rule as windows.
+  microvm:
+    type: boolean
+    default: false
+    description: linux-microvm, the one job on the Android machine image. Same rule as windows.
+  pull-request:
+    type: boolean
+    default: false
+    description: >
+      The push has a pull request (CIRCLE_PULL_REQUEST, which the setup phase reads). It switches docs-site-comment on, the one job with the
+      context that can comment on a pull request.
+  strict:
+    type: boolean
+    default: false
+    description: >
+      main with both e2e tokens: the production project. The jobs that publish get REQUIRE_CREDENTIALS=true, and a missing Docker Hub
+      credential or GITHUB_TOKEN fails them instead of skipping the publication. A docs-only change does not turn it off.
+  e2e-linux:
+    type: boolean
+    default: false
+  e2e-windows:
+    type: boolean
+    default: false
+  release:
+    type: boolean
+    default: false
+    description: >
+      main only, and only when both e2e tokens exist (the setup phase decides). It switches the
+      release job on, and full-suite, e2e-linux and e2e-windows with it, so that every job the
+      release requires really runs.
+  publish:
+    type: boolean
+    default: false
+    description: >
+      main only, and not for a change of documentation only (the setup phase decides). The jobs that push the token proxy image to
+      Docker Hub run instead of the jobs that only build and test it, and they have the context scalable-machine-runner-dockerhub. Without
+      DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the context they build, test, say that nothing was pushed, and pass, unless the parameter
+      strict is true (a production main), where they fail.
+  docs-only:
+    type: boolean
+    default: false
+    description: >
+      The push changes documentation only (docs/, site/, *.md). It switches the builds and tests off: the lint
+      jobs and the docs site build still run. The setup phase turns full-suite, e2e-linux, e2e-windows and
+      release off with it, so the release never waits for a job that was skipped. A docs commit makes no
+      release anyway (cliff.toml), and the gate runs everything when one would.
+  security-scan:
+    type: boolean
+    default: false
+    description: >
+      The weekly security scan: the workflow security-scan runs, and the workflows ci and docs-site do not.
+
+# The machine images are dated tags, not `current`: CircleCI promotes a new `current` every three months, and an image that rotates under an
+# unrelated pull request turns it red (and the microVM job silently needs the Android image to keep nested virtualization). 2026.05.1 is
+# the release that `current` pointed to when the pipeline was measured (docs/ci.md, "Pinned versions"). Move all four by hand, together, and run
+# a full pipeline (`full: true`) on the branch that does it.
+executors:
+  linux-vm:
+    machine:
+      image: ubuntu-2604:2026.05.1
+    resource_class: medium
+  linux-vm-xlarge:
+    machine:
+      image: ubuntu-2604:2026.05.1
+    resource_class: xlarge
+  linux-arm:
+    machine:
+      image: ubuntu-2604:2026.05.1
+    resource_class: arm.medium
+  # The Android machine image is the one CircleCI image with nested virtualization (/dev/kvm): docs/ci.md#linux-microvm.
+  linux-kvm:
+    machine:
+      # Android has quarterly tags plus current/default only (no dated tags like ubuntu-2604); Renovate cannot bump machine images.
+      image: android:current
+    resource_class: large.gen2
+  windows-2022:
+    machine:
+      image: windows-server-2022-gui:2026.05.1
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+  windows-2025:
+    machine:
+      image: windows-server-2025-gui:2026.05.1
+      shell: powershell.exe -ExecutionPolicy Bypass
+    resource_class: windows.medium
+
+commands:
+  trivy:
+    description: >
+      SBOM (CycloneDX) and vulnerability reports of an image as artifacts. The gate fails on
+      fixable CRITICAL findings that the image ADDS to its base image: the base is upstream
+      (cimg/base bundles Docker, Compose and yq, with their own findings), and what this repository
+      owns is what it puts on top. Findings of the base itself stay in the reports. The tarballs and
+      Trivy's databases live under $HOME: /tmp on the machine image is too small for them.
+    parameters:
+      image:
+        type: string
+      base:
+        type: string
+        description: The image that << parameters.image >> is built on.
+      report:
+        type: string
+        description: Report file name stem, e.g. example.
+    steps:
+      - run:
+          name: Trivy reports and gate for << parameters.image >> against << parameters.base >>
+          command: |
+            mkdir -p "${HOME}/trivy/cache" /tmp/reports
+            trivy() {
+              docker run --rm -v "${HOME}/trivy:/trivy" -v /tmp/reports:/reports \
+                -v "${PWD}/.trivyignore:/work/.trivyignore:ro" -w /work \
+                -e TRIVY_NO_PROGRESS=true -e TRIVY_CACHE_DIR=/trivy/cache \
+                aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa "$@"
+            }
+            docker pull -q "<< parameters.base >>" > /dev/null
+            docker save -o "${HOME}/trivy/image.tar" "<< parameters.image >>"
+            docker save -o "${HOME}/trivy/base.tar" "<< parameters.base >>"
+            df -h "${HOME}" /tmp | sed 's/^/  /'
+            trivy image --input /trivy/image.tar --format cyclonedx --output /reports/sbom-<< parameters.report >>.cdx.json
+            trivy image --input /trivy/image.tar --scanners vuln --severity HIGH,CRITICAL \
+              --format json --output /reports/trivy-<< parameters.report >>.json
+            trivy image --input /trivy/image.tar --scanners vuln --severity HIGH,CRITICAL \
+              --format table --output /reports/trivy-<< parameters.report >>.txt
+            echo "HIGH/CRITICAL findings per target of << parameters.image >> (fixed and unfixed; full table in the artifacts):"
+            grep -B 2 '^Total:' /tmp/reports/trivy-<< parameters.report >>.txt || true
+            # Gate: fixable CRITICAL findings, image minus base.
+            for which in image base; do
+              trivy image --input "/trivy/${which}.tar" --scanners vuln --severity CRITICAL --ignore-unfixed \
+                --ignorefile /work/.trivyignore --format json --output "/reports/critical-<< parameters.report >>-${which}.json"
+              jq -r '[.Results[]? | .Vulnerabilities[]? | "\(.VulnerabilityID) \(.PkgName) \(.InstalledVersion)"] | unique[]' \
+                "/tmp/reports/critical-<< parameters.report >>-${which}.json" > "/tmp/${which}.critical"
+              echo "fixable CRITICAL findings in ${which}: $(wc -l < "/tmp/${which}.critical")"
+            done
+            # A finding the base also has is not ours. The lines name the CVE, the package and its version, not the scanned tar file:
+            # the two inputs are different files, so a line with the file name would never match.
+            comm -13 /tmp/base.critical /tmp/image.critical > /tmp/added.critical
+            if [ -s /tmp/added.critical ]; then
+              echo "fixable CRITICAL findings added on top of << parameters.base >>:"; cat /tmp/added.critical
+              exit 1
+            fi
+            echo "no fixable CRITICAL finding is added on top of << parameters.base >>"
+            rm -f "${HOME}/trivy/image.tar" "${HOME}/trivy/base.tar"
+
+  docs-site:
+    description: >
+      Build and check the docs site (site/, docs/ci.md "Docs site"): Hugo and lychee (pinned, SHA-256 verified),
+      the staged Markdown, hugo --minify and the offline link and anchor check. The site is in site/public afterwards.
+      The Hextra theme comes from the Go module that site/go.mod and site/go.sum pin (GOFLAGS=-mod=readonly keeps
+      Go from changing them), and the Mermaid script from the version that site/hugo.yaml pins.
+    steps:
+      - run:
+          name: Install Hugo (extended) and lychee (SHA-256 verified)
+          command: |
+            mkdir -p "${HOME}/.local/bin"
+            # A new version needs its new SHA-256 value too (docs/ci.md, "Pinned versions"). Renovate keeps the version only.
+            # renovate: datasource=github-releases depName=gohugoio/hugo extractVersion=^v(?<version>.*)$
+            hugo_version=0.168.0
+            hugo_sha256=787f100057328824f38c6ad7c87ff10d6451ae0a7bc39cedaad0dd2bcde17e53
+            # renovate: datasource=github-releases depName=lycheeverse/lychee extractVersion=^lychee-v(?<version>.*)$
+            lychee_version=0.24.2
+            lychee_sha256=73657a111819a30c47c08352896796f23d64e4eb2b3ed39b6d32149241566fc5
+            curl -fsSL --retry 5 --retry-all-errors -o /tmp/hugo.tgz \
+              "https://github.com/gohugoio/hugo/releases/download/v${hugo_version}/hugo_extended_${hugo_version}_linux-amd64.tar.gz"
+            echo "${hugo_sha256}  /tmp/hugo.tgz" | sha256sum -c -
+            tar -xzf /tmp/hugo.tgz -C "${HOME}/.local/bin" hugo
+            curl -fsSL --retry 5 --retry-all-errors -o /tmp/lychee.tgz \
+              "https://github.com/lycheeverse/lychee/releases/download/lychee-v${lychee_version}/lychee-x86_64-unknown-linux-musl.tar.gz"
+            echo "${lychee_sha256}  /tmp/lychee.tgz" | sha256sum -c -
+            tar -xzf /tmp/lychee.tgz -C "${HOME}/.local/bin" --strip-components=1 lychee-x86_64-unknown-linux-musl/lychee
+            echo 'export PATH="${HOME}/.local/bin:${PATH}"' >> "${BASH_ENV}"
+            "${HOME}/.local/bin/hugo" version
+            "${HOME}/.local/bin/lychee" --version
+      - run:
+          name: Stage the Markdown as Hugo content (site/stage.sh)
+          command: site/stage.sh
+      - run:
+          name: hugo --minify (warnings fail the build)
+          working_directory: site
+          environment:
+            GOFLAGS: -mod=readonly
+          command: hugo --minify --panicOnWarning
+      - run:
+          name: lychee --offline on the built site (links and heading anchors, site/check.sh)
+          command: site/check.sh
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Lint (small Docker jobs, pinned tool images)
+  # ---------------------------------------------------------------------------
+  lint-shell:
+    docker:
+      - image: koalaman/shellcheck-alpine:v0.11.0@sha256:9955be09ea7f0dbf7ae942ac1f2094355bb30d96fffba0ec09f5432207544002
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: shellcheck -S warning (all *.sh files and sh/bash shebang scripts)
+          command: |
+            find . -path ./.git -prune -o -type f -print | while read -r f; do
+              case "${f##*/}" in
+                *.sh|*.bash) echo "$f" ;;
+                *.*) ;;
+                *) head -n 1 "$f" 2>/dev/null | grep -Eq '^#!.*[/ ](ba)?sh( |$)' && echo "$f" ;;
+              esac
+            done | sort > /tmp/shell-files
+            echo "Checking $(wc -l < /tmp/shell-files) files:"; cat /tmp/shell-files
+            [ -s /tmp/shell-files ] || { echo "no shell scripts found"; exit 1; }
+            grep -qxF ./linux/stack/circleci-runner-entrypoint /tmp/shell-files \
+              || { echo "linux/stack/circleci-runner-entrypoint must be shellchecked (shebang script)"; exit 1; }
+            xargs shellcheck -S warning < /tmp/shell-files
+
+  lint-dockerfiles:
+    docker:
+      - image: hadolint/hadolint:v2.15.1-debian@sha256:9a3944b7fddcb947d1ffd90829ac1a6e5c30479223358f249d8b96c7d0019e27
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: hadolint (Linux, Windows and token proxy Dockerfiles, .hadolint.yaml)
+          command: |
+            find linux windows proxy -type f \( -name Dockerfile -o -name 'Dockerfile.*' -o -name '*.Dockerfile' \) 2>/dev/null \
+              | sort > /tmp/dockerfiles
+            echo "Checking:"; cat /tmp/dockerfiles
+            [ -s /tmp/dockerfiles ] || { echo "no Dockerfiles found under linux/, windows/ or proxy/"; exit 1; }
+            xargs hadolint --config .hadolint.yaml < /tmp/dockerfiles
+
+  lint-yaml:
+    docker:
+      - image: cimg/python:3.14.8@sha256:c1b9a8ca063b345dbed3453ed38ff2fda5a39d8ae51659bd3e962c303d47a66d
+    resource_class: small
+    steps:
+      - checkout
+      - run: pip install --quiet --disable-pip-version-check "yamllint==1.38.0"
+      - run:
+          name: yamllint --strict (.yamllint.yaml)
+          command: yamllint --strict --format colored .
+
+  lint-docs-links:
+    docker:
+      - image: lycheeverse/lychee:0.24.2@sha256:e2d19e57cf6ab037026f20b8e449a1f30d9d7f81eef4194763aab2eab20bd28d
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: lychee --offline (relative links and heading anchors in every Markdown file)
+          command: lychee --config lychee.toml './**/*.md'
+
+  lint-docs-mermaid:
+    docker:
+      - image: minlag/mermaid-cli:12.0.1@sha256:2c5d27365df71da06c288beebe531ea3637cf9b422b871239a3b016233591d24
+    resource_class: medium
+    shell: /bin/sh -eo pipefail
+    steps:
+      - checkout
+      - run:
+          name: mermaid-cli renders every Mermaid diagram in the Markdown files
+          command: |
+            mkdir -p /tmp/mermaid
+            rc=0
+            files=$(find . -path ./.git -prune -o -type f -name '*.md' -exec grep -l '^```mermaid' {} + | sort || true)
+            [ -n "$files" ] || { echo "no Mermaid diagrams found"; exit 0; }
+            for f in $files; do
+              out="/tmp/mermaid/$(echo "${f#./}" | tr / _)"
+              echo "--- $f ($(grep -c '^```mermaid' "$f") diagram(s))"
+              /home/mermaidcli/node_modules/.bin/mmdc -p /puppeteer-config.json -q -i "$f" -o "$out" || { echo "FAIL: $f"; rc=1; }
+            done
+            exit $rc
+      - store_artifacts:
+          path: /tmp/mermaid
+          destination: mermaid
+
+  lint-stack:
+    description: >
+      docker stack config on every stack file (alone and merged: they must parse and interpolate), and every
+      Swarm config of the stack files must be named after the content of its file (ci/config-names.sh).
+    docker:
+      - image: docker:29.9.0-cli@sha256:1a4c7cb63513f349bdad01fcc6e0f3f2f67d37b9da86f14dc0d4a0942eecda00
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: docker stack config (every stack file under linux/stack and windows/stack)
+          command: |
+            set -eu
+            rc=0
+            files=$({ find linux/stack windows/stack -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) 2>/dev/null || true; } | sort)
+            [ -n "$files" ] || { echo "no stack files found in linux/stack or windows/stack"; exit 1; }
+            for f in $files; do
+              echo "--- docker stack config -c $f"
+              docker stack config -c "$f" > "/tmp/$(echo "$f" | tr / _).rendered" || rc=1
+            done
+            # Every file of one OS together (the main file plus its add-on stack files), and the e2e test stack.
+            for os in linux windows; do
+              set --
+              for f in $files; do case "$f" in $os/stack/*) set -- "$@" -c "$f" ;; esac; done
+              echo "--- docker stack config $*"
+              docker stack config "$@" > /dev/null || rc=1
+            done
+            echo "--- docker stack config -c windows/tests/stack.e2e.yaml"
+            E2E_IMAGE=x docker stack config -c windows/tests/stack.e2e.yaml > /dev/null || rc=1
+            echo "--- ci/config-names.sh (Swarm configs are immutable: a changed file needs a new name)"
+            ci/config-names.sh || rc=1
+            exit $rc
+
+  lint-powershell:
+    docker:
+      - image: mcr.microsoft.com/powershell:7.5-ubuntu-24.04@sha256:042240d57ec9e47e511033b92625a8d95875ee5860af3015992c248b58a8be81
+    # The 5.1-compatibility analysis peaks at about 2.7 GB (OOM on small).
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: PSScriptAnalyzer 1.25.0 on ci/ and windows/ (PSScriptAnalyzerSettings.psd1)
+          command: |
+            cat > /tmp/lint.ps1 \<<'EOF'
+            $ErrorActionPreference = 'Stop'
+            Set-PSResourceRepository -Name PSGallery -Trusted
+            Install-PSResource -Name PSScriptAnalyzer -Version 1.25.0 -Quiet
+            $paths = @('windows', 'ci') | Where-Object { Test-Path $_ }
+            if (-not $paths) { throw 'no PowerShell directories found' }
+            $files = Get-ChildItem -Path $paths -Recurse -Include *.ps1, *.psm1, *.psd1
+            Write-Host "Checking $($files.Count) files"
+            $results = foreach ($p in $paths) {
+              Invoke-ScriptAnalyzer -Path $p -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+            }
+            $results | Format-Table -AutoSize -Property Severity, RuleName, ScriptName, Line, Message |
+              Out-String -Width 240 | Write-Host
+            if ($results) { Write-Host "$(@($results).Count) finding(s)"; exit 1 }
+            Write-Host 'PSScriptAnalyzer: no findings'
+            EOF
+            pwsh -NoProfile -NonInteractive -File /tmp/lint.ps1
+      - run:
+          name: Pester 5.7.1 unit tests on PowerShell 7 (windows/tests)
+          no_output_timeout: 5m
+          command: |
+            # Run without a terminal: under CircleCI's pseudo-terminal the Pester suite hangs
+            # (reproduced locally with "docker run -t"); stdin from /dev/null and stdout via a
+            # pipe avoid it. pipefail keeps pwsh's exit status.
+            if [ -f windows/tests/Invoke-UnitTests.ps1 ]; then
+              pwsh -NoProfile -NonInteractive -File windows/tests/Invoke-UnitTests.ps1 \
+                -InstallModules -ResultsDirectory /tmp/test-results/pester < /dev/null 2>&1 | cat
+            else
+              echo "windows/tests/Invoke-UnitTests.ps1 not found"; exit 1
+            fi
+      # Invoke-UnitTests.ps1 writes JUnit XML (Pester 5: OutputFormat JUnitXml), which Test Insights reads.
+      - store_test_results:
+          path: /tmp/test-results
+          when: always
+      - store_artifacts:
+          path: /tmp/test-results
+          destination: test-results
+
+  e2e-simulation:
+    description: >
+      The Linux e2e host and probe scripts against a fake runner in docker:dind, so that a
+      regression in them is caught before a real e2e run (ci/tests/e2e-sim.sh).
+    executor: linux-vm
+    steps:
+      - checkout
+      - run:
+          name: Simulated e2e - pass, no job queued, probe failure (ci/tests/e2e-sim.sh)
+          no_output_timeout: 15m
+          command: |
+            mkdir -p /tmp/reports
+            ci/tests/e2e-sim.sh 2>&1 | tee /tmp/reports/e2e-sim.txt
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+
+  proxy-test:
+    description: >
+      The token proxy (proxy/): gofmt, go vet, the unit tests with the race detector, and the static builds for every platform of
+      CircleCI's runner manifest (linux amd64, arm64, ppc64le and s390x, windows amd64 and arm64: ci/build-proxy.sh). The windows/amd64
+      build goes on in the workspace: the Windows jobs put it into the Windows image. The Linux image is built by proxy-image-linux, and
+      the proxy in a Swarm is tested by linux-swarm (linux/tests/proxy.sh).
+    docker:
+      - image: golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: gofmt, go vet and go test -race (proxy/), as JUnit XML through gotestsum
+          command: |
+            # Pinned by version: go install checks the module against the Go checksum database. Renovate keeps the version only.
+            # renovate: datasource=github-releases depName=gotestyourself/gotestsum extractVersion=^v(?<version>.*)$
+            gotestsum_version=1.13.0
+            go install "gotest.tools/gotestsum@v${gotestsum_version}"
+            cd proxy
+            test -z "$(gofmt -l .)" || { gofmt -d .; echo "run gofmt -w proxy"; exit 1; }
+            go vet ./...
+            mkdir -p /tmp/test-results/go
+            "$(go env GOPATH)/bin/gotestsum" --junitfile /tmp/test-results/go/proxy.xml --format testname -- -race -count=1 ./...
+      - store_test_results:
+          path: /tmp/test-results
+          when: always
+      - run:
+          name: Static builds for every platform (ci/build-proxy.sh)
+          command: |
+            # the version is the one of the image: sha-<12 characters of the commit>
+            version="sha-$(printf '%s' "${CIRCLE_SHA1}" | cut -c1-12)"
+            ci/build-proxy.sh /tmp/proxy-bin "${version}"
+            if [ "$(ls /tmp/proxy-bin | sort)" != "$(ci/build-proxy.sh --list | sort)" ]; then
+              echo "the builds are not the platforms that the script lists"; exit 1
+            fi
+            for f in /tmp/proxy-bin/*; do
+              platform="${f##*/machine-runner-swarm-proxy_}"   # <os>_<arch>
+              info="$(go version -m "$f")"
+              echo "$info" | grep -q 'CGO_ENABLED=0' || { echo "$f is not a static build"; exit 1; }
+              echo "$info" | grep -q "GOOS=${platform%_*}" || { echo "$f is not built for the OS of $platform"; exit 1; }
+              echo "$info" | grep -q "GOARCH=${platform#*_}" || { echo "$f is not built for the architecture of $platform"; exit 1; }
+            done
+            [ "$(/tmp/proxy-bin/machine-runner-swarm-proxy_linux_amd64 -version)" = "machine-runner-swarm-proxy ${version}" ]
+      - store_artifacts:
+          path: /tmp/proxy-bin
+          destination: proxy
+      # The Windows jobs put the windows/amd64 build into the Windows image (ci/Build-ProxyImage.ps1).
+      - persist_to_workspace:
+          root: /tmp/proxy-bin
+          paths: [machine-runner-swarm-proxy_windows_amd64]
+
+  # ---------------------------------------------------------------------------
+  # The token proxy image (docs/releasing.md, "The token proxy image"): ccilabs/machine-runner-swarm-proxy on Docker Hub. Every platform
+  # is built and tested in every pipeline, and no pipeline but main pushes. On main (the parameter publish) the publish variant of each
+  # job runs instead of the plain one: the same steps, then the push, with the context scalable-machine-runner-dockerhub (main only).
+  # proxy-image-publish then joins the three pushes into one manifest list, tags it sha-<12>, and signs every digest. The tags that users pull
+  # move later: edge in the last job of the pipeline (proxy-image-edge), after every test, and X.Y.Z, X.Y, X and latest in the release job.
+  # ---------------------------------------------------------------------------
+  proxy-image-linux:
+    description: >
+      The Linux image (proxy/Dockerfile: a static Go binary in a distroless static base, as 65534) for linux/amd64, arm64, ppc64le and
+      s390x, built with buildx (QEMU registers the handlers; the Go build itself runs natively and cross-compiles). Each image is run, also
+      under QEMU: it reports its version, runs non-root with a read-only root and no capabilities, takes a token file and a state volume, and
+      becomes healthy (ci/proxy-image.sh test). Then ci/tests/proxy-image.sh publishes to a registry of its own (registry:2): the index of
+      the four platforms, the manifest list with the Windows images, edge, and the release tags, with the failures that must stop them.
+      With the parameter publish, the same job pushes the four platforms as ONE index, sha-<12>-linux, and keeps the digest. The push is
+      skipped, with a message, when the context has no credentials.
+    parameters:
+      publish:
+        type: boolean
+        default: false
+    executor: linux-vm
+    environment:
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
+    steps:
+      - checkout
+      - when:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: The Docker Hub credentials (fails at once on a production main when they are missing)
+                command: ci/proxy-image.sh credentials
+      - run:
+          name: crane and cosign (pinned, SHA-256 verified)
+          command: ci/proxy-image.sh install-tools
+      - run:
+          name: QEMU, the builder, then build and test every platform (ci/proxy-image.sh test)
+          no_output_timeout: 25m
+          command: ci/proxy-image.sh test
+      - run:
+          name: The publication against a registry of its own (ci/tests/proxy-image.sh)
+          no_output_timeout: 20m
+          command: ci/tests/proxy-image.sh
+      - when:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: Push the four platforms as one index (ci/proxy-image.sh push; nothing without DOCKERHUB_USERNAME and DOCKERHUB_TOKEN)
+                no_output_timeout: 25m
+                command: ci/proxy-image.sh push
+
+  proxy-image-windows:
+    description: >
+      The Windows image (proxy/Dockerfile.windows: the windows/amd64 build of proxy-test on Nano Server, pinned by digest) for one Windows
+      tag, built on the machine image of that Server version (ci/Build-ProxyImage.ps1). The image is run: it reports its version, and with a
+      token file and a state directory it becomes healthy and writes its state. With the parameter publish, the same job pushes it as
+      sha-<12>-windows-<tag> (skipped, with a message, when the context has no credentials). Windows on Arm has no machine executor:
+      docs/install-windows.md says what to do on such a host.
+    parameters:
+      os:
+        type: executor
+      tag:
+        type: enum
+        enum: [ltsc2022, ltsc2025]
+      publish:
+        type: boolean
+        default: false
+    executor: << parameters.os >>
+    environment:
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
+    steps:
+      - checkout
+      - when:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: The Docker Hub credentials (fails at once on a production main when they are missing)
+                command: |
+                  $required = $env:REQUIRE_CREDENTIALS -in @('1', 'true')
+                  if ($required -and (-not $env:DOCKERHUB_USERNAME -or -not $env:DOCKERHUB_TOKEN)) {
+                    Write-Host 'DOCKERHUB_USERNAME and DOCKERHUB_TOKEN are not both set, and this pipeline must publish.'
+                    Write-Host 'Check the context scalable-machine-runner-dockerhub.'
+                    exit 1
+                  }
+      - attach_workspace:
+          at: proxy-bin   # the windows/amd64 build that proxy-test made
+      - run:
+          name: Docker engine (Windows containers)
+          command: |
+            docker version
+            $osType = docker info --format '{{.OSType}}'
+            if ($osType -ne 'windows') { Write-Host "Docker OSType is '$osType', expected windows"; exit 1 }
+      - unless:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: Build the image for << parameters.tag >> and test it (ci\Build-ProxyImage.ps1 -Test)
+                no_output_timeout: 30m
+                command: |
+                  $global:LASTEXITCODE = 1
+                  $short = $env:CIRCLE_SHA1.Substring(0, 12)
+                  & .\ci\Build-ProxyImage.ps1 -Tag << parameters.tag >> -Name machine-runner-swarm-proxy:ci `
+                    -Version "sha-$short" -Revision $env:CIRCLE_SHA1 -Test
+                  exit $LASTEXITCODE
+      - when:
+          condition: << parameters.publish >>
+          steps:
+            - run:
+                name: Build for << parameters.tag >>, test, push sha-<12>-windows-<< parameters.tag >> (nothing without the credentials)
+                no_output_timeout: 40m
+                command: |
+                  $global:LASTEXITCODE = 1
+                  $short = $env:CIRCLE_SHA1.Substring(0, 12)
+                  $name = "ccilabs/machine-runner-swarm-proxy:sha-$short-windows-<< parameters.tag >>"
+                  & .\ci\Build-ProxyImage.ps1 -Tag << parameters.tag >> -Name $name `
+                    -Version "sha-$short" -Revision $env:CIRCLE_SHA1 -Test -Push
+                  exit $LASTEXITCODE
+
+  proxy-image-publish:
+    description: >
+      main only (the parameter publish; the context scalable-machine-runner-dockerhub). Joins the Linux index and the two Windows images that
+      the jobs before it pushed into ONE manifest list (crane index append), tags it sha-<12> and nothing else, signs every digest keyless with the
+      CircleCI OIDC token, as ci/release.sh signs, and checks the signatures (and that they name refs/heads/main) and the platforms. It moves
+      no tag that a user pulls: edge moves in proxy-image-edge, after the tests, and the stack files default to latest, which the release moves.
+      The release requires it, and finds the digest of its commit by the tag sha-<12>. A publication is recorded as a deploy of the component
+      token-proxy-image, environment docker-hub, version sha-<12> (ci/deploy-marker.sh, docs/ci.md "Deploys"). Without the credentials the
+      job says that nothing was pushed, records no deploy, and passes, unless strict is true (a production main), where it fails.
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+    resource_class: small
+    environment:
+      PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
+    steps:
+      - checkout
+      - run:
+          name: The Docker Hub credentials (fails at once on a production main when they are missing)
+          command: ci/proxy-image.sh credentials
+      - run:
+          name: crane and cosign (pinned, SHA-256 verified)
+          command: ci/proxy-image.sh install-tools
+      - run:
+          name: Plan the deploy (a deploy marker; only when the image will be published)
+          command: |
+            if [ -n "${DOCKERHUB_TOKEN:-}" ] && [ -n "${DOCKERHUB_USERNAME:-}" ]; then
+              ci/deploy-marker.sh plan proxy-image token-proxy-image docker-hub "sha-$(printf '%s' "${CIRCLE_SHA1}" | cut -c1-12)"
+            else
+              echo "no DOCKERHUB_USERNAME and DOCKERHUB_TOKEN: nothing is published, so no deploy is recorded"
+            fi
+      - run:
+          name: Deploy is running
+          command: ci/deploy-marker.sh update proxy-image RUNNING
+      - run:
+          name: One manifest list, sha-<12>, signed (ci/proxy-image.sh assemble; nothing without the credentials; a cancel gives the deploy CANCELED)
+          command: ci/deploy-marker.sh guard proxy-image ci/proxy-image.sh assemble
+      - run:
+          name: Deploy succeeded
+          command: ci/deploy-marker.sh update proxy-image SUCCESS
+      - run:
+          name: Deploy failed
+          when: on_fail
+          command: ci/deploy-marker.sh update proxy-image FAILED "the job proxy-image-publish failed, see ${CIRCLE_BUILD_URL}"
+
+  signing-rehearsal:
+    description: >
+      The keyless signing of main, rehearsed in every pipeline that is not docs-only, on a throwaway image in a registry:2 container of the job
+      (ci/proxy-image.sh rehearse). The job gets its OIDC token with `circleci run oidc get`, which needs no context, signs the image with cosign
+      against the real Fulcio and Rekor, and verifies it with the function that main uses: the certificate identity (this project and pipeline
+      definition), the issuer, and the ref in the certificate, here refs/heads/<this branch>. It then checks that the same signature is refused for
+      another ref. It pushes nothing to Docker Hub and holds no secret. A change in CircleCI's token claims, in Sigstore or in the scripts fails a
+      pull request, and the first merge to main is not the first real run.
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+      - image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373   # the registry of the rehearsal, at localhost:5000
+    resource_class: small
+    environment:
+      PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+    steps:
+      - checkout
+      - run:
+          name: crane and cosign (pinned, SHA-256 verified)
+          command: ci/proxy-image.sh install-tools
+      - run:
+          name: Sign and verify a throwaway image for this branch (ci/proxy-image.sh rehearse)
+          command: ci/proxy-image.sh rehearse
+
+  proxy-image-edge:
+    description: >
+      The last job of the pipeline of main (the parameter release: main with both e2e tokens, so every test is on). It requires
+      proxy-image-publish, linux-swarm (which runs the image in a Swarm: linux/tests/proxy.sh) and the four e2e groups, then checks the signature of
+      sha-<12> and tags it edge, unless a newer commit is on main (ci/proxy-image.sh edge). Until it runs, edge is the image of an earlier commit
+      that passed everything. It is not a requirement of the release, which does not need edge (lint-circleci lists it as optional).
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+    resource_class: small
+    environment:
+      PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
+    steps:
+      - checkout
+      - run:
+          name: crane and cosign (pinned, SHA-256 verified)
+          command: ci/proxy-image.sh install-tools
+      - run:
+          name: Tag edge on sha-<12> (ci/proxy-image.sh edge)
+          command: ci/proxy-image.sh edge
+
+  linux-swarm:
+    description: >
+      The Linux test suite on the latest Ubuntu machine image (linux/tests/run-all.sh): a single-node
+      and a two-node Swarm inside privileged docker:dind containers, with the real stack file,
+      the real entrypoint, the real runner-distributor and the real runner binary, but no token. The
+      distributor downloads from a small HTTP mirror of the harness. Covers stack validation, the helper,
+      ephemerality (with a negative control), exit 80, token readability, placement, the distributor (a
+      node with no install, a joining node, an upgrade under load, a rollback, current following the
+      manifest, the major-version guard, pruning, a tampered binary, a wrong SHA-256, CircleCI's real
+      manifest), persistent mode, draining, network isolation and the entrypoint unit tests.
+    # The stack reserves 2 to 4 CPUs and 4 to 8 GB per replica, and the test Swarm has two nodes on this one VM:
+    # on medium and large VMs the placement and network tests find no room for their replicas.
+    executor: linux-vm-xlarge
+    steps:
+      - checkout
+      - run:
+          name: Docker versions
+          command: docker version --format 'docker client {{.Client.Version}}, server {{.Server.Version}}'
+      - run:
+          name: Every Linux test, sharing one pair of docker:dind containers (linux/tests/run-all.sh)
+          no_output_timeout: 30m
+          command: |
+            mkdir -p /tmp/reports
+            linux/tests/run-all.sh 2>&1 | tee /tmp/reports/run-all.txt
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+
+  linux-microvm:
+    description: >
+      The microVM add-on (linux/tests/microvm.sh): Kata Containers 4.2.0 with Cloud Hypervisor inside privileged docker:dind
+      containers on the Android machine image, which has /dev/kvm. A missing /dev/kvm or vhost device FAILS here (it only skips
+      locally), so the job tells when the image loses nested virtualization. Needs no token.
+    executor: linux-kvm
+    steps:
+      - checkout
+      - run:
+          name: KVM, vhost modules and zstd
+          command: |
+            ls -l /dev/kvm
+            sudo modprobe vhost_vsock vhost_net
+            ls -l /dev/vhost-vsock /dev/vhost-net
+            command -v zstd > /dev/null || { sudo apt-get update -q > /dev/null && sudo apt-get install -y -q zstd > /dev/null; }
+            docker version --format 'docker client {{.Client.Version}}, server {{.Server.Version}}'
+      - run:
+          name: linux/tests/microvm.sh (downloads Kata, SHA-256 verified)
+          no_output_timeout: 30m
+          command: |
+            mkdir -p /tmp/reports
+            SWARM_TEST_REQUIRE_KVM=1 linux/tests/microvm.sh 2>&1 | tee /tmp/reports/microvm.txt
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+
+  linux-image-example:
+    description: >
+      The bring-your-own-image example (linux/images/example): built, smoke-tested and scanned with Trivy.
+    executor: linux-vm
+    steps:
+      - checkout
+      - run:
+          name: docker build linux/images/example
+          command: |
+            docker version --format 'docker {{.Server.Version}}'
+            docker build --pull -f linux/images/example/Dockerfile -t swarm-ci/example:ci linux/images/example
+            docker image ls 'swarm-ci/example'
+      - run:
+          name: Smoke - the image has the tools it adds
+          command: docker run --rm --entrypoint psql swarm-ci/example:ci --version
+      - trivy:
+          image: swarm-ci/example:ci
+          base: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+          report: example
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+
+  linux-setup:
+    description: >
+      linux/setup.sh end to end on a fresh VM with no real token: check, swarm init (twice), the
+      shipped stack deployed with a made-up token (the runner-distributor installs CircleCI's current
+      release from CircleCI's real manifest), and the user, sudo and token checks inside the running
+      containers (ci/linux-smoke.sh).
+    executor: linux-vm
+    steps:
+      - checkout
+      - run:
+          name: setup.sh, the distributor, the stock-image mount and the shipped stack (ci/linux-smoke.sh)
+          no_output_timeout: 15m
+          command: |
+            mkdir -p /tmp/reports
+            ci/linux-smoke.sh 2>&1 | tee /tmp/reports/linux-smoke-x86_64.txt
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+
+  linux-arm64:
+    description: >
+      The same on an Arm VM: the arm64 runner is installed by the runner-distributor, runs unmodified inside a
+      stock cimg image through the volume, and the shipped stack starts its services.
+    executor: linux-arm
+    steps:
+      - checkout
+      - run:
+          name: uname and Docker
+          command: |
+            uname -a
+            docker version --format 'docker client {{.Client.Version}} ({{.Client.Arch}}), server {{.Server.Version}} ({{.Server.Arch}})'
+      - run:
+          name: setup.sh, the distributor, runner --version in a stock image, the shipped stack (ci/linux-smoke.sh)
+          no_output_timeout: 15m
+          command: |
+            mkdir -p /tmp/reports
+            ci/linux-smoke.sh 2>&1 | tee /tmp/reports/linux-smoke-arm64.txt
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+
+  linux-mixed-arch:
+    description: >
+      OPTIONAL for the release (not in its requires). A Swarm of both architectures on one VM (linux/tests/mixed-arch.sh): an amd64
+      manager and an arm64 worker emulated by QEMU, with the real stack file and the real distributor. Each node gets the runner of its
+      own architecture (ELF header, tarball SHA-256 of that architecture), a class constrained by node.platform.arch stays on its
+      architecture, and the arm64 runner prints its version. The script registers the qemu-aarch64 binfmt handler in the VM when it is
+      missing. Here a skip is a failure. Make it a requirement of the release once it has been green for a while.
+    executor: linux-vm-xlarge
+    steps:
+      - checkout
+      - run:
+          name: uname and Docker
+          command: |
+            uname -m
+            docker version --format 'docker client {{.Client.Version}}, server {{.Server.Version}} ({{.Server.Arch}})'
+      - run:
+          name: Mixed-architecture cluster (linux/tests/mixed-arch.sh)
+          no_output_timeout: 20m
+          command: |
+            mkdir -p /tmp/reports
+            SWARM_TEST_REQUIRE_EMULATION=1 linux/tests/mixed-arch.sh 2>&1 | tee /tmp/reports/mixed-arch.txt
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+
+  # ---------------------------------------------------------------------------
+  # Windows: Swarm on the machine images (process isolation: the image build must match the host)
+  # ---------------------------------------------------------------------------
+  windows-swarm:
+    description: >
+      docker swarm init, the runner and portable Git installed by the stack's distributor from CircleCI's real manifest, then the
+      stock-image path (the volume runner-bin mounted read-only into the unmodified Server Core image, runner as the main process):
+      the mounts, ephemerality, exit 80, placement, stop handling, persistent mode, and the distributor against a local mirror.
+    parameters:
+      os:
+        type: executor
+      tag:
+        type: enum
+        enum: [ltsc2022, ltsc2025]
+    executor: << parameters.os >>
+    environment:
+      WINDOWS_TAG: << parameters.tag >>
+    steps:
+      - checkout
+      - run:
+          name: Docker engine (Windows containers)
+          command: |
+            docker version
+            docker info
+            $osType = docker info --format '{{.OSType}}'
+            if ($osType -ne 'windows') { Write-Host "Docker OSType is '$osType', expected windows"; exit 1 }
+      - run:
+          name: Windows unit tests on Windows PowerShell 5.1 (Invoke-UnitTests.ps1, Pester 5.7.1)
+          command: |
+            $ErrorActionPreference = 'Stop'
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+            # The image registers both "Nuget" and "PSGallery" repositories, so an Install-Module
+            # without -Repository matches twice and fails. Install from PSGallery here.
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+            Install-Module -Name Pester -RequiredVersion 5.7.1 -Repository PSGallery -Scope CurrentUser -Force -SkipPublisherCheck
+            Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Repository PSGallery -Scope CurrentUser -Force
+            Import-Module Pester -RequiredVersion 5.7.1
+            $global:LASTEXITCODE = 1
+            & .\windows\tests\Invoke-UnitTests.ps1 -ResultsDirectory C:\test-results\pester
+            exit $LASTEXITCODE
+      - run:
+          name: Pull the stock image before the swarm exists (DNS fails for seconds after swarm init)
+          when: always
+          no_output_timeout: 30m
+          command: |
+            docker pull mcr.microsoft.com/windows/servercore:$env:WINDOWS_TAG
+            exit $LASTEXITCODE
+      - run:
+          name: docker swarm init and the machine-runner-swarm.windows-ltsc* node labels (windows\Setup.ps1 -InitSwarm -AdvertiseAddr)
+          when: always
+          command: |
+            # `docker swarm init` alone fails here: "could not find the system's IP address".
+            $ip = (Get-NetIPAddress -AddressFamily IPv4 |
+              Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet' -and $_.IPAddress -notlike '169.254.*' } |
+              Select-Object -First 1).IPAddress
+            Write-Host "advertise address $ip"
+            $global:LASTEXITCODE = 1
+            & .\windows\Setup.ps1 -InitSwarm -AdvertiseAddr $ip
+            $rc = $LASTEXITCODE
+            docker node ls
+            docker node inspect self --format '{{json .Spec.Labels}}'
+            exit $rc
+      - run:
+          name: The distributor installs the runner and portable Git from CircleCI's real manifest (windows/tests/Test-Install.ps1)
+          when: always
+          no_output_timeout: 40m
+          command: |
+            New-Item -ItemType Directory -Force -Path reports | Out-Null
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Install.ps1 -Report "reports\install-$env:WINDOWS_TAG.txt"
+            exit $LASTEXITCODE
+      - run:
+          name: Stock image plus the read-only mounts (windows/tests/Test-Injection.ps1 -Online)
+          when: always
+          no_output_timeout: 30m
+          command: |
+            New-Item -ItemType Directory -Force -Path reports | Out-Null
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Injection.ps1 -Report "reports\injection-$env:WINDOWS_TAG.txt" -ScriptArguments '-Online'
+            exit $LASTEXITCODE
+      - run:
+          name: Ephemerality under Swarm (windows/tests/Test-Ephemerality.ps1)
+          when: always
+          no_output_timeout: 20m
+          command: |
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Ephemerality.ps1 -Report "reports\ephemerality-$env:WINDOWS_TAG.txt"
+            exit $LASTEXITCODE
+      - run:
+          name: Exit 80 does not hot-loop (windows/tests/Test-Exit80.ps1)
+          when: always
+          no_output_timeout: 15m
+          command: |
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Exit80.ps1 -Report "reports\exit80-$env:WINDOWS_TAG.txt"
+            exit $LASTEXITCODE
+      - run:
+          name: Placement constraints (windows/tests/Test-Placement.ps1)
+          when: always
+          no_output_timeout: 20m
+          command: |
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Placement.ps1 -Report "reports\placement-$env:WINDOWS_TAG.txt"
+            exit $LASTEXITCODE
+      - run:
+          name: Stop handling on stock Server Core (windows/tests/Test-StopHandling.ps1 -Online)
+          when: always
+          no_output_timeout: 25m
+          command: |
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-StopHandling.ps1 -Report "reports\stop-$env:WINDOWS_TAG.txt" -ScriptArguments '-Online'
+            exit $LASTEXITCODE
+      - run:
+          name: Bring-your-own-image example on stock Server Core (windows/images/example, Node.js; runner and Git mounted, PATH from custom-image.yaml)
+          when: always
+          no_output_timeout: 30m
+          command: |
+            docker build -f windows/images/example/Dockerfile --build-arg "WINDOWS_TAG=$env:WINDOWS_TAG" `
+              -t swarm-ci/windows-example:ci windows
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Import-Module .\windows\tests\SwarmTestHelpers.psm1
+            $mounts = Get-SwarmStockMountArgument
+            $path = (Select-String -LiteralPath windows\stack\custom-image.yaml -Pattern "^\s+PATH: '(.+)'").Matches[0].Groups[1].Value
+            docker run --rm --isolation=process @mounts --env "PATH=$path" --entrypoint powershell.exe swarm-ci/windows-example:ci `
+              -NoProfile -Command "node --version; npm --version; git --version; & 'C:\machine-runner-swarm\bin\circleci-runner.exe' --version"
+            exit $LASTEXITCODE
+      - run:
+          name: Persistent mode - one container, a volume that survives (windows/tests/Test-Persistent.ps1)
+          when: always
+          no_output_timeout: 15m
+          command: |
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Persistent.ps1 -Report "reports\persistent-$env:WINDOWS_TAG.txt"
+            exit $LASTEXITCODE
+      - run:
+          name: The distributor against a local mirror - pin, auto, major guard, rollback, pruning, tamper, a running job (windows/tests/Test-Distributor.ps1)
+          when: always
+          no_output_timeout: 25m
+          command: |
+            .\ci\Invoke-Test.ps1 -Script windows\tests\Test-Distributor.ps1 -Report "reports\distributor-$env:WINDOWS_TAG.txt"
+            exit $LASTEXITCODE
+      - store_test_results:
+          path: C:\test-results
+          when: always
+      - store_artifacts:
+          path: C:\test-results
+          destination: test-results
+      - store_artifacts:
+          path: reports
+          destination: reports
+
+  # ---------------------------------------------------------------------------
+  # E2E: job A (cloud VM) hosts the Swarm service; probes B1, B2, B3 run on the e2e class.
+  # The context is attached to the host only; the probes inherit nothing.
+  # ---------------------------------------------------------------------------
+  e2e-linux-host:
+    parameters:
+      os:
+        type: executor
+        default: linux-vm
+        description: linux-vm (amd64) or linux-arm (arm64). The probes record their architecture, and the host requires its own.
+    executor: << parameters.os >>
+    steps:
+      - checkout
+      - run:
+          name: docker swarm init (the runner-distributor of the stack installs the runner)
+          command: ci/e2e-host.sh prepare
+      - run:
+          name: Host the stack - probes b1, b2 (default service) then b3 (hardened service)
+          no_output_timeout: 40m
+          command: ci/e2e-host.sh run
+      - run:
+          name: Remove the stack and leave the swarm
+          when: always
+          command: ci/e2e-host.sh cleanup
+      - run:
+          name: Make any still-queued probe fail fast (only after a failure)
+          when: on_fail
+          command: ci/e2e-host.sh sweep
+      - store_artifacts:
+          path: /tmp/e2e
+          destination: e2e
+
+  e2e-linux-probe:
+    parameters:
+      probe:
+        type: string
+      previous:
+        type: string
+        default: ""
+      expect-sudo:
+        type: enum
+        enum: ["true", "false"]
+        default: "true"
+        description: The service this probe runs in; false = hardened (MACHINE_RUNNER_SWARM_JOB_SUDO=false).
+      workspace:
+        type: enum
+        enum: [persist, attach, none]
+        default: none
+        description: B1 persists a workspace and B2 attaches it (exercises tar/gzip in the runner).
+      hold:
+        type: integer
+        default: 0
+        description: Seconds that the job waits first. The host restarts the token proxy in that time (B2), and the job must live through it.
+    machine: true
+    resource_class: cci-labs/scalable-machine-runner-e2e-linux
+    shell: /bin/bash -eo pipefail
+    steps:
+      - run:
+          name: Identity - claimed by this workflow's e2e host?
+          no_output_timeout: 2m
+          command: |
+            if ! grep -qx "workflow=${CIRCLE_WORKFLOW_ID}" /e2e-evidence/host 2>/dev/null; then
+              echo "Not claimed by the e2e host of workflow ${CIRCLE_WORKFLOW_ID}: either a stray runner"
+              echo "holds the e2e token, or the host failed and its sweeper claimed this job to end it."
+              exit 1
+            fi
+            echo "claimed by $(tr '\n' ' ' < /e2e-evidence/host)"
+      - when:
+          condition:
+            not:
+              equal: [0, << parameters.hold >>]
+          steps:
+            - run:
+                name: Hold the job while the host restarts the token proxy, which carries the calls of the runner and its task agent
+                command: sleep << parameters.hold >>
+      - checkout
+      - when:
+          condition:
+            equal: [attach, << parameters.workspace >>]
+          steps:
+            - attach_workspace:
+                at: /tmp/swarm-e2e-ws
+            - run:
+                name: Workspace from the previous probe arrived intact
+                command: grep -qx "${CIRCLE_WORKFLOW_ID}" "/tmp/swarm-e2e-ws/<< parameters.previous >>.txt"
+      - run:
+          name: Residue, container identity and token readability (<< parameters.probe >>)
+          no_output_timeout: 5m
+          command: |
+            args=("<< parameters.probe >>" --expect-sudo "<< parameters.expect-sudo >>")
+            if [ -n "<< parameters.previous >>" ]; then args+=(--previous "<< parameters.previous >>"); fi
+            ci/e2e-probe.sh "${args[@]}"
+      - when:
+          condition:
+            equal: [persist, << parameters.workspace >>]
+          steps:
+            - run: mkdir -p /tmp/swarm-e2e-ws && echo "${CIRCLE_WORKFLOW_ID}" > /tmp/swarm-e2e-ws/<< parameters.probe >>.txt
+            - persist_to_workspace:
+                root: /tmp/swarm-e2e-ws
+                paths: [<< parameters.probe >>.txt]
+      # The host waits for this file after the job, so a failed probe ends the e2e at once.
+      - run:
+          name: Report job status to the host (passed)
+          command: echo passed > "/e2e-evidence/<< parameters.probe >>.${CIRCLE_WORKFLOW_ID}.status"
+      - run:
+          name: Report job status to the host (failed)
+          when: on_fail
+          command: |
+            [ -d /e2e-evidence ] || exit 0
+            echo failed > "/e2e-evidence/<< parameters.probe >>.${CIRCLE_WORKFLOW_ID}.status"
+
+  e2e-windows-host:
+    parameters:
+      os:
+        type: executor
+      tag:
+        type: enum
+        enum: [ltsc2022, ltsc2025]
+    executor: << parameters.os >>
+    environment:
+      E2E_WINDOWS_TAG: << parameters.tag >>
+    steps:
+      - checkout
+      - attach_workspace:
+          at: proxy-bin   # the token proxy that proxy-test built for windows/amd64
+      - run:
+          name: Build the token proxy image, docker swarm init (with an advertise address), then the distributor installs the runner and Git
+          no_output_timeout: 30m
+          command: |
+            $global:LASTEXITCODE = 1
+            & .\ci\E2E-Host.ps1 -Mode Prepare
+            exit $LASTEXITCODE
+      - run:
+          name: Host the stack - probes b1, b2 and b3, a fresh container each
+          no_output_timeout: 45m
+          command: |
+            $global:LASTEXITCODE = 1
+            & .\ci\E2E-Host.ps1 -Mode Run
+            exit $LASTEXITCODE
+      - run:
+          name: Remove the stack and leave the swarm
+          when: always
+          command: |
+            & .\ci\E2E-Host.ps1 -Mode Cleanup
+            exit 0
+      - run:
+          name: Make any still-queued probe fail fast (only after a failure)
+          when: on_fail
+          command: |
+            & .\ci\E2E-Host.ps1 -Mode Sweep
+            exit 0
+      - store_artifacts:
+          path: C:\e2e
+          destination: e2e
+
+  e2e-windows-probe:
+    parameters:
+      probe:
+        type: string
+      previous:
+        type: string
+        default: ""
+      workspace:
+        type: enum
+        enum: [persist, attach, none]
+        default: none
+        description: >
+          B1 creates files and persists them to a workspace and a cache, B2 attaches and restores
+          them and compares SHA-256 sums (Git's tar and gzip do the workspace, the agent's own tar
+          the cache).
+      variant:
+        type: string
+        default: ltsc2022
+        description: >
+          Names the cache key. The 2022 and the 2025 group share one workflow, and a cache key is
+          immutable: the second group would restore the first group's cache.
+    machine: true
+    resource_class: cci-labs/scalable-machine-runner-e2e-windows
+    shell: powershell.exe -ExecutionPolicy Bypass
+    steps:
+      - run:
+          name: Identity - claimed by this workflow's e2e host?
+          no_output_timeout: 2m
+          command: |
+            $f = 'C:\e2e-evidence\host'
+            if (-not (Test-Path $f) -or -not (Select-String -Path $f -Pattern "^workflow=$($env:CIRCLE_WORKFLOW_ID)$" -Quiet)) {
+              Write-Host "Not claimed by the e2e host of workflow $($env:CIRCLE_WORKFLOW_ID): either a stray runner"
+              Write-Host 'holds the e2e token, or the host failed and its sweeper claimed this job to end it.'
+              exit 1
+            }
+            Write-Host "claimed by $((Get-Content $f) -join ' ')"
+      - checkout
+      - run:
+          name: Git for Windows tools in a bash step
+          shell: bash.exe
+          command: git --version && tar --version | head -n 1 && gzip --version | head -n 1
+      - when:
+          condition:
+            equal: [attach, << parameters.workspace >>]
+          steps:
+            - attach_workspace:
+                at: .
+            - restore_cache:
+                keys:
+                  - swarm-e2e-v1-<< parameters.variant >>-{{ .Environment.CIRCLE_WORKFLOW_ID }}
+            - run:
+                name: The workspace and the cache arrived intact (ci/E2E-Storage.ps1 -Phase Verify)
+                command: |
+                  & .\ci\E2E-Storage.ps1 -Phase Verify
+                  exit $LASTEXITCODE
+      - run:
+          name: Residue, container identity, token readability (<< parameters.probe >>)
+          no_output_timeout: 10m
+          command: |
+            & .\ci\E2E-Probe.ps1 -Probe << parameters.probe >> -Previous '<< parameters.previous >>'
+            exit $LASTEXITCODE
+      - when:
+          condition:
+            equal: [persist, << parameters.workspace >>]
+          steps:
+            - run:
+                name: Create the files for the workspace and the cache (ci/E2E-Storage.ps1 -Phase Create)
+                command: |
+                  & .\ci\E2E-Storage.ps1 -Phase Create
+                  exit $LASTEXITCODE
+            - persist_to_workspace:
+                root: .
+                paths: [out]
+            - save_cache:
+                key: swarm-e2e-v1-<< parameters.variant >>-{{ .Environment.CIRCLE_WORKFLOW_ID }}
+                paths: [cache-dir]
+      # The host waits for this file after the job (see the Linux probe).
+      - run:
+          name: Report job status to the host (passed)
+          command: |
+            $probe = '<< parameters.probe >>'
+            Set-Content -LiteralPath "C:\e2e-evidence\$probe.$env:CIRCLE_WORKFLOW_ID.status" -Value passed -Encoding ASCII
+      - run:
+          name: Report job status to the host (failed)
+          when: on_fail
+          command: |
+            $probe = '<< parameters.probe >>'
+            if (Test-Path 'C:\e2e-evidence') {
+              Set-Content -LiteralPath "C:\e2e-evidence\$probe.$env:CIRCLE_WORKFLOW_ID.status" -Value failed -Encoding ASCII
+            }
+
+  lint-markdown:
+    docker:
+      - image: davidanson/markdownlint-cli2:v0.18.1@sha256:173cb697a255a8a985f2c6a83b4f7a8b3c98f4fb382c71c45f1c52e4d4fed63a
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: markdownlint-cli2 (.markdownlint-cli2.yaml)
+          command: markdownlint-cli2
+      - run:
+          name: markdownlint-cli2 on docs/ci.md (the repository config ignores it; same rules)
+          command: |
+            mkdir -p /tmp/mdl
+            cp docs/ci.md /tmp/mdl/ci.md
+            cat > /tmp/mdl/.markdownlint-cli2.yaml \<<'EOF'
+            config:
+              default: true
+              MD013: false
+              MD014: false
+              MD041: false
+              MD024:
+                siblings_only: true
+            EOF
+            cd /tmp/mdl && markdownlint-cli2 ci.md
+
+  lint-circleci:
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: Install the CircleCI CLI (SHA-256 verified)
+          command: |
+            # A new version needs its new SHA-256 value too (docs/ci.md, "Pinned versions"). Renovate keeps the version only.
+            # renovate: datasource=github-releases depName=CircleCI-Public/circleci-cli extractVersion=^v(?<version>.*)$
+            cli_version=1.4.0
+            cli_sha256=96c3de64d815b076725f5f05aa626d83eaf39b1332a6b1f7e5dbaf46af43f169
+            curl -fsSL --retry 5 --retry-all-errors -o /tmp/cli.tgz \
+              "https://github.com/CircleCI-Public/circleci-cli/releases/download/v${cli_version}/circleci-cli_${cli_version}_linux_amd64.tar.gz"
+            echo "${cli_sha256}  /tmp/cli.tgz" | sha256sum -c -
+            mkdir -p /tmp/cli && tar -xzf /tmp/cli.tgz -C /tmp/cli circleci
+      - run:
+          name: circleci config validate (setup and continuation configs)
+          command: |
+            /tmp/cli/circleci config validate .circleci/config.yml
+            /tmp/cli/circleci config validate .circleci/continue.yml
+            # validate compiles only what the default parameters enable; compile the gated
+            # jobs (full-suite, e2e-linux, e2e-windows, release) too.
+            /tmp/cli/circleci config process .circleci/continue.yml \
+              --pipeline-parameters '{full-suite: true, windows: true, proxy-image: true, microvm: true, e2e-linux: true,
+                e2e-windows: true, release: true}' > /tmp/compiled.yml
+            # A backslash right before a parameter tag escapes it (a Windows path such as
+            # C:\dir\ followed by the tag), leaving the tag literal in the compiled config.
+            if grep -nE '\<< *(parameters|pipeline)\.' /tmp/compiled.yml; then
+              echo "literal parameter tags in the compiled config (escaped by a preceding backslash?)"
+              exit 1
+            fi
+            # A change of documentation only runs the lint jobs and the docs site build. `process` leaves the expression filters
+            # in the compiled config, so read them from the source: a job of ci with no filter must be a lint job or the docs
+            # site build (and docs-site-comment, which a docs pull request needs most: its filter is the parameter pull-request),
+            # and every other filter is `not pipeline.parameters.docs-only` or a parameter that the setup gate
+            # turns off for a docs-only change (full-suite, windows, proxy-image, microvm, e2e-linux, e2e-windows, release, publish),
+            # alone or with `and not pipeline.parameters.publish` (the jobs that the publish variants replace on main). A new job
+            # without a filter would otherwise run on every docs pull request.
+            yq -o=json '.workflows.ci.jobs' .circleci/continue.yml | jq -r '
+              ["not pipeline.parameters.docs-only", "pipeline.parameters.full-suite", "pipeline.parameters.windows",
+               "pipeline.parameters.proxy-image", "pipeline.parameters.microvm", "pipeline.parameters.e2e-linux",
+               "pipeline.parameters.e2e-windows", "pipeline.parameters.release", "pipeline.parameters.publish",
+               "not pipeline.parameters.docs-only and not pipeline.parameters.publish",
+               "pipeline.parameters.proxy-image and not pipeline.parameters.publish",
+               "pipeline.parameters.full-suite and not pipeline.parameters.publish"] as $gated
+              | map(if type == "string" then {key: ., value: {}} else to_entries[0] end)
+              | map(select(.key | startswith("lint-") or . == "docs-site-build" or . == "docs-site-comment" | not))
+              | map(select((.value.filters // "") | IN($gated[]) | not))
+              | map(.key)
+              | if length > 0
+                then "a docs-only change would run: " + join(", ") + " (add filters: not pipeline.parameters.docs-only)" | halt_error(1)
+                else empty end'
+            # The weekly scan sets security-scan: it runs the workflow security-scan and not ci or docs-site, and only then.
+            /tmp/cli/circleci config process .circleci/continue.yml --pipeline-parameters '{security-scan: true}' > /tmp/scan.yml
+            yq -o=json '.workflows | del(.version) | keys' /tmp/scan.yml | jq -e '. == ["security-scan"]' > /dev/null \
+              || { echo "security-scan: true must run the security-scan workflow and no other"; exit 1; }
+            yq -o=json '.workflows | has("security-scan") | not' /tmp/compiled.yml | jq -e . > /dev/null \
+              || { echo "the security-scan workflow runs without security-scan: true"; exit 1; }
+      - run:
+          name: Table tests of the setup gate, the setup workflows (compiled per branch), the scripts and the lists of the security scan
+          command: |
+            ci/tests/setup-gate.sh
+            ci/tests/setup-config.sh /tmp/cli/circleci
+            ci/tests/changed-files.sh
+            ci/security-scan.sh lists
+            ci/tests/security-scan.sh
+            ci/tests/deploy-marker.sh
+            ci/tests/preview-comment.sh
+            ci/tests/signature-ref.sh
+            ci/tests/require-credentials.sh
+            ci/tests/bundle-links.sh
+            ci/tests/runner-pin.sh
+      - run:
+          name: The release job requires every other job (docs/releasing.md)
+          command: |
+            # In the compiled workflow the release waits for one lock job, which requires the real
+            # jobs. A job that nothing else requires and that the lock does not list is missing,
+            # unless it is one of the optional jobs named here.
+            yq -o=json '.workflows.ci.jobs' /tmp/compiled.yml | jq -r '
+              ["linux-mixed-arch", "proxy-image-edge", "docs-site-comment"] as $optional
+              | map(if type == "string" then {key: ., value: {}} else to_entries[0] end) as $jobs
+              | ($jobs | map(select(.key == "release"))[0].value.requires[0]) as $gate
+              | ($jobs | map(select(.key == $gate))[0].value.requires) as $required
+              | ($jobs | map(select(.key != "release" and .key != $gate) | .value.requires // []) | add) as $needed
+              | [$jobs[].key | select(IN($needed[]) | not) | select(IN("release", $gate) or startswith("serial-end-") or IN($optional[]) | not)] - $required
+              | if length > 0 then "release does not require: " + join(", ") | halt_error(1) else empty end'
+            echo "every job of the ci workflow is a requirement of the release"
+
+  # ---------------------------------------------------------------------------
+  # Security scan (docs/ci.md, "Security scan"): the workflow security-scan, weekly, never with the ci workflow
+  # ---------------------------------------------------------------------------
+  security-scan-images:
+    description: >
+      Trivy on every image that the repository pins (ci/security-scan.sh images): the CI jobs, the tests, the stack files.
+      Two lists (ci/security-scan-images.txt): an infra image fails on a CRITICAL finding that has a fix, and the job images
+      and CI tools are only reported (a table and a JSON file per image, as artifacts). It pulls each image from its registry
+      and builds nothing, so it needs no token. Runs only in the workflow security-scan.
+    executor: linux-vm
+    environment:
+      TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+    steps:
+      - checkout
+      - run:
+          name: Trivy on every pinned image (ci/security-scan.sh images)
+          no_output_timeout: 45m
+          command: ci/security-scan.sh images
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+          when: always
+
+  security-scan-go:
+    description: >
+      govulncheck on proxy/ with the Go toolchain of the proxy builds (ci/security-scan.sh go). Fails on any vulnerability
+      that the proxy calls. Runs only in the workflow security-scan.
+    docker:
+      - image: golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: govulncheck on proxy/ (ci/security-scan.sh go)
+          command: ci/security-scan.sh go
+      - store_artifacts:
+          path: /tmp/reports
+          destination: reports
+          when: always
+
+  docs-site-build:
+    description: >
+      The docs site builds and its links work: site/stage.sh, hugo --minify and site/check.sh. The release requires it.
+      The site is stored as one artifact, docs-site.tgz. Then a preview of it, with relative URLs, is stored as the
+      artifacts docs-site-preview (site/preview.sh), and its address is printed in the job output and kept in
+      docs-site/preview-url.txt, which docs-site-comment posts on the pull request. The job has NO context: no token is in the
+      environment of Hugo, lychee, the Go modules or the scripts of site/, and an API pipeline (full: true) is never refused for a
+      context. The publication is the job docs-site-publish, of its own workflow.
+    docker:
+      - image: cimg/go:1.27.2@sha256:d370371192063607c1237351759d8ab0c49f5e37ab7c3bd7553b09c8b62247d5
+    resource_class: small
+    steps:
+      - checkout
+      - docs-site
+      - run:
+          name: Pack the site
+          command: |
+            mkdir -p /tmp/docs-site
+            tar -czf /tmp/docs-site/docs-site.tgz -C site/public .
+      - run:
+          name: Build the preview with relative URLs and check its links (site/preview.sh)
+          command: |
+            site/preview.sh build site/public-preview
+            site/preview.sh url > /tmp/docs-site/preview-url.txt
+      - store_artifacts:
+          path: /tmp/docs-site
+          destination: docs-site
+      - store_artifacts:
+          path: site/public-preview
+          destination: docs-site-preview
+      - run:
+          name: The address of the docs preview (open it from the pull request, or from the Artifacts tab of this job)
+          command: |
+            echo "Docs preview: $(cat /tmp/docs-site/preview-url.txt)"
+            echo "${CIRCLE_BUILD_URL:-}" > /tmp/docs-site/job-url.txt
+      # docs-site-comment reads the address from here
+      - persist_to_workspace:
+          root: /tmp/docs-site
+          paths: [preview-url.txt, job-url.txt]
+
+  docs-site-comment:
+    description: >
+      Posts, or updates, ONE comment with the address of the docs preview on the pull request (site/preview-comment.sh). It is the only job with the
+      context scalable-machine-runner-pr-comments, which holds GITHUB_PR_COMMENT_TOKEN (a token that can only comment on pull requests), and it runs
+      only for a push that has a pull request (the parameter pull-request). It is optional: the release does not wait for it (lint-circleci lists it),
+      without the context or the variable it posts nothing, and a failed call never fails it.
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+    resource_class: small
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/docs-site
+      - run:
+          name: Comment the address on the pull request (only with GITHUB_PR_COMMENT_TOKEN; never fails the job)
+          command: PREVIEW_DIR=/tmp/docs-site site/preview-comment.sh
+
+  docs-site-publish:
+    description: >
+      Builds the site again, with the same steps, and pushes it to the gh-pages branch (site/publish.sh). Runs on main only,
+      in the workflow docs-site, so that the release does not wait for it. The context holds GITHUB_TOKEN. Without it the job
+      builds and checks the site and publishes nothing, unless strict is true (a production main), where it fails. A publication is recorded
+      as a deploy of the component docs-site, environment github-pages, version = the commit (ci/deploy-marker.sh, docs/ci.md "Deploys").
+    docker:
+      - image: cimg/go:1.27.2@sha256:d370371192063607c1237351759d8ab0c49f5e37ab7c3bd7553b09c8b62247d5
+    resource_class: small
+    environment:
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing GITHUB_TOKEN fails the job
+    steps:
+      - checkout
+      # The build comes first: a site that does not build is not a failed deploy, and a failed build would otherwise be recorded as one.
+      - docs-site
+      - run:
+          name: Plan the deploy (a deploy marker; only when the site will be published)
+          command: |
+            if [ -n "${GITHUB_TOKEN:-}" ]; then
+              ci/deploy-marker.sh plan docs-site docs-site github-pages "${CIRCLE_SHA1}"
+            else
+              echo "no GITHUB_TOKEN: nothing is published, so no deploy is recorded"
+            fi
+      - run:
+          name: Deploy is running
+          command: ci/deploy-marker.sh update docs-site RUNNING
+      - run:
+          name: Publish to gh-pages (nothing is published without GITHUB_TOKEN; a cancel gives the deploy CANCELED)
+          command: ci/deploy-marker.sh guard docs-site site/publish.sh
+      - run:
+          name: Deploy succeeded
+          command: ci/deploy-marker.sh update docs-site SUCCESS
+      - run:
+          name: Deploy failed
+          when: on_fail
+          command: ci/deploy-marker.sh update docs-site FAILED "the job docs-site-publish failed, see ${CIRCLE_BUILD_URL}"
+
+  # ---------------------------------------------------------------------------
+  # Release (docs/releasing.md): after every other job of the `ci` workflow has passed
+  # ---------------------------------------------------------------------------
+  release:
+    description: >
+      Version from the Conventional Commits, notes, bundle, SHA256SUMS, keyless cosign signature and the
+      GitHub release (ci/release.sh). The context holds GITHUB_TOKEN. Without it the job does everything
+      except publishing. The context also gives the job its OIDC token for the signature. The job pins the token proxy
+      image of its commit (the digest of sha-<12>, which proxy-image-publish pushed, with its signature checked) in the stack
+      files of the bundle, and gives that image the release tags (X.Y.Z, X.Y, X, latest) before it creates the GitHub release; the
+      context scalable-machine-runner-dockerhub holds the credentials for the tags. A release publishes nothing without them, and on a production
+      main (the parameter strict) a release that is due and cannot publish fails.
+    docker:
+      - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
+    resource_class: small
+    environment:
+      PIPELINE_DEFINITION_ID: << pipeline.definition.id >>
+      # A release that publishes is recorded as a deploy of the component machine-runner-swarm, environment github-releases,
+      # version = the tag, with its failure status (ci/deploy-marker.sh, docs/ci.md "Deploys").
+      RELEASE_DEPLOY_MARKER: "1"
+      REQUIRE_CREDENTIALS: "<< pipeline.parameters.strict >>"   # true on a production main: a missing credential fails the job
+    steps:
+      - checkout
+      - run:
+          name: Install git-cliff, cosign, crane, gh and Go (pinned, SHA-256 verified)
+          command: ci/release.sh install-tools
+      - run:
+          name: Release (nothing is published without GITHUB_TOKEN)
+          command: ci/release.sh
+      - store_artifacts:
+          path: /tmp/release
+          destination: release
+          when: always
+
+# Host (A) + probes (B) are one serialized unit per project, so two pipelines never run e2e
+# runners that could claim each other's probes. Both Windows groups share one serial-group:
+# they use the same resource class and token.
+job-groups:
+  e2e-linux:
+    jobs:
+      - e2e-linux-host:
+          context: [scalable-machine-runner-e2e]
+      - e2e-linux-probe:
+          name: e2e-linux-b1
+          probe: b1
+          workspace: persist
+      - e2e-linux-probe:
+          name: e2e-linux-b2
+          probe: b2
+          previous: b1
+          workspace: attach
+          hold: 75
+          requires: [e2e-linux-b1]
+      - e2e-linux-probe:
+          name: e2e-linux-b3
+          probe: b3
+          previous: b2
+          expect-sudo: "false"
+          requires: [e2e-linux-b2]
+  # The same on an Arm VM: the arm64 runner from the distributor, the same class and token. The probes must report aarch64.
+  e2e-linux-arm64:
+    jobs:
+      - e2e-linux-host:
+          name: e2e-linux-arm64-host
+          context: [scalable-machine-runner-e2e]
+          os: linux-arm
+      - e2e-linux-probe:
+          name: e2e-linux-arm64-b1
+          probe: b1
+          workspace: persist
+      - e2e-linux-probe:
+          name: e2e-linux-arm64-b2
+          probe: b2
+          previous: b1
+          workspace: attach
+          hold: 75
+          requires: [e2e-linux-arm64-b1]
+      - e2e-linux-probe:
+          name: e2e-linux-arm64-b3
+          probe: b3
+          previous: b2
+          expect-sudo: "false"
+          requires: [e2e-linux-arm64-b2]
+  e2e-windows-2022:
+    jobs:
+      - e2e-windows-host:
+          name: e2e-windows-2022-host
+          context: [scalable-machine-runner-e2e]
+          os: windows-2022
+          tag: ltsc2022
+      - e2e-windows-probe:
+          name: e2e-windows-2022-b1
+          probe: b1
+          workspace: persist
+      - e2e-windows-probe:
+          name: e2e-windows-2022-b2
+          probe: b2
+          previous: b1
+          workspace: attach
+          requires: [e2e-windows-2022-b1]
+      - e2e-windows-probe:
+          name: e2e-windows-2022-b3
+          probe: b3
+          previous: b2
+          requires: [e2e-windows-2022-b2]
+  e2e-windows-2025:
+    jobs:
+      - e2e-windows-host:
+          name: e2e-windows-2025-host
+          context: [scalable-machine-runner-e2e]
+          os: windows-2025
+          tag: ltsc2025
+      - e2e-windows-probe:
+          name: e2e-windows-2025-b1
+          probe: b1
+          workspace: persist
+          variant: ltsc2025
+      - e2e-windows-probe:
+          name: e2e-windows-2025-b2
+          probe: b2
+          previous: b1
+          workspace: attach
+          variant: ltsc2025
+          requires: [e2e-windows-2025-b1]
+      - e2e-windows-probe:
+          name: e2e-windows-2025-b3
+          probe: b3
+          previous: b2
+          requires: [e2e-windows-2025-b2]
+
+workflows:
+  # One workflow. Lint and build jobs run on every pipeline; the others carry an expression filter
+  # on the pipeline parameters that the setup phase sets. A job that a filter removes is ignored
+  # as a dependency (configuration reference, `requires`), so the release job can require all of
+  # them: on a release pipeline the setup phase switches every parameter on.
+  ci:
+    when:
+      not: << pipeline.parameters.security-scan >>
+    jobs:
+      - lint-shell
+      - lint-dockerfiles
+      - lint-yaml
+      - lint-stack
+      - lint-powershell
+      - lint-markdown
+      - lint-docs-links
+      - lint-docs-mermaid
+      - lint-circleci
+      # The build has no context. docs-site-comment has the one that holds GITHUB_PR_COMMENT_TOKEN, a token that can only comment on pull
+      # requests, and runs for a pull request only. It is optional: without the context or the variable the job posts no comment
+      # (docs/ci.md, "Docs site previews").
+      - docs-site-build
+      - docs-site-comment:
+          context: [scalable-machine-runner-pr-comments]
+          requires: [docs-site-build]
+          filters: pipeline.parameters.pull-request
+      - e2e-simulation:
+          filters: not pipeline.parameters.docs-only
+      - proxy-test:
+          filters: not pipeline.parameters.docs-only
+      # The token proxy image: built and tested everywhere; on main the publish variants run instead and push (docs/ci.md, "The token
+      # proxy image"). The Windows jobs need the windows/amd64 build of proxy-test.
+      - proxy-image-linux:
+          filters: pipeline.parameters.proxy-image and not pipeline.parameters.publish
+      - proxy-image-linux:
+          name: proxy-image-linux-publish
+          publish: true
+          context: [scalable-machine-runner-dockerhub]
+          filters: pipeline.parameters.publish
+      - proxy-image-windows:
+          name: proxy-image-windows-ltsc2022
+          os: windows-2022
+          tag: ltsc2022
+          requires: [proxy-test]
+          filters: pipeline.parameters.proxy-image and not pipeline.parameters.publish
+      - proxy-image-windows:
+          name: proxy-image-windows-ltsc2022-publish
+          os: windows-2022
+          tag: ltsc2022
+          publish: true
+          context: [scalable-machine-runner-dockerhub]
+          requires: [proxy-test]
+          filters: pipeline.parameters.publish
+      - proxy-image-windows:
+          name: proxy-image-windows-ltsc2025
+          os: windows-2025
+          tag: ltsc2025
+          requires: [proxy-test]
+          filters: pipeline.parameters.full-suite and not pipeline.parameters.publish
+      - proxy-image-windows:
+          name: proxy-image-windows-ltsc2025-publish
+          os: windows-2025
+          tag: ltsc2025
+          publish: true
+          context: [scalable-machine-runner-dockerhub]
+          requires: [proxy-test]
+          filters: pipeline.parameters.publish
+      - proxy-image-publish:
+          context: [scalable-machine-runner-dockerhub]
+          serial-group: << pipeline.project.slug >>/proxy-image-publish
+          requires: [proxy-image-linux-publish, proxy-image-windows-ltsc2022-publish, proxy-image-windows-ltsc2025-publish]
+          filters: pipeline.parameters.publish
+      # The signing of main, on a throwaway image: no context, no secret, in every pipeline that is not docs-only (docs/releasing.md, "The signing rehearsal").
+      - signing-rehearsal:
+          filters: not pipeline.parameters.docs-only
+      - proxy-image-edge:
+          context: [scalable-machine-runner-dockerhub]
+          serial-group: << pipeline.project.slug >>/proxy-image-edge
+          requires: [proxy-image-publish, linux-swarm, e2e-linux, e2e-linux-arm64, e2e-windows-2022, e2e-windows-2025]
+          filters: pipeline.parameters.release
+      - linux-swarm:
+          filters: not pipeline.parameters.docs-only
+      - linux-image-example:
+          filters: not pipeline.parameters.docs-only
+      - linux-setup:
+          filters: not pipeline.parameters.docs-only
+      - linux-arm64:
+          filters: not pipeline.parameters.docs-only
+      # Required by the release: KVM on the Android image has passed in CI in every pipeline since the first one that could run it
+      # (microvm, which a release pipeline switches on, as every heavy suite).
+      - linux-microvm:
+          filters: pipeline.parameters.microvm
+      # Optional: it is NOT in the `requires` of the release (the release check of lint-circleci lists it as optional). main and full only.
+      - linux-mixed-arch:
+          filters: pipeline.parameters.full-suite
+      - windows-swarm:
+          name: windows-swarm-ltsc2022
+          os: windows-2022
+          tag: ltsc2022
+          filters: pipeline.parameters.windows
+      - windows-swarm:
+          name: windows-swarm-ltsc2025
+          os: windows-2025
+          tag: ltsc2025
+          filters: pipeline.parameters.full-suite
+      - e2e-linux:
+          serial-group: << pipeline.project.slug >>/e2e-linux
+          filters: pipeline.parameters.e2e-linux
+      - e2e-linux-arm64:
+          serial-group: << pipeline.project.slug >>/e2e-linux
+          requires: [e2e-linux]
+          filters: pipeline.parameters.e2e-linux
+      - e2e-windows-2022:
+          serial-group: << pipeline.project.slug >>/e2e-windows
+          requires: [proxy-test]
+          filters: pipeline.parameters.e2e-windows
+      - e2e-windows-2025:
+          serial-group: << pipeline.project.slug >>/e2e-windows
+          requires: [e2e-windows-2022, proxy-test]
+          filters: pipeline.parameters.e2e-windows
+      # The release (docs/releasing.md): main only, after every other job has passed. Add every new
+      # job of this workflow to `requires` below. One release at a time, so two quick merges cannot
+      # race for a version: a newer pipeline's release waiting in the group makes an older
+      # pipeline's release job skip, and the newer one releases both.
+      - release:
+          context: [scalable-machine-runner-release, scalable-machine-runner-dockerhub]
+          serial-group: << pipeline.project.slug >>/release
+          filters: pipeline.parameters.release
+          requires:
+            - lint-shell
+            - lint-dockerfiles
+            - lint-yaml
+            - lint-stack
+            - lint-powershell
+            - lint-markdown
+            - lint-docs-links
+            - lint-docs-mermaid
+            - lint-circleci
+            - docs-site-build
+            - e2e-simulation
+            - proxy-test
+            - proxy-image-linux
+            - proxy-image-windows-ltsc2022
+            - proxy-image-windows-ltsc2025
+            - proxy-image-publish
+            - signing-rehearsal
+            - linux-swarm
+            - linux-image-example
+            - linux-setup
+            - linux-arm64
+            - linux-microvm
+            - windows-swarm-ltsc2022
+            - windows-swarm-ltsc2025
+            - e2e-linux
+            - e2e-linux-arm64
+            - e2e-windows-2022
+            - e2e-windows-2025
+
+  # The docs site (docs/ci.md, "Docs site"): main only, in a workflow of its own. A job of the `ci` workflow that
+  # nothing requires would have to be a requirement of the release (lint-circleci checks it), and the release must
+  # not wait for the publication. One publication at a time, so that two quick merges cannot push to gh-pages together.
+  docs-site:
+    when:
+      not: << pipeline.parameters.security-scan >>
+    jobs:
+      - docs-site-publish:
+          context: [scalable-machine-runner-docs]
+          serial-group: << pipeline.project.slug >>/docs-site-publish
+          filters:
+            branches:
+              only: main
+
+  # The weekly scan (docs/ci.md, "Security scan"): a schedule sets security-scan, and the setup phase passes it on. The ci and
+  # docs-site workflows are off then, so no build, no e2e and no release runs. The jobs have no context.
+  security-scan:
+    when: << pipeline.parameters.security-scan >>
+    jobs:
+      - security-scan-images
+      - security-scan-go

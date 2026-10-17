@@ -1,1 +1,4 @@
 *.env*
+# a "go build" in proxy/ writes the binary next to main.go
+/proxy/cmd/machine-runner-swarm-proxy/machine-runner-swarm-proxy
+/proxy/machine-runner-swarm-proxy

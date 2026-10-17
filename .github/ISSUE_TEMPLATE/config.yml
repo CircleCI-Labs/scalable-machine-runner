@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: CircleCI Discuss Community Forum
+    url: https://discuss.circleci.com/
+    about: Community forum for CircleCI users
+  - name: Report a security vulnerability
+    url: https://circleci.com/security/
+    about: Do not open a public issue for a vulnerability. Email security@circleci.com.

@@ -1,0 +1,246 @@
+# machine-runner-swarm: Linux runners as a Docker Swarm stack (one service per resource class).
+#
+#   printf %s "$TOKEN" | linux/setup.sh --secret linux-default      # one secret per class, see below
+#   printf %s machine-runner-swarm-placeholder | linux/setup.sh --secret runner-placeholder   # once: what the runners hold instead
+#   docker stack deploy -c linux/stack/runners.yaml runners
+#
+# That is the whole install: nothing is installed on the nodes by hand. The service runner-distributor runs on every Linux node, also
+# on a node that joins later, and keeps the circleci-runner of that node in the per-node volume runner-bin. The
+# runner version is an exact pin by default (the newest one that this repository's CI tests, which a release of this repository
+# bumps), so the nodes never change version by themselves. 3.1, 3 or current make it float (the manifest's hash is trusted, which is
+# weaker, and the default SHA-256 list of the pin is ignored): the distributor then follows CircleCI's manifest and checks again every
+# 24 hours. Every class mounts the volume read-only into a STOCK
+# image (cimg/*, Alpine, UBI); its entrypoint (a Swarm config) waits for the runner, checks its SHA-256 and starts it. Which version
+# the nodes run is a setting of the distributor service only (MACHINE_RUNNER_SWARM_RUNNER_VERSION below): an upgrade, a pin and a
+# rollback change that one service, and the runner services never restart. docs/operations.md
+#
+# Each service is one CircleCI resource class (linux-default is <namespace>/linux-default) and deploy.replicas is the number of
+# runners. The runner runs in single-task mode, so each container runs one job and exits; restart_policy "any" starts a NEW container
+# for the next job, and a job never sees files from an earlier one.
+#
+# The class tokens never reach a runner container. The service token-proxy holds them and adds the token of a class to the
+# task-claim call of that class's runners, once per container (docs/security.md, "The token proxy"). Secret <service>-token holds a
+# runner config with the class token and is mounted into token-proxy ONLY:
+#   printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create linux-default-token -
+# Secret runner-placeholder-token is the config that every runner reads with --config. It holds a made-up token, owned by the runner
+# (uid 2000); a missing secret makes the runner exit 1, an empty token exit 80. Every other runner setting is a CIRCLECI_RUNNER_*
+# variable below, among them CIRCLECI_RUNNER_API_URL, which points at the proxy.
+#
+#   linux-default   cimg/base, jobs keep passwordless sudo (like the Docker executor)
+# This file is ONE class on purpose: a first job needs one resource class, one token and one network. More classes are separate files,
+# deployed with an extra -c flag (each adds its classes to the token-proxy of this file, so deploy them together with it):
+#   classes-extra.yaml linux-java (cimg/openjdk, same model) and linux-hardened (jobs have NO sudo, so a job cannot become root in its container)
+#   docker-build.yaml  host Docker socket (root-equivalent)      persistent.yaml  long-lived runner + volume (keeps its token: no proxy)
+#   ssh-rerun.yaml     "Rerun job with SSH": publishes port 54782 on the node
+#   microvm.yaml       every job in its own Kata microVM, on nodes labelled machine-runner-swarm.microvm=true
+# Another class of your own is the service, network, secret and proxy entries of linux-default under another name (docs/resource-classes.md).
+#
+# Notes:
+# - Pin images by digest in production (image: cimg/base:2026.10@sha256:...). Tags such as 21.0 float.
+# - Swarm ignores security_opt, privileged and short-form tmpfs, and its tmpfs is noexec, so none is used.
+# - Replicas of one class share an overlay network and can reach each other: Swarm cannot isolate them
+#   (enable_icc is ignored on swarm-scoped networks). Each class gets its own overlay, so classes cannot
+#   reach each other. Keep the host clock on NTP: TLS to CircleCI fails silently when it drifts.
+
+x-env: &env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h   # an idle slot is replaced, so it picks up a rotated secret or a new image
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "false"   # the container is discarded after the job, and the runner (uid 2000) cannot remove job-owned files
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy:8080   # the runner and its task agent call the API through the token proxy
+  # CIRCLECI_RUNNER_MAX_RUN_TIME: 2h   # default 5h; keep stop_grace_period at this plus 5m
+  # HTTPS_PROXY: http://proxy.example.com:3128   # jobs inherit variables set here; also set it on token-proxy, and add NO_PROXY: token-proxy here
+
+x-restart: &restart
+  condition: any   # every exit (job done, idle timeout, crash) starts a new container
+  delay: 10s       # also the pause between retries after a configuration error (exit 80)
+
+x-update: &update
+  order: stop-first   # a busy replica drains (finishes its job) before it is replaced
+  parallelism: 1
+
+x-placement: &placement
+  constraints:
+    - node.platform.os == linux
+    # Never on a Docker-build node (docker-build.yaml): a job there reaches the engine and can read what other tasks on the node hold.
+    # A node without the label matches: Swarm reads a missing label as not equal.
+    - node.labels.machine-runner-swarm.docker-build != true
+    # Never on a microVM node (microvm.yaml): Docker's DNS does not work in a Kata VM, so a job would have none.
+    - node.labels.machine-runner-swarm.microvm != true
+    # Never on the node that runs the token proxy (label it: docker node update --label-add machine-runner-swarm.proxy=true <node>, then
+    # deploy with MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'): a job there shares a host with
+    # every class token. A node without the label matches, so a single node, or a cluster that sets no label, is unchanged.
+    - node.labels.machine-runner-swarm.proxy != true
+    # - node.platform.arch == x86_64                # or aarch64
+    # - node.labels.machine-runner-swarm.zone == <network zone>      # docker node update --label-add machine-runner-swarm.zone=<zone> <node>
+  preferences:
+    - spread: node.id
+
+# The distributor's settings. Deploy-time variables with defaults; they apply to the runner-distributor service only.
+x-distributor-env: &distributor-env
+  # An exact version is a pin, and the default: the newest runner version that this repository's CI tests (docs/releasing.md says how a
+  # release bumps it). The nodes keep it until you change it. A floating value follows CircleCI's manifest and is looked at again every
+  # CHECK_INTERVAL: 3.1 (the newest 3.1.x), 3 (the newest 3.x.y) or current (CircleCI's current release).
+  MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-3.1.13}
+  MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}   # current is adopted only within this major version
+  MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}   # how often a floating version asks the manifest again; a pin never does
+  # A mirror for an air-gapped site: manifest.json and <version>/circleci-runner_linux_<arch>.tar.gz below this URL.
+  MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: ${MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL:-https://circleci-binary-releases.s3.amazonaws.com/circleci-runner}
+  # The SHA-256 of the tarballs that may be installed (comma-separated, every architecture of the fleet). The default is the pin's own, amd64,
+  # arm64, ppc64le and s390x of the version above, so the pinned install does not rest on the hash of CircleCI's manifest, which comes from
+  # the same bucket as the tarball. A release of this repository bumps the version and these four values together (ci/release.sh: check_runner_pin;
+  # docs/releasing.md). Another exact version needs its own values from the checksums.txt of its release, or the word manifest, which trusts
+  # the manifest's hash (weaker). A floating 3.1, 3 or current ignores any list. An http:// mirror needs a usable list for an exact pin, or
+  # MACHINE_RUNNER_SWARM_ALLOW_HTTP (a floating value has no list).
+  MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-cc02803cc8367b404a7ceb7810afea23a22526ebc478ac4e8de7c585c9fbfe77,2763ff1d7241ce380cdf88130d60a8a12610811356d5cd7f948e6e853b0daaf3,980b9099a2af792c2cef3e9629907811cf269d12a7a3152464d1c72b619f3f51,743bc959480cf5e172944a29d99425863b8cadfd256c6553f332952393d5f4e8}
+
+# A class of another stack file needs the same five keys: the entrypoint and its config, user "0", the placeholder secret, and the volume.
+x-runner: &runner
+  user: "0"   # the entrypoint starts as root, then runs the runner as uid 2000
+  entrypoint: ["/circleci-runner-entrypoint"]
+  configs:
+    - {source: entrypoint, target: /circleci-runner-entrypoint, mode: 0555}
+  secrets:
+    - source: runner-placeholder-token   # made up: the real token is in token-proxy only
+      target: circleci_runner_config.yaml
+      uid: "2000"
+      gid: "2000"
+      mode: 0400
+  init: true   # SIGTERM reaches the runner, which drains; stop_grace_period lets a running job finish
+  stop_grace_period: 5h5m   # the runner's max_run_time (5h) plus 5 minutes
+  ulimits:
+    nofile: {soft: 65536, hard: 65536}
+    core: 0
+  logging:
+    driver: local
+    options: {max-size: 20m, max-file: "3"}
+  volumes:
+    # The runner of this node, filled by runner-distributor. The entrypoint resolves the link current once, when the container starts, so
+    # a new runner version reaches the next container (the next job) only, and running jobs finish on the old one.
+    - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm, read_only: true}
+
+services:
+  linux-default:
+    <<: *runner
+    image: cimg/base:2026.10
+    hostname: "{{.Node.Hostname}}-linux-default-{{.Task.Slot}}"
+    environment:
+      <<: *env
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-linux-default-{{.Task.Slot}}"   # unique, at most 64 characters
+      MACHINE_RUNNER_SWARM_JOB_SUDO: "true"   # jobs keep the image's passwordless sudo (and can then read the placeholder, nothing more)
+    networks: [linux-default]
+    cap_drop: [NET_RAW, MKNOD]
+    deploy:
+      replicas: 2
+      restart_policy: *restart
+      update_config: *update
+      resources:
+        limits: {cpus: "2", memory: 4G, pids: 4096}
+        reservations: {cpus: "2", memory: 4G}   # extra replicas stay pending instead of overcommitting the node
+      placement: *placement
+
+  # The runner on every Linux node (also on a Docker-build node), from the stock Alpine image: the script is a Swarm config. It
+  # downloads and verifies the runner, writes its SHA-256 next to it, flips the link current and checks again every
+  # MACHINE_RUNNER_SWARM_CHECK_INTERVAL. Pin the digest you trust. A download that fails or does not match its SHA-256 is retried
+  # and installs nothing: the runner services of the node wait for it, and then exit 80.
+  runner-distributor:
+    image: alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+    command: ["sh", "/runner-distributor.sh"]
+    init: true   # SIGTERM reaches the script, which exits at once
+    read_only: true
+    hostname: "{{.Node.Hostname}}-runner-distributor"
+    environment: *distributor-env
+    configs:
+      - {source: distributor, target: /runner-distributor.sh, mode: 0444}
+    volumes:
+      - {type: volume, source: runner-bin, target: /opt/machine-runner-swarm}
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]   # files that it writes belong to root and no one else
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: "2"}
+    deploy:
+      mode: global   # one per node, also on nodes that join later
+      restart_policy: {condition: on-failure, delay: 30s}
+      update_config: {order: stop-first, parallelism: 0}   # every node at once
+      resources:
+        limits: {cpus: "0.5", memory: 256M, pids: 64}
+      placement:
+        constraints:
+          - node.platform.os == linux
+          - node.labels.machine-runner-swarm.microvm != true   # a microVM node has its own copy in microvm.yaml, with working DNS
+
+  # The token proxy: the ONLY holder of the class tokens, one replica for every class of the stack. A claim is accepted from a
+  # runner that is in the DNS set tasks.<service> of its class, once per container, and gets that class's token. All other
+  # calls pass through with the caller's own token. If it is down, runners cannot claim and the task agent cannot reach the API
+  # until it is back (docs/operations.md). It is a published, signed, multi-architecture image (docs/install-linux.md, "The token
+  # proxy image"): ccilabs/machine-runner-swarm-proxy, the tag latest by default (the newest release). A release bundle names
+  # the tag and the digest of its release instead; pin a digest yourself with MACHINE_RUNNER_SWARM_PROXY_IMAGE. In a checkout,
+  # docker build -t machine-runner-swarm-proxy:dev proxy/ and deploy with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to that name. It keeps
+  # the addresses of the runners that have claimed in the small volume proxy-state, so that a restart refuses only them. It runs
+  # on a manager by default, with no label. If the proxy moves to another node, its state stays behind, and docs/operations.md says
+  # what the runners then see. In a cluster, put the label on the node that runs the proxy (a manager) and pin the proxy to it:
+  # docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
+  # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'.
+  # Every runner service of these stack files carries the constraint node.labels.machine-runner-swarm.proxy != true, so no job runs
+  # on that node and shares a host with the class tokens. On a single node set no label: proxy and runners share the node. With the
+  # label on your only node, the runners stay pending.
+  token-proxy:
+    image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:latest}
+    user: "65534"
+    # The classes are the files <service>-token in /run/secrets (-secrets-dir): the runners of a class are tasks.<service>. A class of
+    # another stack file is its secret and its network below, nothing more (stack files merge secrets and networks by name, but replace a command).
+    command: ["-upstream", "https://runner.circleci.com", "-state-dir", "/state"]   # CircleCI server: your runner API URL
+    read_only: true
+    cap_drop: [ALL]
+    secrets:
+      - {source: linux-default-token, target: linux-default-token, uid: "65534", gid: "65534", mode: 0400}
+    # The class overlays: the proxy sees each runner's own address there, and the class tokens reach no other network.
+    networks: [linux-default]
+    healthcheck:
+      test: ["CMD", "/machine-runner-swarm-proxy", "-healthcheck"]   # the image has no wget or curl
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s   # a start asks CircleCI which runners hold a task, for all classes at once, for 25 s at most, before the proxy listens
+    logging:
+      driver: local
+      options: {max-size: 20m, max-file: "3"}
+    volumes:
+      # The latched addresses. A new volume takes the owner and mode of the mount point (/state in the image, 0700 for uid 65534).
+      - {type: volume, source: proxy-state, target: /state}
+    deploy:
+      replicas: 1   # exactly one: the latch of claimed runners lives in the proxy, so a second replica would allow a second claim
+      endpoint_mode: dnsrr   # REQUIRED: behind a virtual IP, Swarm's load balancer rewrites the source address and the proxy cannot tell runners apart
+      restart_policy: {condition: any, delay: 5s}
+      update_config: {order: stop-first, parallelism: 1}   # start-first would run two proxies for a while
+      resources:
+        limits: {cpus: "0.5", memory: 128M, pids: 256}
+        reservations: {cpus: "0.1", memory: 32M}
+      placement:
+        constraints:
+          - node.platform.os == linux
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: the tokens must not sit next to the Docker socket
+          - node.labels.machine-runner-swarm.microvm != true   # Docker's DNS, which finds tasks.<service>, does not work in a Kata VM
+          - "${MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node.role == manager}"   # the node that keeps proxy-state; with the label above, no runner runs there
+
+networks:
+  # One overlay per class: classes cannot reach each other (replicas of a class still can). Encrypted: the runners reach the token-proxy over plain
+  # http, and that traffic (task tokens, job configuration with context secrets, step output) crosses nodes through IPsec, which needs IP protocol 50
+  # (ESP) open between the nodes next to 2377, 7946 and 4789. To opt out, delete driver_opts in your copy: docs/multi-node.md, "Encrypted class networks".
+  linux-default: {driver: overlay, driver_opts: {encrypted: "true"}}
+
+secrets:
+  runner-placeholder-token: {external: true}   # every runner: a made-up token (see the top of this file)
+  linux-default-token: {external: true}   # the class token: token-proxy only
+
+configs:
+  # Swarm configs cannot change, so the name carries the first 12 hex digits of the SHA-256 of the file: ci/config-names.sh --write
+  # renames them after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
+  # services that use it.
+  entrypoint: {name: machine-runner-swarm-entrypoint-219dd9e6972a, file: circleci-runner-entrypoint}
+  distributor: {name: machine-runner-swarm-distributor-2ce8764c2645, file: runner-distributor.sh}
+
+volumes:
+  runner-bin: {}   # one per node: the runner of that node
+  proxy-state: {}   # the addresses of the runners that have claimed, on the node of the proxy

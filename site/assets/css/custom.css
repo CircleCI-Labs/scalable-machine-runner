@@ -1,0 +1,1529 @@
+/*
+ * The CircleCI look of the docs site (docs/ci.md, "Docs site"). Hextra loads this file after its own CSS, so plain
+ * rules here override the theme. The values come from the CircleCI brand guidelines: the colors, Inter for text and
+ * Space Grotesk for the mega title only, IBM Plex Mono for code, Lucide icons, and the bundled jelly pixels, unchanged.
+ * The mark of the site is the icon of the CircleCI-Labs organization, never the logo of CircleCI.
+ * The structure follows circleci.com/docs: a header with the mark and the name, a left navigation of
+ * labelled sections, blue links, and dark rounded code blocks.
+ */
+
+/* ---------- Tokens ---------- */
+
+:root {
+  /* Core colors */
+  --cci-green: #00db74; /* Slime Green */
+  --cci-midnight: #1c273a;
+  --cci-9pm: #2e3c52;
+  --cci-fog: #ededed;
+  --cci-terminal: #161616;
+  --cci-body: #343434;
+  --cci-body-light: #fafafa;
+  --cci-link: #2152e5;
+  --cci-link-on-dark: #73b0ff;
+  /* Secondary colors, used for the admonitions and the syntax of code only */
+  --cci-bricked: #fc5656;
+  --cci-daystar: #fff500;
+  --cci-orchid: #ecdbff;
+  --cci-led-lime: #6bde91;
+  --cci-vapor: #d4d4d4;
+  /* A shade of Midnight for the footer and the code blocks in dark mode */
+  --cci-deep: color-mix(in srgb, var(--cci-midnight) 62%, #000);
+
+  --cci-bg: #fff;
+  --cci-fg: var(--cci-body);
+  --cci-heading: var(--cci-terminal);
+  --cci-muted: color-mix(in srgb, var(--cci-body) 78%, #fff);
+  --cci-border: color-mix(in srgb, var(--cci-midnight) 14%, transparent);
+  --cci-surface: color-mix(in srgb, var(--cci-midnight) 5%, transparent);
+  --cci-link-color: var(--cci-link);
+  --cci-hero-bg: var(--cci-fog);
+
+  --cci-font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --cci-font-display: "Space Grotesk", var(--cci-font);
+  /* Neither font of the brand is monospaced: code is set in IBM Plex Mono, as on circleci.com/docs. */
+  --cci-font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Hextra */
+  --default-font-family: var(--cci-font);
+  --font-sans: var(--cci-font);
+  --default-mono-font-family: var(--cci-font-mono);
+  --font-mono: var(--cci-font-mono);
+  --color-dark: var(--cci-midnight);
+  --hextra-navbar-height: 4rem;
+  --hextra-banner-height: 2.5rem;
+  --menu-height: 0px;
+  --primary-hue: 225deg;
+  --primary-saturation: 79%;
+  --primary-lightness: 51%;
+}
+
+.dark {
+  --cci-bg: var(--cci-midnight);
+  --cci-fg: var(--cci-body-light);
+  --cci-heading: #fff;
+  --cci-muted: color-mix(in srgb, var(--cci-body-light) 68%, var(--cci-midnight));
+  --cci-border: color-mix(in srgb, #fff 14%, transparent);
+  --cci-surface: color-mix(in srgb, #fff 6%, transparent);
+  --cci-link-color: var(--cci-link-on-dark);
+  --cci-hero-bg: var(--cci-midnight);
+  --primary-hue: 214deg;
+  --primary-saturation: 100%;
+  --primary-lightness: 72%;
+}
+
+/* ---------- Base ---------- */
+
+html {
+  font-family: var(--cci-font);
+  scroll-padding-top: calc(var(--hextra-navbar-height) + 1rem);
+}
+
+body {
+  font-family: var(--cci-font);
+  color: var(--cci-fg);
+  background-color: var(--cci-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--cci-green) 45%, transparent);
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--cci-link-color);
+  outline-offset: 2px;
+}
+
+.cci-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.625rem;
+  border: 1px solid var(--cci-border);
+  border-radius: 9999px;
+  background: var(--cci-surface);
+  color: var(--cci-heading);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+/* ---------- Banner: the Labs disclaimer, on every page, not dismissible ---------- */
+
+.hextra-banner,
+.hextra-banner-hidden .hextra-banner {
+  display: block;
+  background: var(--cci-midnight);
+  color: #fff;
+  border-bottom: 1px solid color-mix(in srgb, #fff 12%, transparent);
+}
+
+.dark .hextra-banner {
+  background: var(--cci-9pm);
+}
+
+.hextra-banner-close-button {
+  display: none;
+}
+
+.cci-banner-link {
+  color: #fff;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--cci-green);
+}
+
+.cci-banner-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+.cci-banner-link strong {
+  font-weight: 600;
+}
+
+/* "docs/" in the banner: plain text on the dark band, with no box of its own */
+.cci-banner-code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+/* ---------- Header ---------- */
+
+.hextra-nav-container-blur {
+  background-color: var(--cci-bg);
+  box-shadow: 0 1px 0 var(--cci-border);
+}
+
+/* The theme sets this color with !important */
+.dark .hextra-nav-container-blur {
+  background-color: color-mix(in srgb, var(--cci-midnight) 92%, transparent) !important;
+  box-shadow: 0 1px 0 var(--cci-border);
+}
+
+.hextra-nav-container nav {
+  gap: 0.25rem;
+}
+
+.cci-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin-right: auto;
+  padding-right: 1rem;
+  color: var(--cci-heading);
+  text-decoration: none;
+}
+
+.cci-brand-icon {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  box-shadow: 0 0 0 1px var(--cci-border);
+}
+
+/* The icon is black line art on white: in dark mode and in the footer (always dark) it becomes light line art on the page */
+.dark .cci-brand-icon,
+.cci-footer-icon {
+  filter: invert(1);
+  mix-blend-mode: screen;
+  box-shadow: none;
+}
+
+.cci-brand-org {
+  color: var(--cci-heading);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.cci-brand-sep {
+  display: none;
+  color: var(--cci-muted);
+  font-size: 1.25rem;
+  font-weight: 300;
+}
+
+.cci-brand-name {
+  display: none;
+  color: var(--cci-heading);
+  font-size: 1rem;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+@media (min-width: 80rem) {
+  .cci-brand-sep,
+  .cci-brand-name {
+    display: inline;
+  }
+}
+
+.hextra-nav-container nav > a:not(.cci-brand),
+.hextra-nav-container nav > div > button {
+  color: var(--cci-fg);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  margin-left: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+}
+
+.hextra-nav-container nav > a:not(.cci-brand):hover,
+.hextra-nav-container nav > button:hover {
+  color: var(--cci-heading);
+  background: var(--cci-surface);
+}
+
+/* The active page: the underline of Slime Green of the tabs of circleci.com/docs */
+.hextra-nav-container nav > a[class~="hx:font-medium"] {
+  color: var(--cci-heading);
+  border-radius: 0;
+  box-shadow: inset 0 -2px 0 var(--cci-green);
+}
+
+/* The call to action of the header: the primary button of the brand */
+.hextra-nav-container nav > a[href*="docs/get-started"] {
+  margin-left: 0.5rem;
+  padding: 0.5rem 1.25rem;
+  border-radius: 9999px;
+  background: var(--cci-green);
+  color: var(--cci-terminal);
+  box-shadow: none;
+  transition: filter 0.1s ease-out;
+}
+
+.hextra-nav-container nav > a[href*="docs/get-started"]:hover {
+  background: var(--cci-green);
+  color: var(--cci-terminal);
+  filter: brightness(0.94);
+}
+
+.hextra-nav-container nav > a[title="GitHub"],
+.hextra-theme-toggle {
+  color: var(--cci-fg);
+}
+
+.hextra-theme-toggle:hover,
+.hextra-nav-container nav > a[title="GitHub"]:hover {
+  color: var(--cci-heading);
+}
+
+.hextra-search-trigger {
+  border: 1px solid var(--cci-border);
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--cci-muted);
+}
+
+@media (min-width: 48rem) {
+  .hextra-search-trigger {
+    width: 12.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--cci-surface);
+  }
+}
+
+@media (min-width: 64rem) {
+  .hextra-search-trigger {
+    width: 15rem;
+  }
+}
+
+.hextra-search-trigger:hover {
+  color: var(--cci-heading);
+  border-color: color-mix(in srgb, var(--cci-fg) 40%, transparent);
+}
+
+.hextra-search-trigger-kbd {
+  border-radius: 0.375rem;
+  background: var(--cci-bg);
+  color: var(--cci-muted);
+  font-family: var(--cci-font);
+}
+
+.hextra-search-dialog {
+  border-radius: 1rem;
+  background: var(--cci-bg);
+  border-color: var(--cci-border);
+}
+
+.dark .hextra-search-dialog {
+  background: var(--cci-9pm);
+}
+
+/* ---------- Left navigation ---------- */
+
+.hextra-sidebar-container {
+  --menu-height: 0px;
+}
+
+@media (min-width: 48rem) {
+  .hextra-sidebar-container {
+    width: 18rem;
+  }
+
+  .hextra-sidebar-container > .hextra-scrollbar {
+    padding: 1.5rem 1rem 2rem 1.5rem;
+  }
+}
+
+/* The sections of the documentation (nav.txt) are open, labelled groups, as the sections of the CLI docs */
+.hextra-scrollbar > ul:nth-of-type(2) > li {
+  margin-top: 1.25rem;
+}
+
+.hextra-scrollbar > ul:nth-of-type(2) > li:first-child {
+  margin-top: 0;
+}
+
+.hextra-scrollbar > ul:nth-of-type(2) > li > .hextra-sidebar-item > a {
+  padding: 0.25rem 0.5rem;
+  color: var(--cci-heading);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hextra-scrollbar > ul:nth-of-type(2) > li > .hextra-sidebar-item > a:hover {
+  background: transparent;
+  color: var(--cci-link-color);
+}
+
+.hextra-scrollbar > ul:nth-of-type(2) > li > .hextra-sidebar-item > button {
+  display: none;
+}
+
+.hextra-scrollbar > ul:nth-of-type(2) > li > .hextra-sidebar-children {
+  height: auto;
+  padding-top: 0.25rem;
+}
+
+.hextra-scrollbar > ul:nth-of-type(2) > li > .hextra-sidebar-children > ul {
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.hextra-scrollbar > ul:nth-of-type(2) > li > .hextra-sidebar-children > ul::before {
+  display: none;
+}
+
+.hextra-sidebar-item > a {
+  color: var(--cci-fg);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  border-radius: 0.5rem;
+}
+
+.hextra-sidebar-item > a:hover {
+  background: var(--cci-surface);
+  color: var(--cci-heading);
+}
+
+/* The current page: blue text on a tint, with a bar of Slime Green */
+.hextra-sidebar-item[data-active="true"] > a {
+  position: relative;
+  background: color-mix(in srgb, var(--cci-link-color) 10%, transparent);
+  color: var(--cci-link-color);
+  font-weight: 600;
+}
+
+.hextra-sidebar-item[data-active="true"] > a::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.4rem;
+  bottom: 0.4rem;
+  width: 3px;
+  border-radius: 9999px;
+  background: var(--cci-green);
+}
+
+.hextra-sidebar-container .hextra-sidebar-collapsible-button {
+  color: var(--cci-muted);
+}
+
+@media (max-width: 47.99rem) {
+  .hextra-sidebar-container {
+    background: var(--cci-bg);
+  }
+}
+
+/* ---------- On this page, breadcrumbs, pager ---------- */
+
+.hextra-toc > div > p {
+  margin-bottom: 0.75rem;
+  color: var(--cci-heading);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hextra-toc a {
+  color: var(--cci-muted);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.hextra-toc a:hover {
+  color: var(--cci-link-color);
+}
+
+.hextra-toc > div > div:last-child {
+  background: var(--cci-bg);
+  box-shadow: 0 -12px 16px var(--cci-bg);
+  border-color: var(--cci-border);
+}
+
+.hextra-toc #backToTop {
+  color: var(--cci-muted);
+}
+
+.hextra-breadcrumb,
+.content ~ nav {
+  color: var(--cci-muted);
+}
+
+/* ---------- Content ---------- */
+
+.content {
+  color: var(--cci-fg);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.content h1,
+.content h2,
+.content h3,
+.content h4,
+.content h5,
+.content h6 {
+  color: var(--cci-heading);
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.content h1 {
+  font-size: 2.5rem;
+  letter-spacing: -0.02em;
+}
+
+.content h2 {
+  margin-top: 3rem;
+  padding-bottom: 0;
+  border-bottom: 0;
+  font-size: 2rem;
+}
+
+.content h3 {
+  margin-top: 2.25rem;
+  font-size: 1.5rem;
+}
+
+.content h4 {
+  margin-top: 2rem;
+  font-size: 1.125rem;
+}
+
+.content p,
+.content li {
+  line-height: 1.7;
+}
+
+.content strong {
+  color: var(--cci-heading);
+  font-weight: 600;
+}
+
+.content a {
+  color: var(--cci-link-color);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  transition: text-decoration-color 0.1s ease-out;
+}
+
+.content a:hover {
+  text-decoration-color: currentColor;
+}
+
+.content a.subheading-anchor,
+.content a.hextra-card {
+  text-decoration: none;
+}
+
+.content .subheading-anchor::after {
+  color: var(--cci-green);
+}
+
+.content ul > li::marker {
+  color: var(--cci-muted);
+}
+
+.content hr {
+  border-color: var(--cci-border);
+}
+
+.content blockquote {
+  border-left: 3px solid var(--cci-green);
+  color: var(--cci-fg);
+  font-style: normal;
+}
+
+/* Inline code */
+.content :not(pre) > code {
+  padding: 0.125em 0.4em;
+  border: 0;
+  border-radius: 0.375rem;
+  background: var(--cci-surface);
+  color: var(--cci-heading);
+  font-family: var(--cci-font-mono);
+  font-size: 0.875em;
+  font-weight: 500;
+}
+
+.content a > code {
+  color: inherit;
+}
+
+/* Tables */
+.content table {
+  width: fit-content;
+  max-width: 100%;
+  margin: 1.5rem 0;
+  border: 1px solid var(--cci-border);
+  border-radius: 0.75rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+
+.content table thead {
+  background: var(--cci-surface);
+}
+
+.content table th,
+.content table td {
+  border: 0;
+  border-bottom: 1px solid var(--cci-border);
+  padding: 0.625rem 0.875rem;
+  vertical-align: top;
+}
+
+.content table th {
+  color: var(--cci-heading);
+  font-weight: 600;
+  text-align: left;
+}
+
+.content table tr {
+  border-top: 0;
+}
+
+.content table tr:last-child td {
+  border-bottom: 0;
+}
+
+.content table tr:first-child th:first-child {
+  border-top-left-radius: 0.75rem;
+}
+
+.content table tr:first-child th:last-child {
+  border-top-right-radius: 0.75rem;
+}
+
+.content kbd {
+  border-radius: 0.375rem;
+  border-color: var(--cci-border);
+  background: var(--cci-surface);
+  font-family: var(--cci-font-mono);
+}
+
+.content details {
+  border-radius: 0.75rem;
+}
+
+.content img {
+  border-radius: 0.75rem;
+}
+
+/* ---------- Code blocks ---------- */
+
+.hextra-code-block pre,
+.content .hextra-code-block pre {
+  border-radius: 0.75rem;
+  background: var(--cci-midnight);
+  color: var(--cci-fog);
+  font-family: var(--cci-font-mono);
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.65;
+  padding: 1.125rem 1.25rem;
+}
+
+.dark .hextra-code-block pre,
+.dark .content .hextra-code-block pre {
+  background: var(--cci-deep);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 10%, transparent);
+}
+
+.hextra-code-block code {
+  font-family: var(--cci-font-mono);
+  font-weight: 400;
+}
+
+.hextra-code-block .hextra-code-filename {
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--cci-9pm);
+  color: var(--cci-fog);
+  font-family: var(--cci-font-mono);
+}
+
+.hextra-code-block .hextra-code-filename + div pre,
+.hextra-code-block div:nth-of-type(2) pre {
+  border-radius: 0 0 0.75rem 0.75rem;
+}
+
+.hextra-code-block .hl,
+.hextra-code-block .chroma .hl {
+  background: color-mix(in srgb, var(--cci-link-on-dark) 14%, transparent);
+}
+
+.hextra-code-copy-btn {
+  border: 1px solid color-mix(in srgb, #fff 16%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, #fff 8%, transparent);
+  color: var(--cci-vapor);
+  opacity: 0.9;
+}
+
+.hextra-code-copy-btn:hover {
+  background: color-mix(in srgb, #fff 16%, transparent);
+  color: #fff;
+}
+
+/* The syntax: the palette of the brand, on the dark blocks in light and in dark mode */
+:is(:root, .dark) .highlight .chroma {
+  color: var(--cci-fog);
+}
+
+:is(:root, .dark) .highlight .chroma span {
+  font-weight: 400;
+  font-style: normal;
+}
+
+:is(:root, .dark) .highlight .chroma :is(.k, .kc, .kd, .kn, .kp, .kr, .kt, .nt, .bp) {
+  color: var(--cci-link-on-dark);
+}
+
+:is(:root, .dark) .highlight .chroma :is(.nb, .nf, .nc, .na, .nd, .ne, .nl, .nn, .fm) {
+  color: var(--cci-orchid);
+}
+
+:is(:root, .dark) .highlight .chroma :is(.s, .sa, .sb, .sc, .dl, .sd, .s1, .s2, .se, .sh, .si, .sx, .sr, .ss) {
+  color: var(--cci-led-lime);
+}
+
+:is(:root, .dark) .highlight .chroma :is(.m, .mb, .mf, .mh, .mi, .il, .mo, .no, .ni) {
+  color: var(--cci-daystar);
+}
+
+:is(:root, .dark) .highlight .chroma :is(.nv, .vc, .vg, .vi, .vm) {
+  color: var(--cci-fog);
+}
+
+:is(:root, .dark) .highlight .chroma :is(.o, .ow, .p) {
+  color: var(--cci-vapor);
+}
+
+:is(:root, .dark) .highlight .chroma :is(.c, .ch, .cm, .c1, .cs, .cp, .cpf) {
+  color: color-mix(in srgb, var(--cci-fog) 55%, var(--cci-midnight));
+  font-style: normal;
+}
+
+:is(:root, .dark) .highlight .chroma :is(.gd, .gr, .gt, .err) {
+  color: var(--cci-bricked);
+  background: transparent;
+}
+
+:is(:root, .dark) .highlight .chroma :is(.gi, .gp) {
+  color: var(--cci-green);
+}
+
+:is(:root, .dark) .highlight .chroma :is(.gh, .gu, .gs) {
+  color: var(--cci-link-on-dark);
+}
+
+:is(:root, .dark) .highlight .chroma .lnt,
+:is(:root, .dark) .highlight .chroma .ln {
+  color: color-mix(in srgb, var(--cci-fog) 40%, var(--cci-midnight));
+}
+
+/* ---------- Diagrams (Mermaid): the palette of the brand instead of the default themes ---------- */
+
+.content pre.mermaid {
+  --cci-mm-node: #fff;
+  --cci-mm-stroke: color-mix(in srgb, var(--cci-midnight) 38%, transparent);
+  --cci-mm-line: color-mix(in srgb, var(--cci-midnight) 70%, transparent);
+  margin: 1.5rem 0;
+  overflow-x: auto;
+}
+
+.dark .content pre.mermaid {
+  --cci-mm-node: var(--cci-9pm);
+  --cci-mm-stroke: color-mix(in srgb, #fff 24%, transparent);
+  --cci-mm-line: color-mix(in srgb, #fff 62%, transparent);
+}
+
+.content pre.mermaid .node :is(rect, polygon, circle, ellipse, path) {
+  fill: var(--cci-mm-node) !important;
+  stroke: var(--cci-mm-stroke) !important;
+  stroke-width: 1px !important;
+  filter: none !important;
+}
+
+.content pre.mermaid .cluster rect {
+  fill: var(--cci-surface) !important;
+  stroke: var(--cci-mm-stroke) !important;
+  stroke-dasharray: 4 4;
+}
+
+.content pre.mermaid :is(.flowchart-link, .edgePath path) {
+  stroke: var(--cci-mm-line) !important;
+}
+
+.content pre.mermaid marker path {
+  fill: var(--cci-mm-line) !important;
+  stroke: var(--cci-mm-line) !important;
+}
+
+.content pre.mermaid :is(.nodeLabel, .edgeLabel, .cluster-label, .label, .label span, .nodeLabel p) {
+  color: var(--cci-heading) !important;
+  font-family: var(--cci-font) !important;
+}
+
+.content pre.mermaid text {
+  fill: var(--cci-heading) !important;
+  font-family: var(--cci-font) !important;
+}
+
+.content pre.mermaid .edgeLabel {
+  background-color: var(--cci-bg) !important;
+}
+
+/* ---------- Admonitions: note, tip, important, warning, caution ---------- */
+
+.hextra-alert {
+  --cci-alert: var(--cci-link-color);
+  --cci-alert-ink: #fff;
+}
+
+.hextra-alert,
+.hextra-alert[data-alert] {
+  position: relative;
+  margin-top: 1.5rem;
+  padding: 1rem 1.25rem 1rem 1.25rem;
+  border: 1px solid color-mix(in srgb, var(--cci-alert) 55%, transparent);
+  border-left-width: 4px;
+  border-left-color: var(--cci-alert);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--cci-alert) 7%, var(--cci-bg));
+  color: var(--cci-fg);
+}
+
+.hextra-alert[data-alert="note"] {
+  --cci-alert: var(--cci-link-color);
+  --cci-alert-ink: #fff;
+}
+
+.dark .hextra-alert[data-alert="note"] {
+  --cci-alert-ink: var(--cci-terminal);
+}
+
+.hextra-alert[data-alert="tip"] {
+  --cci-alert: var(--cci-green);
+  --cci-alert-ink: var(--cci-terminal);
+}
+
+.hextra-alert[data-alert="important"] {
+  --cci-alert: var(--cci-9pm);
+  --cci-alert-ink: #fff;
+}
+
+.dark .hextra-alert[data-alert="important"] {
+  --cci-alert: var(--cci-orchid);
+  --cci-alert-ink: var(--cci-terminal);
+}
+
+.hextra-alert[data-alert="warning"] {
+  --cci-alert: var(--cci-daystar);
+  --cci-alert-ink: var(--cci-terminal);
+}
+
+.hextra-alert[data-alert="caution"] {
+  --cci-alert: var(--cci-bricked);
+  --cci-alert-ink: var(--cci-terminal);
+}
+
+.hextra-alert[data-alert="warning"],
+.hextra-alert[data-alert="tip"] {
+  border-color: color-mix(in srgb, var(--cci-alert) 70%, var(--cci-fg) 8%);
+}
+
+.hextra-alert-title {
+  margin: 0 0 0.375rem;
+  gap: 0.625rem;
+  color: var(--cci-heading);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+}
+
+.hextra-alert-icon {
+  box-sizing: border-box;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0;
+  padding: 0.25rem;
+  border-radius: 9999px;
+  background: var(--cci-alert);
+  color: var(--cci-alert-ink);
+}
+
+.hextra-alert-content {
+  line-height: 1.7;
+}
+
+.hextra-alert-content > :first-child {
+  margin-top: 0;
+}
+
+.hextra-alert-content > :last-child {
+  margin-bottom: 0;
+}
+
+.hextra-alert-content p {
+  margin-top: 0.75rem;
+}
+
+.hextra-alert-content p:first-child {
+  margin-top: 0;
+}
+
+.hextra-alert code {
+  background: color-mix(in srgb, var(--cci-alert) 14%, transparent);
+}
+
+/* ---------- Footer ---------- */
+
+.hextra-footer {
+  margin-top: 0;
+  background: var(--cci-midnight);
+  color: var(--cci-body-light);
+}
+
+.dark .hextra-footer {
+  background: var(--cci-deep);
+  box-shadow: inset 0 1px 0 var(--cci-border);
+}
+
+.hextra-custom-footer {
+  color: var(--cci-body-light);
+}
+
+.cci-footer {
+  padding: 3.5rem 0 2.5rem;
+}
+
+.cci-footer-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr));
+  gap: 2.5rem;
+}
+
+.cci-footer-org {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  color: #fff;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.cci-footer-icon {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+}
+
+.cci-footer-about p {
+  max-width: 24rem;
+  margin: 1.25rem 0 0;
+  color: color-mix(in srgb, var(--cci-body-light) 78%, var(--cci-midnight));
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.cci-footer-about strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.cci-footer-col h2 {
+  margin: 0 0 1rem;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.cci-footer-col ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cci-footer a {
+  color: color-mix(in srgb, var(--cci-body-light) 82%, var(--cci-midnight));
+  font-size: 0.9375rem;
+  text-decoration: none;
+}
+
+.cci-footer a:hover {
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--cci-green);
+}
+
+.cci-footer-legal {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid color-mix(in srgb, #fff 14%, transparent);
+}
+
+.cci-footer-legal p {
+  margin: 0;
+  color: color-mix(in srgb, var(--cci-body-light) 72%, var(--cci-midnight));
+  font-size: 0.8125rem;
+  line-height: 1.7;
+}
+
+.cci-footer-legal a {
+  font-size: inherit;
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, #fff 40%, transparent);
+}
+
+@media (max-width: 48rem) {
+  .cci-footer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cci-footer-about {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ---------- Landing page ---------- */
+
+.cci-home {
+  min-height: calc(100vh - var(--hextra-navbar-height));
+}
+
+.cci-wrap {
+  width: 100%;
+  max-width: 80rem;
+  margin: 0 auto;
+  padding-inline: max(env(safe-area-inset-left), 1.5rem);
+}
+
+.cci-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  border-radius: 9999px;
+  font-size: 1.125rem;
+  font-weight: 500;
+  line-height: 1.5rem;
+  text-decoration: none;
+  transition: filter 0.1s ease-out, background-color 0.1s ease-out;
+}
+
+.cci-btn svg {
+  flex: none;
+}
+
+.cci-btn-primary {
+  background: var(--cci-green);
+  color: var(--cci-terminal);
+}
+
+.cci-btn-primary:hover {
+  filter: brightness(0.94);
+}
+
+.cci-btn-secondary {
+  background: var(--cci-midnight);
+  color: #fff;
+}
+
+.cci-btn-secondary:hover {
+  background: var(--cci-9pm);
+}
+
+.dark .cci-btn-secondary {
+  background: var(--cci-9pm);
+}
+
+.dark .cci-btn-secondary:hover {
+  background: color-mix(in srgb, var(--cci-9pm) 82%, #fff);
+}
+
+/* Hero */
+
+.cci-hero {
+  position: relative;
+  overflow: hidden;
+  background: var(--cci-hero-bg);
+}
+
+.cci-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 4rem;
+  align-items: center;
+  padding-block: 5rem 6rem;
+}
+
+.cci-mega {
+  margin: 0;
+  color: var(--cci-heading);
+  font-family: var(--cci-font-display);
+  font-size: clamp(3rem, 6.4vw, 5.25rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.cci-hero-tagline {
+  max-width: 34rem;
+  margin: 1.5rem 0 0;
+  color: var(--cci-heading);
+  font-size: clamp(1.25rem, 2.1vw, 1.75rem);
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.cci-hero-lead {
+  max-width: 32rem;
+  margin: 1rem 0 0;
+  color: var(--cci-fg);
+  font-size: 1.125rem;
+  line-height: 1.6;
+}
+
+.cci-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 2.25rem;
+}
+
+.cci-notice {
+  max-width: 36rem;
+  margin: 2rem 0 0;
+  padding-left: 1rem;
+  border-left: 3px solid var(--cci-green);
+  color: var(--cci-fg);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.cci-notice strong {
+  color: var(--cci-heading);
+  font-weight: 600;
+}
+
+.cci-notice a {
+  color: var(--cci-link-color);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.cci-hero-art {
+  position: relative;
+  padding: 2.5rem 0 1.5rem 1.5rem;
+}
+
+.cci-jelly {
+  position: absolute;
+  top: -1.5rem;
+  right: -5rem;
+  z-index: 0;
+  width: 26rem;
+  line-height: 0;
+}
+
+.cci-jelly svg {
+  width: 100%;
+  height: auto;
+}
+
+.cci-terminal {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 1rem;
+  background: var(--cci-midnight);
+  box-shadow: 0 24px 48px -16px color-mix(in srgb, var(--cci-midnight) 55%, transparent);
+  color: var(--cci-fog);
+}
+
+.dark .cci-terminal {
+  background: var(--cci-deep);
+  box-shadow: 0 0 0 1px color-mix(in srgb, #fff 12%, transparent), 0 24px 48px -16px rgb(0 0 0 / 0.5);
+}
+
+.cci-terminal figcaption {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid color-mix(in srgb, #fff 12%, transparent);
+  color: color-mix(in srgb, var(--cci-fog) 62%, var(--cci-midnight));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.cci-terminal pre {
+  margin: 0;
+  padding: 1.25rem 1.25rem 1.5rem;
+  overflow-x: auto;
+  font-family: var(--cci-font-mono);
+  font-size: 0.75rem;
+  line-height: 1.8;
+  white-space: pre;
+}
+
+.cci-terminal code {
+  font-family: inherit;
+}
+
+.cci-t-prompt {
+  color: var(--cci-green);
+}
+
+.cci-t-head {
+  color: color-mix(in srgb, var(--cci-fog) 62%, var(--cci-midnight));
+}
+
+.cci-t-ok {
+  color: var(--cci-green);
+  font-weight: 600;
+}
+
+/* Feature cards on Midnight */
+
+.cci-features {
+  padding-block: 5rem 5.5rem;
+  background: var(--cci-midnight);
+  color: var(--cci-body-light);
+}
+
+.dark .cci-features {
+  background: var(--cci-deep);
+}
+
+.cci-section-title {
+  max-width: 40rem;
+  margin: 0 0 3rem;
+  color: #fff;
+  font-size: clamp(1.875rem, 3.6vw, 2.75rem);
+  font-weight: 400;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+.cci-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cci-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 2rem;
+  border-radius: 1.25rem;
+  background: var(--cci-9pm);
+}
+
+.dark .cci-card {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 8%, transparent);
+}
+
+.cci-card-icon {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  margin-bottom: 1.5rem;
+  border-radius: 9999px;
+  background: var(--cci-green);
+  color: var(--cci-terminal);
+}
+
+.cci-card-icon svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  stroke-width: 1.5;
+}
+
+.cci-card h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 1.5rem;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.cci-card p {
+  flex: 1;
+  margin: 0.75rem 0 1.5rem;
+  color: var(--cci-body-light);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.cci-tertiary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+}
+
+.cci-tertiary svg {
+  color: var(--cci-green);
+  transition: transform 0.1s ease-out;
+}
+
+.cci-tertiary:hover svg {
+  transform: translateX(3px);
+}
+
+/* The README below the cards */
+
+.cci-readme {
+  padding-block: 2rem 4rem;
+}
+
+.cci-readme-wrap {
+  max-width: 56rem;
+}
+
+.cci-prose > h2:first-child,
+.cci-prose > :first-child {
+  margin-top: 2.5rem;
+}
+
+.cci-snippet {
+  margin-top: 0.5rem;
+}
+
+.cci-first-job {
+  margin-top: 2.5rem;
+}
+
+.cci-first-job-more {
+  margin-top: 1rem;
+  color: var(--cci-muted);
+}
+
+.cci-404-article {
+  min-height: calc(100vh - var(--hextra-navbar-height) - var(--hextra-banner-height, 0px));
+}
+
+.cci-404 {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  max-width: 36rem;
+  margin-inline: auto;
+  padding-block: 3rem 4rem;
+  text-align: center;
+}
+
+.cci-404 h1 {
+  margin: 0;
+  color: var(--cci-heading);
+  font-size: 2.5rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.cci-404-lead,
+.cci-404-hint {
+  color: var(--cci-muted);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.cci-404-lead {
+  margin: 1rem 0 0;
+}
+
+.cci-404-hint {
+  margin: 2rem 0 0;
+  font-size: 0.9375rem;
+}
+
+.cci-404-hint kbd {
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--cci-border);
+  border-radius: 0.25rem;
+  background: var(--cci-surface);
+  color: var(--cci-heading);
+  font-family: inherit;
+  font-size: 0.8125rem;
+}
+
+.cci-404 a:not(.cci-btn) {
+  color: var(--cci-link-color);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+}
+
+.cci-404 a:not(.cci-btn):hover {
+  text-decoration-color: currentColor;
+}
+
+.cci-404-actions {
+  justify-content: center;
+  margin-top: 2rem;
+}
+
+.cci-snippet-note {
+  margin-top: 0.75rem;
+  color: var(--cci-muted);
+  font-size: 0.9375rem;
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 64rem) {
+  .cci-hero-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3rem;
+    padding-block: 3.5rem 4rem;
+  }
+
+  .cci-hero-art {
+    padding-left: 0;
+  }
+
+  .cci-jelly {
+    right: -0.5rem;
+    width: 12rem;
+  }
+
+  .cci-features {
+    padding-block: 3.5rem 4rem;
+  }
+}
+
+@media (max-width: 40rem) {
+  .cci-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cci-card {
+    padding: 1.5rem;
+  }
+
+  .cci-btn {
+    width: 100%;
+  }
+
+  .cci-terminal pre {
+    padding-inline: 1rem;
+    font-size: 0.65rem;
+  }
+
+  .cci-t-image {
+    display: none;
+  }
+
+  .content h1 {
+    font-size: 2rem;
+  }
+
+  .content h2 {
+    font-size: 1.625rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cci-tertiary:hover svg {
+    transform: none;
+  }
+}
+
+/* ---------- Header and banner on small screens ---------- */
+
+/* The banner and the header are both sticky: the header must cover the banner, not extend below itself */
+@media (max-width: 47.99rem) {
+  /* The banner scrolls away, and the header sticks: no sliver of the banner is left under the header */
+  .hextra-banner {
+    position: static;
+    font-size: 0.8125rem;
+  }
+
+  [data-hextra-banner="visible"] .hextra-nav-container-blur {
+    height: 100%;
+  }
+
+  .cci-brand {
+    gap: 0.5rem;
+    padding-right: 0.25rem;
+  }
+
+  .cci-brand-icon {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  .cci-brand-org {
+    font-size: 1rem;
+  }
+
+  .hextra-nav-container .hextra-search-trigger {
+    border: 0;
+    background: transparent;
+  }
+}
+
+/* The header between the phone and the desktop: the logo never shrinks, the search is an icon, and the links are the documentation */
+.cci-brand,
+.cci-brand > * {
+  flex-shrink: 0;
+}
+
+@media (min-width: 48rem) and (max-width: 63.99rem) {
+  .hextra-nav-container nav > a[href*="docs/security"],
+  .hextra-nav-container nav > a[href*="docs/faq"] {
+    display: none;
+  }
+
+  .hextra-nav-container .hextra-search-trigger {
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .hextra-search-trigger-label,
+  .hextra-search-trigger-kbd {
+    display: none;
+  }
+
+  .hextra-search-trigger-icon {
+    width: 1.25rem;
+    height: 1.25rem;
+    opacity: 1;
+  }
+}

@@ -1,0 +1,331 @@
+# Machine runner 3 on Windows Server, one Docker Swarm service per runner resource class.
+#
+#   docker stack deploy -c windows\stack\runners.yaml runners          # a first run, as shipped
+#   docker stack deploy -c deploy\runners.yaml runners                  # later: your copy, kept under version control
+#
+# * One service = one resource class. The service name is the class short name, so
+#   "windows-default" serves <namespace>/windows-default. deploy.replicas = how many runners of
+#   that class run at once.
+# * Every runner is single-use. CIRCLECI_RUNNER_MODE=single-task makes the runner exit after one
+#   job, and restart_policy "any" makes Swarm start a NEW container for the next one, so no job
+#   sees another job's files, registry, environment or processes. Never use plain Compose or a
+#   docker --restart policy for this: they restart the SAME container.
+# * No entrypoint script. circleci-runner.exe is the container's main process, configured by
+#   environment variables (they override the config file) and one config file, which is the
+#   Swarm secret: a YAML file holding only the token. Swarm templates give every replica its own
+#   runner name.
+# * Nothing is installed on the hosts. The service runner-distributor-windows (at the end of this file) runs on every Windows
+#   node, also on a node that joins later, and keeps circleci-runner.exe and portable Git for Windows in the per-node volume
+#   runner-bin (windows\stack\runner-distributor.ps1, a Swarm config). The runner version is an exact pin by default (the newest one
+#   that this repository's CI tests, which a release of this repository bumps), so the nodes never change version by themselves.
+#   3.1, 3 or current make it float (the manifest's hash is trusted, which is weaker, and the default SHA-256 list of the pin is ignored):
+#   the distributor then follows CircleCI's manifest and checks again every 24 hours.
+#   Every class mounts the volume read-only into the unmodified Microsoft Server Core image, twice, with a subpath: current (a link to
+#   versions\<version>) at C:\machine-runner-swarm, and git\current at C:\Program Files\Git, the path the task agent hard-codes
+#   for tar.exe. Docker resolves the links when it creates a container, so a container keeps the runner and Git it started
+#   with, and a new version reaches the next container (the next job). Which version the nodes run is a setting of the
+#   distributor only (x-distributor-env below): an upgrade, a pin and a rollback change that one service, and the runner
+#   services never restart. PATH is set here, in full.
+# * On a new node the runner tasks fail with "cannot access path ...\_data\current" until its distributor has flipped current
+#   (the first download, about a minute), and Swarm starts the next one after the restart delay. There is no entrypoint script
+#   that could wait instead.
+# * The class tokens never reach a runner container. The service token-proxy-windows holds them and adds the token of a class to
+#   the task-claim call of that class's runners, once per container (docs/security.md, "The token proxy"). A YAML file holding only
+#   the token ("api:" with "  auth_token: <token>") is the secret <service>-token, one per class, mounted into the proxy ONLY. Create
+#   it with
+#       .\windows\Setup.ps1 -Class windows-default     (asks for the token with hidden input and creates the secret)
+#   or with the PowerShell steps in docs/install-windows.md ("Create the secrets"). A shell pipe such as printf is not PowerShell.
+#   Every runner reads the secret runner-placeholder-token instead: the same YAML with a made-up token (Setup.ps1 -Placeholder).
+#   Both are NOT created by this file. On Windows a secret lands at C:\ProgramData\Docker\secrets\<target>, is readable by
+#   administrators only, and is "persisted in clear text to the container's root disk" until the container stops. Enable BitLocker
+#   on the volume that holds the Docker root directory. Jobs run as ContainerAdministrator, so a job can read the placeholder; the
+#   class token is in the proxy, which runs on a manager by default, with no label (in a swarm whose managers are Linux hosts, or with
+#   several managers, pin it: see token-proxy-windows below). The proxy keeps the addresses of the runners that have claimed in the
+#   volume proxy-state, so a restart refuses only them. Treat each resource class as a trust boundary.
+#
+# Host prerequisites: Windows Server 2022 or 2025, Docker engine in Windows-container mode, Swarm initialised with
+# "docker swarm init --advertise-addr <host IPv4 address>" (pull mcr.microsoft.com/windows/servercore:ltsc2022 BEFORE it: DNS fails
+# for a few seconds after it). Label every node with the image tags it can run, because
+# process isolation requires the image build to be the host's or an older one. A service's constraint names the tag of its image:
+#       docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <node>     # Server 2022 AND Server 2025
+#       docker node update --label-add machine-runner-swarm.windows-ltsc2025=true <node>     # Server 2025 only
+#   (Setup.ps1 sets them from the host build.) Server 2019 is untested and has no label.
+# Optional classes are separate files, deployed with extra -c flags (see the comment at the top of each):
+#   custom-image.yaml   your own image on top of stock Server Core (a class you build yourself)
+#   persistent.yaml     a long-lived continuous-mode runner with a named volume
+#   docker-build.yaml   Windows image builds through the host Docker engine (administrator-equivalent)
+#   ssh-rerun.yaml      "Rerun job with SSH": publishes port 54782 on the node (untested on Windows)
+#   docker stack deploy -c windows\stack\runners.yaml -c windows\stack\persistent.yaml runners
+#
+# Stopping a BUSY container from outside (a rolling update, a scale down, a node drain, "docker stack rm", a Docker restart)
+# gives its job only about 5 seconds on Server Core (registry value WaitToKillServiceTimeout), whatever stop_grace_period says:
+# the job dies with exit code 3221225786. The normal flow is not affected: a finished job ends the runner, and the container
+# ends by itself. So change a service while its class is idle, or rerun the jobs that were interrupted. An optional image
+# that lifts the limit is described in docs/operations.md ("Windows drain"). A runner upgrade is not such a change: it
+# restarts runner-distributor-windows only.
+#
+# A runner that exits 80 (a missing or invalid name or token, an invalid mode: the runner's own
+# configuration check) is restarted every restart_policy.delay forever: there is no max_attempts
+# here. A missing config FILE (secret not attached) exits 1, also restarted. Watch
+# "docker service ps --no-trunc runners_<service>" for "non-zero exit".
+#
+# Which compose keys "docker stack deploy" honours for Windows services (from the docker/cli and moby
+# source; docs/resource-classes.md, "Stack keys on Windows", has the same list):
+#   Used:        isolation (-> ContainerSpec.Isolation), volumes type bind (directories only), npipe and
+#                volume (volume.subpath too: Docker resolves a relative directory symbolic link in it when it
+#                creates the container, and refuses a junction or an absolute link), secrets and configs (an
+#                absolute target, no uid/gid/mode on Windows), stop_grace_period, logging, environment with
+#                Swarm placeholders, deploy.mode global, deploy.placement, deploy.resources limits (cpus, memory),
+#                deploy.restart_policy, deploy.update_config, entrypoint, labels.
+#   Scheduler only: deploy.resources.reservations (never sent to the engine, which rejects
+#                MemoryReservation on Windows).
+#   Rejected by the Windows engine, so absent here: deploy.resources.limits.pids (PidsLimit) and ulimits.
+#                A cpus limit above the host's CPU count is rejected too: size the limits to your nodes.
+#   Ignored or n/a on Windows: init, cap_drop, read_only, tmpfs, sysctls, security_opt (and stack
+#                deploy ignores security_opt, privileged, userns_mode and restart everywhere).
+#   Not set on purpose: hostname (a Windows computer name is limited to 15 characters, and
+#                COMPUTERNAME, the container ID, tells containers apart).
+
+x-runner-env: &runner-env
+  CIRCLECI_RUNNER_MODE: single-task
+  CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"
+  CIRCLECI_RUNNER_LOGGING_FORMAT: text
+  CIRCLECI_RUNNER_API_URL: http://token-proxy-windows:8080   # the runner and its task agent call the API through the token proxy
+  CIRCLECI_RUNNER_WORK_DIR: 'C:\cci\w'
+  CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY: 'C:\cci\agent'
+  # CIRCLECI_RUNNER_MAX_RUN_TIME: 5h        # default 5h; keep stop_grace_period at least 5 minutes longer
+  # HTTPS_PROXY / NO_PROXY: set here when the host needs a proxy (jobs inherit the runner's environment)
+  MACHINE_RUNNER_SWARM_INSTANCE_ID: "{{.Task.ID}}"           # lets a job tell which container it ran in
+  # Git for Windows ships Git Credential Manager; nothing in a container can answer its prompts.
+  GIT_TERMINAL_PROMPT: "0"
+  GCM_INTERACTIVE: never
+  GIT_CONFIG_COUNT: "1"                     # the system gitconfig is in the read-only Git tree
+  GIT_CONFIG_KEY_0: core.longpaths
+  GIT_CONFIG_VALUE_0: "true"
+
+# The stock image's PATH is replaced, so it is spelled out: Windows first (its find, sort and tar stay
+# ahead of Git's), then Git's cmd, ucrt64\bin and usr\bin (bash, sh, tar, gzip, ssh). Tests\Test-Injection.ps1
+# checks the Windows part against the image's own PATH.
+x-stock-env: &stock-env
+  # yamllint disable-line rule:line-length
+  PATH: 'C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Program Files\Git\cmd;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin'
+
+x-runner-deploy: &runner-deploy
+  endpoint_mode: dnsrr                      # no VIP: nothing connects to a runner
+  restart_policy:
+    condition: any                          # every exit (job done, idle timeout, exit 80) -> a NEW container
+    delay: 10s                              # also the pause between attempts when the runner exits 80
+  update_config:
+    order: stop-first
+    parallelism: 1
+    failure_action: pause
+
+x-runner: &runner
+  isolation: process                        # the image build must match the host (the node label windows-<image tag>)
+  stop_grace_period: 5h5m                   # runner max_run_time (5h) plus 5 minutes to drain
+  logging:
+    driver: json-file                       # rotation; "local" also works on Windows
+    options:
+      max-size: 20m
+      max-file: "3"
+  labels:
+    machine-runner-swarm.role: runner
+
+# Stock images: the runner is the main process.
+x-stock: &stock
+  entrypoint: ['C:\machine-runner-swarm\bin\circleci-runner.exe', machine, '--config', 'C:\ProgramData\Docker\secrets\circleci_runner_config.yaml']
+
+x-runner-mount: &runner-mount               # the runner, read-only: the version that current points to when the container starts
+  type: volume
+  source: runner-bin                        # filled on each node by runner-distributor-windows
+  target: 'C:\machine-runner-swarm'
+  read_only: true
+  volume:
+    subpath: current                        # a link to versions\<version>, resolved when the container is created
+
+x-git-mount: &git-mount                     # portable Git, where the task agent expects it
+  type: volume
+  source: runner-bin
+  target: 'C:\Program Files\Git'
+  read_only: true
+  volume:
+    subpath: 'git\current'
+
+# The distributor's settings: deploy-time variables with defaults, for the runner-distributor-windows service only.
+x-distributor-env: &distributor-env
+  # An exact version is a pin, and the default: the newest runner version that this repository's CI tests (docs/releasing.md says how a
+  # release bumps it). The nodes keep it until you change it, and a version that is still in the volume needs no download (a rollback).
+  # A floating value follows CircleCI's manifest and is looked at again every CHECK_INTERVAL: 3.1 (the newest 3.1.x), 3 (the newest
+  # 3.x.y) or current (CircleCI's current release).
+  MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-3.1.13}
+  MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}   # current is adopted only within this major version
+  MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}   # how often a floating version asks the manifest again; a pin never does
+  # A mirror for an air-gapped site: manifest.json (unchanged) and <version>/circleci-runner_windows_<amd64|arm64>.tar.gz below this URL.
+  MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL: ${MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL:-https://circleci-binary-releases.s3.amazonaws.com/circleci-runner}
+  # The SHA-256 of the tarballs that may be installed (comma-separated). The default is the pin's own, amd64 and arm64 of the version above, so the
+  # pinned install does not rest on the hash of CircleCI's manifest, which comes from the same bucket as the tarball. A release of this repository
+  # bumps the version and these two values together (ci/release.sh: check_runner_pin; docs/releasing.md), as in linux/stack/runners.yaml. Another
+  # version needs its own values from the checksums.txt of its release, or the word manifest, which trusts the manifest's hash (weaker). A floating
+  # 3.1, 3 or current ignores any list. An http:// mirror needs a usable list for an exact pin, or MACHINE_RUNNER_SWARM_ALLOW_HTTP
+  # (a floating value has no list).
+  MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-d0dd82447266a9dec0f9b31f63b3a276b1dc49121c61284c4e8ca1fa393936da,6a85ea6bb2862ebee3739607b416536e6d5b2f93c867f5d093d0e414e7d6d64e}
+  # A mirror of the two pinned Git downloads: a directory URL that holds PortableGit-<version>-64-bit.7z.exe (arm64: -arm64.7z.exe) and 7zr.exe.
+  MACHINE_RUNNER_SWARM_TOOLS_BASE_URL: ${MACHINE_RUNNER_SWARM_TOOLS_BASE_URL:-}
+  # HTTPS_PROXY: http://proxy.example.com:3128    # for every download of the distributor
+
+services:
+  # Default class on the stock Server Core image. A Server 2025 node runs it too. For a class on the ltsc2025 image, copy the
+  # service under another name (and resource class), use :ltsc2025 and the constraint machine-runner-swarm.windows-ltsc2025 == true.
+  windows-default:
+    <<: [*runner, *stock]
+    image: mcr.microsoft.com/windows/servercore:ltsc2022
+    environment:
+      <<: [*runner-env, *stock-env]
+      CIRCLECI_RUNNER_NAME: "{{.Node.Hostname}}-windows-default-{{.Task.Slot}}"
+      CIRCLECI_RUNNER_IDLE_TIMEOUT: 1h      # idle slots recycle onto a new secret, image or runner version
+    volumes:
+      - *runner-mount
+      - *git-mount
+    secrets:
+      - source: runner-placeholder-token   # made up: the real token is in token-proxy-windows only
+        target: circleci_runner_config.yaml
+    deploy:
+      <<: *runner-deploy
+      replicas: 2
+      resources:
+        limits: {cpus: "2", memory: 4g}
+        reservations: {cpus: "2", memory: 4g}   # no overcommit: replicas that do not fit stay pending
+      placement:
+        constraints:
+          - node.platform.os == windows
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: a job there can read other classes' tokens
+          - node.labels.machine-runner-swarm.proxy != true   # never on the node that runs the token proxy: a job there can read every class token
+          - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
+        preferences:
+          - spread: node.id
+
+  # One per Windows node, also on a node that joins later (Docker-build nodes included: their class needs the runner too). It
+  # resolves the version, downloads the runner tarball and the pinned portable Git, verifies their SHA-256, installs them side by
+  # side in runner-bin and flips the links current and git\current; it keeps the last 3 runner versions that were active. A
+  # stop kills it after about 5 seconds, which is harmless: it installs into a temporary directory and moves it into place.
+  runner-distributor-windows:
+    image: mcr.microsoft.com/windows/servercore:ltsc2022   # stock, the tag of the runner classes (pulled once per node)
+    isolation: process
+    entrypoint:
+      - powershell.exe
+      - -NoLogo
+      - -NoProfile
+      - -NonInteractive
+      - -ExecutionPolicy
+      - Bypass
+      - -File
+      - 'C:\ProgramData\Docker\configs\runner-distributor.ps1'
+    environment: *distributor-env
+    configs:
+      - source: distributor-windows
+        target: 'C:\ProgramData\Docker\configs\runner-distributor.ps1'   # a link to the config; a relative target does not land here
+    volumes:
+      - type: volume
+        source: runner-bin
+        target: 'C:\runner-bin'             # read-write here only
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+    labels:
+      machine-runner-swarm.role: distributor
+    deploy:
+      mode: global                          # one per node, also on nodes that join later
+      restart_policy:
+        condition: on-failure               # nothing to run yet (the first download failed): try again
+        delay: 30s
+      update_config:
+        order: stop-first
+        parallelism: 0                      # every node at once: the runner classes do not restart
+      resources:
+        limits: {cpus: "1", memory: 1g}
+      placement:
+        constraints:
+          - node.platform.os == windows
+          - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
+
+  # The token proxy of the Windows classes: the ONLY holder of their tokens. One replica, on a manager by default, with no label:
+  # that node keeps its state. If the proxy moves to another node, its state stays behind, and docs/operations.md says what the
+  # runners then see. Where the managers are Linux hosts, or there are several, pin it to a Windows node:
+  # docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
+  # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'. A claim is accepted from a runner in the DNS set tasks.<service> of
+  # its class, once per container, and gets the token of that class; every other call passes through with the caller's own token. If it is
+  # down, runners cannot claim and the calls of a running job wait until it is back (docs/operations.md). It is a published, signed
+  # image (docs/install-windows.md, "The token proxy image"): ccilabs/machine-runner-swarm-proxy, the tag latest by default (the newest
+  # release). One tag covers Windows Server 2022 and 2025 (and the Linux platforms), and Docker picks the image of the node. A
+  # release bundle names the tag and the digest of its release instead; pin a digest yourself with MACHINE_RUNNER_SWARM_PROXY_IMAGE. In a
+  # checkout, build the image (docs/install-windows.md) and deploy with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to its name. The image
+  # runs as ContainerAdministrator: a named volume is writable for it only. In a cluster, put the label on the node that runs the proxy
+  # (a manager) and pin the proxy to it: docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
+  # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'. Every runner service of these stack files
+  # carries the constraint node.labels.machine-runner-swarm.proxy != true, so no job runs on that node and shares a host with the class
+  # tokens. On a single node set no label. With the label on your only node, the runners stay pending.
+  token-proxy-windows:
+    image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:latest}
+    isolation: process
+    # The classes are the files <service>-token in C:\ProgramData\Docker\secrets (-secrets-dir): the runners of a class are tasks.<service>. A
+    # class of another stack file is its secret, nothing more (stack files merge secrets by name, but replace a command).
+    # CircleCI server: your runner API URL in -upstream
+    command:
+      - -upstream
+      - https://runner.circleci.com
+      - -state-dir
+      - 'C:\proxy-state'
+    secrets:
+      - source: windows-default-token
+        target: windows-default-token
+    healthcheck:
+      test: ['CMD', 'C:\machine-runner-swarm-proxy.exe', '-healthcheck']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s   # a start asks CircleCI which runners hold a task, for all classes at once, for 25 s at most, before the proxy listens
+    volumes:
+      - type: volume
+        source: proxy-state
+        target: 'C:\proxy-state'
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+    labels:
+      machine-runner-swarm.role: proxy
+    deploy:
+      replicas: 1                           # exactly one: the latch of claimed runners lives in the proxy
+      endpoint_mode: dnsrr                  # no VIP: the proxy must see the address of each runner
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        order: stop-first
+        parallelism: 1
+      resources:
+        limits: {cpus: "1", memory: 512m}
+      placement:
+        constraints:
+          - node.platform.os == windows
+          - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: the tokens must not sit next to the engine
+          - "${MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node.role == manager}"   # the node that keeps proxy-state
+
+secrets:
+  runner-placeholder-token:
+    external: true   # every runner: a made-up token (see the top of this file)
+  windows-default-token:
+    external: true   # the class token: token-proxy-windows only
+
+configs:
+  # Swarm configs cannot change, so the name carries the first 12 hex digits of the SHA-256 of the file: ci/config-names.sh --write
+  # renames it after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
+  # distributor, and only the distributor.
+  distributor-windows: {name: machine-runner-swarm-distributor-windows-c1cd835f5463, file: runner-distributor.ps1}
+
+volumes:
+  runner-bin: {}                            # one per node: the runner and Git of that node
+  proxy-state: {}                           # the addresses of the runners that have claimed, on the node of the proxy

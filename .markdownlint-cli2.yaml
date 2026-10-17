@@ -1,0 +1,19 @@
+# markdownlint-cli2 configuration for the Markdown in this repository.
+# Run: docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.18.1
+config:
+  default: true
+  # Paragraphs stay on one line, so a diff shows a whole changed sentence.
+  MD013: false
+  # CircleCI docs show commands with a "$" prompt, with or without output.
+  MD014: false
+  # Issue and pull request templates start with a section heading by design.
+  MD041: false
+  # Headings repeat across the install pages, never inside one page.
+  MD024:
+    siblings_only: true
+globs:
+  - "**/*.md"
+ignores:
+  - ".git/**"
+  # Owned by the CI pipeline docs.
+  - "docs/ci.md"

@@ -1,0 +1,95 @@
+# Example .circleci/config.yml for jobs on the machine-runner-swarm Linux classes. For a minimal job that
+# runs as it is, use linux-hello.yml; the jobs here assume project files such as build.gradle and build.sh.
+# Replace my-namespace with your organization's runner namespace. Each resource class is one service
+# of the stack files (linux-default of runners.yaml is my-namespace/linux-default, and so on; linux-java and
+# linux-hardened come from classes-extra.yaml). Every job below runs in a brand-new container; nothing from an
+# earlier job is visible.
+version: 2.1
+
+jobs:
+  # cimg/base environment: the same user and tools as a Docker-executor job on cimg/base, with
+  # passwordless sudo as on the Docker executor.
+  lint:
+    machine: true
+    resource_class: my-namespace/linux-default
+    steps:
+      - checkout
+      - run:
+          name: Install a tool for this job only
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends shellcheck
+      - run: shellcheck $(git ls-files '*.sh')
+      - run:
+          name: Which container ran this job
+          command: echo "runner $CIRCLECI_RUNNER_NAME in container $(hostname)"
+
+  # cimg/openjdk:21.0 environment (service linux-java of linux/stack/classes-extra.yaml). Caches go to CircleCI storage, not to the host.
+  test-java:
+    machine: true
+    resource_class: my-namespace/linux-java
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - gradle-v1-{{ checksum "build.gradle" }}
+            - gradle-v1-
+      - run: ./gradlew test
+      - save_cache:
+          key: gradle-v1-{{ checksum "build.gradle" }}
+          paths: [~/.gradle/caches, ~/.gradle/wrapper]
+      - store_test_results:
+          path: build/test-results
+
+  # Hardened class (service linux-hardened of linux/stack/classes-extra.yaml): no sudo, so tools must be in the image or in the
+  # job's home. The runner token is not reachable from here.
+  build-hardened:
+    machine: true
+    resource_class: my-namespace/linux-hardened
+    steps:
+      - checkout
+      - run:
+          name: Show the privileges of this job
+          command: |
+            id
+            if sudo -n true 2>/dev/null; then echo "unexpected: sudo works"; exit 1; fi
+            echo "no sudo, as intended"
+      - run: ./build.sh
+
+  # Proof of a clean environment: fails if anything from an earlier job is still there. Run it twice
+  # (or run the workflow twice) and it still passes.
+  clean-check:
+    machine: true
+    resource_class: my-namespace/linux-default
+    steps:
+      - run:
+          name: No residue from earlier jobs
+          command: |
+            for f in "$HOME/.residue-marker" /tmp/.residue-marker /etc/residue-marker; do
+              if [ -e "$f" ]; then echo "STALE STATE: $f"; exit 1; fi
+            done
+            touch "$HOME/.residue-marker" /tmp/.residue-marker
+            sudo touch /etc/residue-marker
+            echo "clean (runner $CIRCLECI_RUNNER_NAME)"
+
+  # Persistent runner (linux/stack/persistent.yaml, continuous mode): the same container serves many
+  # jobs, so files stay behind, and the runner does not clean its working directory (the runner user
+  # cannot remove files that the job user owns). Put cleanup steps at the start of jobs that run here.
+  warm-build:
+    machine: true
+    resource_class: my-namespace/linux-persistent
+    steps:
+      - run: rm -rf "$HOME/scratch" && mkdir "$HOME/scratch"
+      - checkout
+      - run: ./gradlew --build-cache build
+
+workflows:
+  main:
+    jobs:
+      - lint
+      - test-java
+      - build-hardened
+      - clean-check
+      - clean-check:
+          name: clean-check-again
+          requires: [clean-check]

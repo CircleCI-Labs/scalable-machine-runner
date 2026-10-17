@@ -1,0 +1,16 @@
+{{ define "main" }}
+  <div class="hx:mx-auto hx:flex hextra-max-page-width">
+    {{ partial "sidebar.html" (dict "context" . "disableSidebar" true "displayPlaceholder" false) }}
+    <article class="cci-404-article hx:w-full hx:break-words hx:flex hx:flex-col hx:min-w-0 hx:flex-1 hx:justify-center hx:pb-8 hx:pr-[calc(env(safe-area-inset-right)-1.5rem)]">
+      <main id="content" class="cci-wrap cci-404 hx:w-full">
+        <h1>Page not found</h1>
+        <p class="cci-404-lead">This page does not exist, or it moved.</p>
+        <div class="cci-actions cci-404-actions">
+          <a class="cci-btn cci-btn-primary" href="{{ "docs/index.html" | relURL }}">Go to the documentation</a>
+          <a class="cci-btn cci-btn-secondary" href="{{ "index.html" | relURL }}">Home page</a>
+        </div>
+        <p class="cci-404-hint">Or press <kbd>Ctrl</kbd> <kbd>K</kbd> to search.</p>
+      </main>
+    </article>
+  </div>
+{{ end }}

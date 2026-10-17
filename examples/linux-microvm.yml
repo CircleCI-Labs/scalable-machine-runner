@@ -1,0 +1,48 @@
+# Example: jobs on the opt-in microVM classes (linux/stack/microvm.yaml, docs/microvm.md).
+#
+# Every job of these classes runs in its own Kata Containers microVM, with its own Linux kernel, on a node labelled
+# machine-runner-swarm.microvm=true. The job user keeps sudo, as in linux-default.
+#   linux-microvm         an ordinary job
+#   linux-microvm-docker  the job starts its OWN Docker daemon inside the VM (SYS_ADMIN, a tmpfs data-root, no NET_ADMIN), so an image
+#                         build needs no host Docker socket. Rootful dockerd works; rootless BuildKit does not. Builds only: the
+#                         daemon has no bridge, so use --network=host, and "docker run" does not work.
+version: 2.1
+
+jobs:
+  kernel:
+    machine: true
+    resource_class: my-namespace/linux-microvm
+    steps:
+      - run:
+          name: The kernel of the job is the guest kernel, not the node's
+          command: |
+            uname -r
+            grep -o 'kata-containers[^ ]*' /proc/cmdline
+            getent hosts circleci.com
+
+  image:
+    machine: true
+    resource_class: my-namespace/linux-microvm-docker
+    steps:
+      - checkout
+      - run:
+          name: Start dockerd in the VM
+          command: |
+            # The VM mounts these read-only; dockerd needs them writable.
+            sudo mount -o remount,rw /sys
+            sudo mount -o remount,rw /sys/fs/cgroup
+            sudo mount -o remount,rw /proc/sys
+            sudo sh -c 'dockerd --bridge=none --iptables=false > /tmp/dockerd.log 2>&1 &'
+            timeout 60 sh -c 'until sudo docker info > /dev/null 2>&1; do sleep 1; done' || { cat /tmp/dockerd.log; exit 1; }
+      - run:
+          name: Build the image with the daemon of the VM
+          command: |
+            sudo docker build --network=host -t "app:${CIRCLE_SHA1:0:12}" .
+            sudo docker image ls "app:${CIRCLE_SHA1:0:12}"
+      # The daemon, its images and its build cache end with the VM. Push to a registry in a step of the job to keep the image.
+
+workflows:
+  microvm:
+    jobs:
+      - kernel
+      - image

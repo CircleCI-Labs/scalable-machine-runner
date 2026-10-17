@@ -1289,6 +1289,7 @@ jobs:
             ci/tests/setup-config.sh /tmp/cli/circleci
             ci/tests/changed-files.sh
             ci/security-scan.sh lists
+            ci/tests/security-scan.sh
             ci/tests/deploy-marker.sh
             ci/tests/preview-comment.sh
             ci/tests/signature-ref.sh

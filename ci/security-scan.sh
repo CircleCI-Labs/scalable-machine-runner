@@ -85,8 +85,12 @@ scan_image() {
   if ! run_trivy image --image-src remote --scanners vuln --severity HIGH,CRITICAL --ignorefile .trivyignore \
       --format json --output "${json}" --quiet --no-progress "${ref}" > "${out}/trivy-${name}.log" 2>&1; then
     printf '%-6s %s: trivy could not scan it (%s)\n' "ERROR" "${ref}" "$(tail -n 1 "${out}/trivy-${name}.log" | cut -c1-200)"
-    [ "${list}" = infra ] || return 0
-    return 1
+    if [ "${list}" = infra ]; then
+      infra_n=$((infra_n + 1))
+      infra_unscannable=$((infra_unscannable + 1))
+      return 1
+    fi
+    return 0
   fi
   crit=$(jq '[.Results[]? | .Vulnerabilities[]? | select((.FixedVersion // "") != "" and .Severity == "CRITICAL")] | length' "${rep}")
   high=$(jq '[.Results[]? | .Vulnerabilities[]? | select((.FixedVersion // "") != "" and .Severity == "HIGH")] | length' "${rep}")
@@ -140,7 +144,7 @@ scan_lists() {
 }
 
 scan_images() {
-  local ref list rows unlisted=0 infra_n=0 infra_failing=0 infra_high=0 report_n=0 report_crit=0 report_high=0
+  local ref list rows unlisted=0 infra_n=0 infra_failing=0 infra_unscannable=0 infra_high=0 report_n=0 report_crit=0 report_high=0
   cd "$(git rev-parse --show-toplevel)"
   rows=$(classify) || unlisted=1
   [ -n "${rows}" ] || die "no pinned image found: the discovery is broken"
@@ -154,12 +158,12 @@ scan_images() {
     esac
     scan_image "${ref}" "${list}" || true
   done <<< "${rows}"
-  say "infra: ${infra_n} images, ${infra_failing} failing (${infra_high} HIGH with a fix reported); report-only: ${report_n} images, ${report_crit} CRITICAL and ${report_high} HIGH with a fix listed"
+  say "infra: ${infra_n} images, ${infra_failing} failing (${infra_unscannable} unscannable, ${infra_high} HIGH with a fix reported); report-only: ${report_n} images, ${report_crit} CRITICAL and ${report_high} HIGH with a fix listed"
   say "Tables and Trivy reports: ${out} (findings-<image>.txt, trivy-<image>.json)"
-  if [ "${infra_failing}" -gt 0 ] || [ "${unlisted}" -gt 0 ]; then
+  if [ "${infra_failing}" -gt 0 ] || [ "${infra_unscannable}" -gt 0 ] || [ "${unlisted}" -gt 0 ]; then
     say "What to do: bump the digest (a Renovate pull request does it: docs/ci.md, Pinned versions), or add a justified .trivyignore entry (the CVE, the reason, an owner and an expiry date); an image on no list needs a line in ci/security-scan-images.txt"
   fi
-  [ "${infra_failing}" -eq 0 ] && [ "${unlisted}" -eq 0 ]
+  [ "${infra_failing}" -eq 0 ] && [ "${infra_unscannable}" -eq 0 ] && [ "${unlisted}" -eq 0 ]
 }
 
 # The vulnerabilities that the proxy's code calls: the same rule as `govulncheck` with no flag. All of them fail, with a fix or not.
@@ -196,7 +200,7 @@ scan_go() {
 
 mkdir -p "${out}"
 case "${1:-}" in
-  images) scan_images 2>&1 | tee "${out}/summary-images.txt" ;;
+  images) scan_images 2>&1 | tee "${out}/summary-images.txt"; exit "${PIPESTATUS[0]}" ;;
   lists) scan_lists ;;
   go) scan_go 2>&1 | tee "${out}/summary-go.txt" ;;
   refs) refs ;;

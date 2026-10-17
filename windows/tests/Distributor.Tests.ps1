@@ -6,7 +6,6 @@ BeforeAll {
     $script:script = Join-Path $PSScriptRoot '..\stack\runner-distributor.ps1'
     . $script:script
     $script:Root = Join-Path $TestDrive 'runner-bin'
-    if (-not $env:TEMP) { $env:TEMP = [IO.Path]::GetTempPath() }
     function Use-DistributorEnvironment {
         param([hashtable] $Values = @{})
         foreach ($n in 'RUNNER_VERSION', 'RUNNER_MAJOR', 'CHECK_INTERVAL', 'DOWNLOAD_BASE_URL', 'RUNNER_SHA256', 'ALLOW_HTTP', 'TOOLS_BASE_URL') { Remove-Item "Env:MACHINE_RUNNER_SWARM_$n" -ErrorAction SilentlyContinue }
@@ -262,5 +261,136 @@ Describe 'Test-InUse' {
         $held = [IO.File]::Open($exe, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         try { Test-InUse $dir | Should -BeTrue } finally { $held.Dispose() }
         Test-InUse $dir | Should -BeFalse
+    }
+}
+
+Describe 'a volume without current' {
+    # First start, empty volume: "versions" exists as soon as an install has begun, and "current" only after the flip. A check that
+    # stopped in between (a download that failed, a restart) left the volume in this state, and the next start failed at once with
+    # "Cannot bind argument to parameter 'Path' because it is an empty string" (Split-Path -Leaf of the target of the missing link).
+    BeforeEach {
+        $script:Root = Join-Path $TestDrive "volume-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Force -Path (Join-Path $script:Root 'versions') | Out-Null
+    }
+
+    It 'reads no link as no target and no name' {
+        Get-LinkTarget (Join-Path $script:Root 'current') | Should -BeNullOrEmpty
+        Get-ActiveName | Should -BeExactly ''
+    }
+
+    It 'finds no runner in versions, and does not fail on the missing current' {
+        { Find-Runner -Version '3.1.13' } | Should -Not -Throw
+        Find-Runner -Version '3.1.13' | Should -BeNullOrEmpty
+        { Find-Runner -Version '3.1.13' -Accept @('a' * 64) } | Should -Not -Throw
+    }
+
+    It 'prunes nothing, and does not fail on the missing current' {
+        { Invoke-RunnerPruning } | Should -Not -Throw
+    }
+
+    It 'names the directory of a link that exists' -Skip:(-not $IsLinux) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $script:Root 'versions/3.1.13') | Out-Null
+        New-Item -ItemType SymbolicLink -Path (Join-Path $script:Root 'current') -Target 'versions/3.1.13' | Out-Null
+        Get-ActiveName | Should -BeExactly '3.1.13'
+    }
+}
+
+Describe 'Resolve-Runner without TEMP' {
+    # The account of a service in a container can have no TEMP: the manifest goes into the volume, never into $env:TEMP.
+    BeforeEach {
+        $script:Root = Join-Path $TestDrive "volume-$([guid]::NewGuid().ToString('N'))"
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.2' }
+        $script:savedTemp = @{ TEMP = $env:TEMP; TMP = $env:TMP }
+        Remove-Item Env:TEMP, Env:TMP -ErrorAction SilentlyContinue
+        $script:manifestPath = ''
+        Mock Save-Url { $script:manifestPath = $OutFile; [IO.File]::WriteAllText($OutFile, $script:manifestJson); return $true }
+        Mock Find-Runner { return $null }
+        Mock Write-DistributorLog { }
+    }
+    AfterEach {
+        foreach ($n in 'TEMP', 'TMP') { if ($script:savedTemp[$n]) { Set-Item "Env:$n" $script:savedTemp[$n] } }
+    }
+
+    It 'downloads the manifest into the volume, and leaves nothing behind' {
+        $env:TEMP | Should -BeNullOrEmpty
+        $r = Resolve-Runner (Get-DistributorSetting)
+        $r.Version | Should -Be '3.1.2'
+        @($r.Accept) | Should -Be @('b' * 64)
+        $script:manifestPath | Should -BeLike "$($script:Root)*"
+        Test-Path -LiteralPath $script:manifestPath | Should -BeFalse
+    }
+}
+
+Describe 'Format-ErrorRecord' {
+    It 'adds the script line and the trimmed statement to the message' {
+        try {
+            Get-Item -LiteralPath (Join-Path $TestDrive 'missing') -ErrorAction Stop
+        } catch { $text = Format-ErrorRecord $_ }
+        $text | Should -Match '^.+ \(line [0-9]+: Get-Item -LiteralPath \(Join-Path \$TestDrive .missing.\) -ErrorAction Stop\)$'
+    }
+
+    It 'gives the message alone for an error without a position' {
+        $record = [Management.Automation.ErrorRecord]::new([InvalidOperationException]::new('no position'), 'x', 'NotSpecified', $null)
+        Format-ErrorRecord $record | Should -BeExactly 'no position'
+    }
+}
+
+Describe 'the script as a process' {
+    # The whole script, once (-Once -NoGit), with TEMP unset and a volume that has no current.
+    BeforeAll {
+        function Invoke-Distributor {
+            param([string] $Volume, [hashtable] $Environment = @{})
+            $names = @('TEMP', 'TMP', 'ComSpec') + @($Environment.Keys)
+            $saved = @{}
+            foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
+            try {
+                foreach ($n in 'TEMP', 'TMP') { [Environment]::SetEnvironmentVariable($n, $null) }
+                foreach ($k in $Environment.Keys) { [Environment]::SetEnvironmentVariable($k, $Environment[$k]) }
+                if ($IsLinux) {   # no cmd.exe: a stand-in for "cmd /c rmdir /s /q <path>"
+                    $fake = Join-Path $TestDrive 'fake-cmd.sh'
+                    Set-Content -LiteralPath $fake -Value @('#!/bin/sh', 'for a; do last=$a; done', 'rm -rf "$last"')
+                    chmod +x $fake
+                    [Environment]::SetEnvironmentVariable('ComSpec', $fake)
+                }
+                $pwsh = (Get-Process -Id $PID).Path
+                $out = & $pwsh -NoProfile -NonInteractive -File $script:script -Root $Volume -Once -NoGit -Architecture amd64 2>&1
+                return @{ ExitCode = $LASTEXITCODE; Output = (@($out | ForEach-Object { "$_" }) -join "`n") }
+            } finally {
+                foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) }
+            }
+        }
+    }
+
+    It 'goes on to the download when versions exists and current does not (the failure of a restart)' {
+        Use-DistributorEnvironment
+        $volume = Join-Path $TestDrive "process-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Force -Path (Join-Path $volume 'versions') | Out-Null
+        $r = Invoke-Distributor $volume @{
+            MACHINE_RUNNER_SWARM_RUNNER_VERSION = '3.1.13'
+            MACHINE_RUNNER_SWARM_RUNNER_SHA256  = 'a' * 64
+            MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL = 'http://127.0.0.1:9'
+        }
+        $r.Output | Should -Not -Match 'Cannot bind argument'
+        $r.Output | Should -Match 'downloading circleci-runner 3.1.13'
+        $r.Output | Should -Match 'cannot download'
+        $r.ExitCode | Should -Be 1
+    }
+
+    It 'logs the line and the statement of a failure of the check' {
+        Use-DistributorEnvironment
+        $tooLong = Join-Path $TestDrive ('v' * 300)   # New-Item cannot create it
+        $r = Invoke-Distributor $tooLong @{
+            MACHINE_RUNNER_SWARM_RUNNER_VERSION = '3.1.13'
+            MACHINE_RUNNER_SWARM_RUNNER_SHA256  = 'a' * 64
+        }
+        $r.Output | Should -Match '(?m)^runner-distributor: error: .+ too long.* \(line [0-9]+: [^ ].*\)$'
+        $r.ExitCode | Should -Be 1
+    }
+
+    It 'logs the line and the statement of a setting that cannot work' {
+        Use-DistributorEnvironment
+        $r = Invoke-Distributor (Join-Path $TestDrive 'unused') @{ MACHINE_RUNNER_SWARM_RUNNER_VERSION = '' }
+        $r.Output | Should -Match 'runner-distributor: error: MACHINE_RUNNER_SWARM_RUNNER_VERSION is empty.* \(line [0-9]+: if \(-not \$want\) \{ throw '
+        $r.ExitCode | Should -Be 1
     }
 }

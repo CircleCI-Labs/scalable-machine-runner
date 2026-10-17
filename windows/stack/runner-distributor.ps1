@@ -66,7 +66,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Root = 'C:\runner-bin',
+    [ValidateNotNullOrEmpty()] [string] $Root = 'C:\runner-bin',
     [switch] $Once,
     [switch] $NoGit,
     [ValidateSet('', 'amd64', 'arm64')] [string] $Architecture = ''
@@ -170,6 +170,32 @@ function Get-DistributorSetting {
     }
 }
 
+function Format-ErrorRecord {
+    # "<message> (line <n>: <statement>)": the message of a failure and where in this script it came from, for the log.
+    param($ErrorRecord)
+    $text = "$($ErrorRecord.Exception.Message)"
+    $info = $ErrorRecord.InvocationInfo
+    if ($info -and $info.ScriptLineNumber) {
+        $statement = ("$($info.Line)".Trim()) -replace '\s+', ' '
+        if ($statement.Length -gt 160) { $statement = $statement.Substring(0, 160) + '...' }
+        $text += " (line $($info.ScriptLineNumber): $statement)"
+    }
+    return $text
+}
+
+function Get-CommandShell {
+    # cmd.exe: ComSpec, or the one of the system directory when the account of the service has no ComSpec.
+    if ($env:ComSpec) { return $env:ComSpec }
+    return (Get-SystemTool 'cmd.exe')
+}
+
+function Get-SystemTool([string] $Name) {
+    # A program of the system directory (System32), found without SystemRoot, which the account of a service may not have.
+    $system = [Environment]::SystemDirectory
+    if (-not $system) { return $Name }
+    return (Join-Path $system $Name)
+}
+
 function Invoke-Native {
     # Windows PowerShell 5.1 turns a native command's stderr into error records: run with Continue, return the exit code.
     param([string] $FilePath, [string[]] $ArgumentList)
@@ -212,13 +238,23 @@ function Get-LinkTarget([string] $Path) {
     # The stored target of a symbolic link (relative, as written), or $null.
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
     if (-not $item -or $item.LinkType -ne 'SymbolicLink') { return $null }
-    return [string]@($item.Target)[0]
+    $target = [string]@($item.Target)[0]
+    if (-not $target) { return $null }
+    return $target
+}
+
+function Get-ActiveName {
+    # The directory name that the link current points to, or '' when there is no current (an empty volume, or a first install that
+    # stopped before the flip). Split-Path refuses an empty string, so every reader of current goes through here.
+    $target = Get-LinkTarget (Join-Path $script:Root 'current')
+    if (-not $target) { return '' }
+    return (Split-Path -Leaf $target)
 }
 
 function Invoke-TreeRemoval([string] $Path) {
     # rmdir /s removes a link without following it (Remove-Item -Recurse in Windows PowerShell 5.1 follows directory links).
     if (-not (Test-Entry $Path)) { return }
-    $null = Invoke-Native $env:ComSpec @('/c', 'rmdir', '/s', '/q', $Path)
+    $null = Invoke-Native (Get-CommandShell) @('/c', 'rmdir', '/s', '/q', $Path)
 }
 
 function Test-InUse {
@@ -249,10 +285,10 @@ function Switch-Link {
     if ((Get-LinkTarget $Link) -eq $Target) { return $false }
     $new = "$Link.new"
     Invoke-TreeRemoval $new
-    $r = Invoke-Native $env:ComSpec @('/c', 'mklink', '/D', $new, $Target)
+    $r = Invoke-Native (Get-CommandShell) @('/c', 'mklink', '/D', $new, $Target)
     if ($r.ExitCode -ne 0) { throw "mklink /D $new $Target failed: $($r.Output -join ' ')" }
     if (Test-Entry $Link) {
-        $r = Invoke-Native $env:ComSpec @('/c', 'rmdir', $Link)   # the link only, never its target
+        $r = Invoke-Native (Get-CommandShell) @('/c', 'rmdir', $Link)   # the link only, never its target
         if ($r.ExitCode -ne 0) { throw "cannot remove the link ${Link}: $($r.Output -join ' ')" }
     }
     [IO.Directory]::Move($new, $Link)
@@ -296,7 +332,7 @@ function Find-Runner {
     $versions = Join-Path $script:Root 'versions'
     if (-not (Test-Path -LiteralPath $versions)) { return $null }
     $pattern = '^' + [regex]::Escape($Version) + '(_[0-9]+)?$'
-    $active = Split-Path -Leaf "$(Get-LinkTarget (Join-Path $script:Root 'current'))"
+    $active = Get-ActiveName
     $names = @(Get-ChildItem -LiteralPath $versions -Directory | Where-Object { $_.Name -match $pattern } | ForEach-Object { $_.Name } | Sort-Object)
     foreach ($name in @($names | Where-Object { $_ -eq $active }) + @($names | Where-Object { $_ -ne $active })) {
         if (Test-RunnerDirectory -Dir (Join-Path $versions $name) -Accept $Accept) { return $name }
@@ -322,7 +358,7 @@ function Install-Runner {
     }
     Write-Ascii (Join-Path $tmp 'TARBALL') "$got  $($script:Tarball)"
     $exe = Join-Path $tmp 'bin\circleci-runner.exe'
-    $r = Invoke-Native "$env:SystemRoot\System32\tar.exe" @('-xzf', $tgz, '-C', (Join-Path $tmp 'bin'), 'circleci-runner.exe')
+    $r = Invoke-Native (Get-SystemTool 'tar.exe') @('-xzf', $tgz, '-C', (Join-Path $tmp 'bin'), 'circleci-runner.exe')
     if ($r.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
         Write-DistributorLog "$($script:Tarball) $Version has no circleci-runner.exe: $($r.Output -join ' ')"
         Invoke-TreeRemoval $tmp
@@ -367,7 +403,9 @@ function Resolve-Runner {
         # A pin that is installed and verified needs no manifest, so a rollback works offline.
         if (Find-Runner -Version $Setting.Want) { return @{ Version = $Setting.Want; Accept = @() } }
     }
-    $file = Join-Path $env:TEMP "runner-distributor-manifest-$PID.json"
+    # In the volume, not in $env:TEMP: the account of a service on a container can have no TEMP. Invoke-Check removes what is left.
+    New-Item -ItemType Directory -Force -Path $script:Root | Out-Null
+    $file = Join-Path $script:Root ".tmp-manifest-$PID.json"
     if (-not (Save-Url "$($Setting.Base)/manifest.json" $file)) { return $null }
     try { $manifest = [IO.File]::ReadAllText($file) | ConvertFrom-Json } catch { Write-DistributorLog "manifest.json is not JSON: $($_.Exception.Message)"; return $null }
     finally { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
@@ -432,7 +470,7 @@ function Switch-Runner {
 
 function Invoke-RunnerPruning {
     # Keeps the last Keep versions that were active, and never the active one.
-    $active = Split-Path -Leaf "$(Get-LinkTarget (Join-Path $script:Root 'current'))"
+    $active = Get-ActiveName
     $keep = @(Get-RecentRunner -Count $script:Keep)
     foreach ($dir in @(Get-ChildItem -LiteralPath (Join-Path $script:Root 'versions') -Directory -ErrorAction SilentlyContinue)) {
         if ($dir.Name -eq $active -or $keep -contains $dir.Name) { continue }
@@ -534,6 +572,9 @@ function Invoke-Check {
     foreach ($left in @(Get-ChildItem -LiteralPath $script:Root -Force -Directory -Filter '.t*' -ErrorAction SilentlyContinue)) {
         if ($left.Name -like '.tmp-*' -or $left.Name -like '.trash-*') { Invoke-TreeRemoval $left.FullName }   # what a stopped run left
     }
+    foreach ($left in @(Get-ChildItem -LiteralPath $script:Root -Force -File -Filter '.tmp-*' -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $left.FullName -Force -ErrorAction SilentlyContinue
+    }
     $gitOk = $true
     if (-not $script:SkipGit) { $gitOk = Install-PinnedGit -Tools $Setting.Tools }
     $target = Resolve-Runner $Setting
@@ -563,7 +604,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     try {
         if ($Architecture) { Initialize-Architecture $Architecture } else { Initialize-Architecture (Get-RunnerArchitecture) }
         $setting = Get-DistributorSetting
-    } catch { Write-DistributorLog "error: $($_.Exception.Message)"; exit 1 }
+    } catch { Write-DistributorLog "error: $(Format-ErrorRecord $_)"; exit 1 }
     switch ($setting.Kind) {
         'exact' { $what = 'an exact pin: it never changes by itself, and the manifest is asked only when it is not installed' }
         'current' { $what = "floating: CircleCI's current, within major $($setting.Major)" }
@@ -572,7 +613,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     Write-DistributorLog "version $($setting.Want) ($what), windows/$($script:Arch), check every $($setting.Interval)s, from $($setting.Base)"
     while ($true) {
         $ok = $false
-        try { $ok = Invoke-Check $setting } catch { Write-DistributorLog "error: $($_.Exception.Message)" }
+        try { $ok = Invoke-Check $setting } catch { Write-DistributorLog "error: $(Format-ErrorRecord $_)" }
         if ($Once) { if ($ok) { exit 0 } exit 1 }
         $wait = $setting.Interval
         if (-not $ok) {

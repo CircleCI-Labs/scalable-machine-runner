@@ -232,7 +232,7 @@ configs:
   # renames them after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
   # services that use it.
   entrypoint: {name: machine-runner-swarm-entrypoint-219dd9e6972a, file: circleci-runner-entrypoint}
-  distributor: {name: machine-runner-swarm-distributor-56ce91e33a59, file: runner-distributor.sh}
+  distributor: {name: machine-runner-swarm-distributor-2ce8764c2645, file: runner-distributor.sh}
 
 volumes:
   runner-bin: {}   # one per node: the runner of that node

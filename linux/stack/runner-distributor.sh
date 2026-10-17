@@ -10,7 +10,8 @@
 #   MACHINE_RUNNER_SWARM_CHECK_INTERVAL              how often to look again (default 24h; seconds, or a number with s, m, h or d). A floating
 #                                                    version asks the manifest again; an exact pin only verifies its installed copy
 #   MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL           where manifest.json and <version>/circleci-runner_linux_<arch>.tar.gz live. It must be an
-#                                                    https:// URL (or file://, a local directory), unless a SHA-256 list is set (below)
+#                                                    https:// URL (or http:// with MACHINE_RUNNER_SWARM_ALLOW_HTTP), unless a SHA-256 list is set
+#                                                    (below). A local mirror on Linux is an http:// or https:// server (file:// is Windows only)
 #   MACHINE_RUNNER_SWARM_RUNNER_SHA256               the tarball SHA-256 values that may be installed, separated by commas (every architecture
 #                                                    of the fleet). The stack file sets the values of the pinned version, so the default
 #                                                    install does not rest on the hash of the manifest, which comes from the same bucket as the
@@ -91,10 +92,10 @@ if [ "$kind" != exact ] && [ -n "$hashes" ]; then
   log "version $want floats: the SHA-256 list is for an exact version, so the hash of each version comes from the manifest"
 fi
 case $base in
-  https://* | file://*) ;;   # file:// is a local directory: nobody on the path
+  https://*) ;;
   http://*) [ -n "$hashes" ] || [ "${MACHINE_RUNNER_SWARM_ALLOW_HTTP:-false}" = true ] ||
       die "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL is $base: without a MACHINE_RUNNER_SWARM_RUNNER_SHA256 list the hash comes from the manifest of that server, so the URL must be https:// (MACHINE_RUNNER_SWARM_ALLOW_HTTP=true accepts it in a lab)" ;;
-  *) die "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL must be an https:// URL, got '$base'" ;;
+  *) die "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL must be an https:// URL (or http:// with MACHINE_RUNNER_SWARM_ALLOW_HTTP), got '$base'" ;;
 esac
 
 fetch() { # URL FILE: three tries (wget, or curl in an image that has no wget)

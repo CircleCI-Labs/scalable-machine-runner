@@ -223,5 +223,5 @@ secrets:
 configs:
   # As in runners.yaml (ci/config-names.sh keeps the names in step with the files), so that this file also loads alone.
   entrypoint: {name: machine-runner-swarm-entrypoint-219dd9e6972a, file: circleci-runner-entrypoint}
-  distributor: {name: machine-runner-swarm-distributor-56ce91e33a59, file: runner-distributor.sh}
+  distributor: {name: machine-runner-swarm-distributor-2ce8764c2645, file: runner-distributor.sh}
   microvm-corefile: {external: true}

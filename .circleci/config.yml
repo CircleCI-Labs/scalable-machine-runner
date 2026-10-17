@@ -7,22 +7,24 @@ version: 2.1
 # parameters below switch jobs in and out of that workflow with expression
 # filters, so a skipped job is never scheduled:
 #
-#   full-suite   main, or `full: true` (pipeline parameter, for a manual run through the API
-#                or a schedule) adds the Windows Server 2025 jobs and linux-mixed-arch.
-#                Only main and smr-swarm/* are eligible for e2e.
-#   windows, proxy-image, microvm
-#                the heavy suites: on main and with `full: true`, and on any other branch
-#                only when a changed file is one that the suite reads (ci/setup-gate.sh).
+#   full-suite   main when a commit of the push would make a release, or `full: true` (pipeline
+#                parameter, for a manual run through the API or a schedule) adds the Windows
+#                Server 2025 jobs and linux-mixed-arch. Only main and smr-swarm/* are eligible for e2e.
+#   windows, proxy-image, microvm, linux-swarm, linux-swarm-proxy, linux-smoke, linux-image,
+#   container-agent, e2e-sim, proxy-test, signing
+#                one parameter per suite: on for a release and with `full: true`, and otherwise
+#                only when a changed file is one that the suite reads (ci/setup-gate.sh). The e2e
+#                flags follow the same path rule, and need the tokens too.
 #   strict       main with both e2e tokens (the production project): a missing publishing
 #                credential fails the jobs that publish instead of skipping them.
 #   e2e-linux    an e2e branch AND E2E_RUNNER_TOKEN_LINUX is non-empty
 #   e2e-windows  an e2e branch AND E2E_RUNNER_TOKEN_WINDOWS is non-empty
-#   release      the branch is main AND both e2e flags are true. The release job then
-#                waits for every other job of the same workflow (docs/releasing.md).
-#                It implies the three flags above, so the release never runs without
+#   release      the branch is main, both e2e flags are true, and a commit of the push would make
+#                a release. The release job then waits for every other job of the same workflow
+#                (docs/releasing.md). It implies every suite, so the release never runs without
 #                the full suite and both e2e groups.
 #   docs-only    the push changes only documentation (docs/, site/, *.md): the pipeline runs lint
-#                and the docs site build, and turns full-suite, e2e and release off.
+#                and the docs site build, and turns every suite and release off.
 #                ci/changed-files.sh lists the changes, ci/setup-gate.sh decides (docs/ci.md).
 #   security-scan  the weekly scan (a schedule sets the pipeline parameter of the same name). The
 #                continuation runs the workflow `security-scan` and none of the others.
@@ -57,7 +59,7 @@ parameters:
     type: boolean
     default: false
     description: >
-      Run the full suite (the Windows Server 2025 jobs, linux-mixed-arch and every heavy suite) on
+      Run the full suite (the Windows Server 2025 jobs, linux-mixed-arch and every suite) on
       any branch. The e2e workflows still run only on main and smr-swarm/*. A schedule or an
       API call can set it. It also switches the docs-only shortcut off.
   security-scan:

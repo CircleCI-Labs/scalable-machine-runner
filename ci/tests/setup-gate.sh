@@ -38,10 +38,10 @@ expect() {
   got=$(jq -r '[.["full-suite"], .["e2e-linux"], .["e2e-windows"], .release, .["docs-only"], .["security-scan"], .publish, .strict, .windows, .["proxy-image"], .microvm, .["pull-request"]] | map(tostring) | join(" ")' <<< "$out")
   # publish: main, and neither a docs-only change nor a scan (the last two values of want), whatever the tokens and the e2e flags say
   pub=false
-  if [ "$branch" = main ] && [ "$(awk '{ print $5 $6 }' <<< "$want")" = falsefalse ]; then pub=true; fi
+  heavy=${HEAVY:-"true true true"}
+  if [ "$branch" = main ] && [ "$(awk '{ print $5 $6 }' <<< "$want")" = falsefalse ] && [ "$(awk '{ print $2 }' <<< "$heavy")" = true ]; then pub=true; fi
   strict=false
   if [ "$branch" = main ] && [ "$e2e" = true ] && [ -n "$tl" ] && [ -n "$tw" ] && [ "$(awk '{ print $6 }' <<< "$want")" = false ]; then strict=true; fi
-  heavy=${HEAVY:-"true true true"}
   if [ -z "$HEAVY" ] && [ "$(awk '{ print $5 $6 }' <<< "$want")" != falsefalse ]; then heavy="false false false"; fi
   pr=false
   if [[ "$PULL" =~ ^https://github\.com/[^/]+/[^/]+/pull/[0-9]+$ ]] && [ "$(awk '{ print $6 }' <<< "$want")" != true ]; then pr=true; fi
@@ -101,7 +101,7 @@ docs() {
 docs "PR: docs and site only"                     feature/x     false  false  true  "false false false false true false false false"  docs/ci.md site/hugo.yaml README.md
 docs "PR: a nested Markdown file"                 feature/x     false  false  true  "false false false false true false false false"  linux/images/example/README.md .github/PULL_REQUEST_TEMPLATE.md
 docs "PR: a docs asset"                           feature/x     false  false  true  "false false false false true false false false"  docs/images/diagram.svg
-docs "PR: docs and a script"                      feature/x     false  false  true  "false false false false false true true true"  docs/ci.md ci/release.sh
+docs "PR: docs and a script that no suite reads"  feature/x     false  false  true  "false false false false false false false false"  docs/ci.md ci/release.sh
 docs "PR: the scripts of the docs build are docs" feature/x     false  false  true  "false false false false true false false false"  site/stage.sh site/nav.txt
 docs "PR: docs/microvm.md is read by a test"      feature/x     false  false  true  "false false false false false false false true"  docs/microvm.md
 docs "PR: a file that only looks like docs"       feature/x     false  false  true  "false false false false false false false false"  docs.sh README.md.bak documentation/a.txt
@@ -109,30 +109,33 @@ docs "PR: CI config"                              feature/x     false  false  tr
 docs "PR: no changed file is known"               feature/x     false  false  true  "false false false false false true true true"
 docs "PR: full parameter on a docs-only change"   feature/x     false  true   true  "true false false false false true true true"  docs/ci.md
 docs "smr-swarm/v2: docs only"                    smr-swarm/v2  true   false  true  "false false false false true false false false"  docs/faq.md
-docs "smr-swarm/v2: docs and code"                smr-swarm/v2  true   false  true  "false true true false false false true false"  docs/faq.md proxy/cmd/machine-runner-swarm-proxy/main.go
+docs "smr-swarm/v2: docs and code"                smr-swarm/v2  true   false  true  "false true true false false false true true"  docs/faq.md proxy/cmd/machine-runner-swarm-proxy/main.go
 docs "main: docs only, nothing would release"     main          true   false  false "false false false false true false false false"  docs/ci.md CHANGELOG.md
 docs "main: docs only, a release would be made"   main          true   false  true  "true true true true false true true true"  docs/ci.md
-docs "main: docs and code"                        main          true   false  false "true true true true false true true true"  docs/ci.md linux/setup.sh
+docs "main: docs and code, no release"            main          true   false  false "false true false false false false false false"  docs/ci.md linux/setup.sh
 docs "main: no changed file is known"            main          true   false  false "true true true true false true true true"
 docs "main: plain job (never scheduled), docs"   main          false  false  false "false false false false true false false false"  docs/ci.md
 
 # the heavy suites on a branch that is not main: only the paths that a suite reads switch it on
-docs "heavy: proxy code"                          feature/x     false  false  true  "false false false false false false true false"  proxy/cmd/machine-runner-swarm-proxy/main.go
-docs "heavy: the proxy Dockerfile"                feature/x     false  false  true  "false false false false false false true false"  proxy/Dockerfile.windows
+docs "heavy: proxy code"                          feature/x     false  false  true  "false false false false false false true true"  proxy/cmd/machine-runner-swarm-proxy/main.go
+docs "heavy: the proxy Dockerfile"                feature/x     false  false  true  "false false false false false false true true"  proxy/Dockerfile.windows
 docs "heavy: a Windows stack file"                feature/x     false  false  true  "false false false false false true false false"  windows/stack/runners.yaml
-docs "heavy: a Windows test"                      feature/x     false  false  true  "false false false false false true true false"  windows/tests/Test-Install.ps1
+docs "heavy: a Windows test"                      feature/x     false  false  true  "false false false false false true false false"  windows/tests/Test-Install.ps1
+docs "heavy: the helpers of the Windows image test" feature/x   false  false  true  "false false false false false true true false"  windows/tests/SwarmTestHelpers.psm1
 docs "heavy: the PSScriptAnalyzer settings"       feature/x     false  false  true  "false false false false false true false false"  PSScriptAnalyzerSettings.psd1
 docs "heavy: a Linux stack file"                  feature/x     false  false  true  "false false false false false false false true"  linux/stack/microvm.yaml
 docs "heavy: a Linux test"                        feature/x     false  false  true  "false false false false false false false true"  linux/tests/stack-config.sh
 docs "heavy: the setup script of Linux"           feature/x     false  false  true  "false false false false false false false false"  linux/setup.sh
 docs "heavy: an example"                          feature/x     false  false  true  "false false false false false false false false"  examples/linux-hello.yml
-docs "heavy: a CI script runs every suite"        feature/x     false  false  true  "false false false false false true true true"  ci/proxy-image.sh
+docs "heavy: the proxy image script"              feature/x     false  false  true  "false false false false false false true false"  ci/proxy-image.sh
+docs "heavy: the gate runs every suite"           feature/x     false  false  true  "false false false false false true true true"  ci/setup-gate.sh
 docs "heavy: the CI config runs every suite"      feature/x     false  false  true  "false false false false false true true true"  .circleci/config.yml
 docs "heavy: two commits, two suites"             feature/x     false  false  true  "false false false false false true false true"  windows/Setup.ps1 linux/stack/runners.yaml
 docs "heavy: a docs page and one stack file"      feature/x     false  false  true  "false false false false false false false true"  docs/ci.md linux/stack/microvm.yaml
 docs "heavy: main runs them for a doc fix"        main          true   false  true  "true true true true false true true true"  docs/ci.md
-docs "heavy: main runs them whatever changes"     main          true   false  false "true true true true false true true true"  linux/setup.sh
-docs "heavy: smr-swarm/v2 keeps them off"         smr-swarm/v2  true   false  true  "false true true false false false false false"  linux/setup.sh
+docs "heavy: main without a release gates them"   main          true   false  false "false true false false false false false false"  linux/setup.sh
+docs "heavy: main with a release runs them"       main          true   false  true  "true true true true false true true true"  linux/setup.sh
+docs "heavy: smr-swarm/v2 keeps them off"         smr-swarm/v2  true   false  true  "false true false false false false false false"  linux/setup.sh
 docs "heavy: full on a branch runs them all"      feature/x     false  true   true  "true false false false false true true true"  linux/setup.sh
 docs "heavy: a plain job with the context by mistake" feature/x true   false  true  "false false false false false false false false"  linux/setup.sh
 

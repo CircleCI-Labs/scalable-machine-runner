@@ -8,7 +8,13 @@ page-description: Join Linux, Windows, and Arm nodes to one Docker Swarm, place 
 
 This page runs the stack on a cluster of Linux amd64, Linux arm64 and Windows nodes. One Swarm schedules every replica, and labels decide which node may run which resource class.
 
-Start with the single-node steps on [Install on Linux with Docker Swarm](install-linux.md) or [Install on Windows Server with Docker Swarm](install-windows.md), then use this page to add nodes.
+A one-node install that follows the quickstart cannot grow: its swarm listens on the loopback address. Start a cluster here, with a routable address, and use the install pages ([Linux](install-linux.md), [Windows Server](install-windows.md)) for the per-node steps.
+
+| Layout | Hosts | Use it for |
+|---|---|---|
+| One node | 1 | A trial. Jobs and the token proxy share the host |
+| Small | 2: a manager with the proxy label, one worker | Jobs on the worker. No manager failover |
+| Production | 4 or more: three managers (one with the proxy label, the others drained), and workers | Quorum survives the loss of one manager. The proxy runs on one node: if it is lost, label another ([The node of the proxy](operations.md#the-node-of-the-proxy)) |
 
 ```mermaid
 flowchart LR
@@ -78,13 +84,13 @@ On a single-node Swarm the only node is a manager and runs the replicas and the 
 Initialize Swarm on the first manager with an address that the other nodes can reach (not the loopback address of the single-node install).
 
 ```bash
-docker swarm init --advertise-addr <MANAGER_IP_ADDRESS> --task-history-limit 2 --default-addr-pool 10.20.0.0/16 --default-addr-pool-mask-length 24
+docker swarm init --advertise-addr <MANAGER_IP_ADDRESS> --task-history-limit 2 --default-addr-pool <POOL_CIDR> --default-addr-pool-mask-length 24
 ```
 
 Two options matter for this stack, and neither is the default:
 
 - **`--task-history-limit 2`.** Every finished job ends a task, and Swarm keeps the last 5 tasks of each slot, with their containers and disk, unless you lower it ([Free disk space](operations.md#free-disk-space)). Change it later with `docker swarm update --task-history-limit 2`.
-- **`--default-addr-pool`.** Each Linux class gets its own `/24` overlay network from the default pool of Swarm, `10.0.0.0/8`. Choose a pool that does not overlap your own networks, because an overlap makes tasks unreachable in ways that are hard to see. A `/16` gives 256 networks. You can set the pool only when you create the swarm.
+- **`--default-addr-pool`.** Each Linux class gets its own `/24` overlay network from the default pool of Swarm, `10.0.0.0/8`. Choose a pool that does not overlap your own networks, because an overlap makes tasks unreachable in ways that are hard to see. Choose a range that none of your networks uses, for example a free `/16` from `10.0.0.0/8`: it gives 256 networks. You can set the pool only when you create the swarm.
 
 If you started with the loopback address, run `docker stack rm runners` and `docker swarm leave --force`, initialize again, and recreate the secrets.
 
@@ -174,7 +180,7 @@ deploy:
 | `node.hostname` | The hostname of the node |
 | `node.role` | `manager`, `worker` |
 
-### Labels used by this repository
+### Labels used by the stack
 
 Set a label with `docker node update --label-add <KEY>=<VALUE> <NODE_NAME>`, and remove it with `--label-rm <KEY>`. Constraints on labels have the form `node.labels.<KEY> == <VALUE>`.
 
@@ -292,7 +298,7 @@ docker service ps runners_linux-default
 
 The `NODE` column of `docker service ps` shows where each replica runs. A task that stays `Pending` shows the reason in the `ERROR` column, for example `no suitable node (scheduling constraints not satisfied on 2 nodes)` ([A task stays pending](troubleshooting.md#a-task-stays-pending)).
 
-## Additional resources
+## Next
 
 - [Resource classes](resource-classes.md)
 - [Operations](operations.md), including how to drain a node for patching

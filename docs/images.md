@@ -6,7 +6,7 @@ page-description: Run the runner in stock Linux and Windows images with a read-o
 
 # Images
 
-The stack files run stock images and mount the runner into them, so the image of a class is the environment its jobs see. This repository publishes no class image. Its one image, the token proxy, holds the class tokens and is no environment for a job ([The token proxy image](install-linux.md#the-token-proxy-image)). This page covers the stock images and how to bring your own on each OS.
+The stack files run stock images and mount the runner into them, so the image of a class is the environment its jobs see. Machine runner swarm publishes no class image. Its one image, the token proxy, holds the class tokens and is no environment for a job ([The token proxy image](install-linux.md#the-token-proxy-image)). This page covers the stock images and how to bring your own on each OS.
 
 ## Linux: stock images with the mounted runner
 
@@ -119,8 +119,6 @@ docker build -f windows/images/example/Dockerfile --build-arg WINDOWS_TAG=ltsc20
 ```
 
 Push the result to a registry that every Windows node can pull from, because Swarm does not share local images. Then set the image of the `windows-custom` service in the add-on stack file `windows\stack\custom-image.yaml`, create the resource class and the secret `windows-custom-token`, and deploy with `-c windows\stack\runners.yaml -c windows\stack\custom-image.yaml`. The file [`examples/windows-custom-image.yml`](../examples/windows-custom-image.yml) has a job on that class. Rebuild when the base image or a tool changes.
-
-A stop of a busy Windows container kills its job after about 5 seconds ([Stop a busy Windows container](operations.md#stop-a-busy-windows-container)).
 
 ## Private certificate authorities
 

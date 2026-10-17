@@ -6,7 +6,16 @@ page-description: Symptoms, causes and fixes for the Docker Swarm runner stack o
 
 # Troubleshooting
 
-Each entry gives the symptom, the cause and the fix. Start with the task state and the runner output:
+Each entry gives the symptom, the cause and the fix. After a quickstart, find your symptom here first:
+
+| You see | Do this |
+|---|---|
+| `runners_linux-default` shows `1/2` | Run `docker service ps --no-trunc runners_linux-default`. If the error says `insufficient resources`, run one replica: `sudo docker service scale runners_linux-default=1` ([A task stays pending](#a-task-stays-pending)) |
+| `runners_token-proxy` shows `0/1` | Run `docker service ps --no-trunc runners_token-proxy`. A `no suitable node` error means no node matches its placement: by default it needs a manager, and with `MACHINE_RUNNER_SWARM_PROXY_PLACEMENT` it needs an active node with that label. A node with the label `machine-runner-swarm.proxy` runs no runner services |
+| The CLI lists no instance | Run `docker service logs --tail 50 runners_linux-default`, then see [The runner log shows 401](#the-runner-log-shows-401) and [x509 certificate errors](#the-runner-log-shows-x509-certificate-errors) |
+| The job stays `Queued` | The class name must equal `<NAMESPACE>/linux-default`, and your plan needs free runner concurrency ([Jobs wait while the runners are idle](#jobs-wait-while-the-runners-are-idle)) |
+
+For anything else, start with the task state and the runner output:
 
 ```bash
 docker stack ps runners --no-trunc
@@ -61,7 +70,7 @@ Symptom: the log contains `401 (Unauthorized)` and the runner never claims a job
 
 **Cause.** CircleCI rejected the token: it was deleted, mistyped, or belongs to another class. A drifted clock is not a 401: it fails the TLS handshake first (see the x509 entry).
 
-**Fix.** Check that the secret `<SERVICE>-token` holds the token of the class with the same name as the service. A swapped token does not fail loudly: the runner serves the class of its token, so jobs of the intended class stay queued. On Linux the token is in the proxy: look in `runners_token-proxy` for `upstream status 401`. Then [rotate the token](operations.md#rotate-a-runner-token).
+**Fix.** Check that the secret `<SERVICE>-token` holds the token of the class with the same name as the service. A swapped token does not fail loudly: the runner serves the class of its token, so jobs of the intended class stay queued. The token of a single-task class is in the proxy: look in `runners_token-proxy` (Windows: `runners_token-proxy-windows`) for `upstream status 401`. Then [rotate the token](operations.md#rotate-a-runner-token).
 
 ### The runner log shows 403 and the proxy log says refused
 
@@ -125,7 +134,7 @@ Symptom: jobs of a class fail within seconds or end with no work done, and `dock
    docker stack ps runners --no-trunc --format '{{.Node}} {{.Name}} {{.CurrentState}} {{.Error}}' | grep '<NODE_NAME>' | head -20
    ```
 
-2. Stop it from taking jobs. On Linux, drain it. On Windows, pause it instead: failing jobs free the node quickly, and a drain would kill a good job after about 5 seconds ([A Windows node](operations.md#a-windows-node)).
+2. Stop it from taking jobs. On Linux, drain it. On Windows, pause it instead: failing jobs free the node quickly ([A Windows node](operations.md#a-windows-node)).
 
    ```bash
    docker node update --availability drain <NODE_NAME>
@@ -182,7 +191,7 @@ Refer to [Back up the managers, and recover](operations.md#back-up-the-managers-
 
 | Symptom | Cause and fix |
 |---|---|
-| `docker stack deploy` fails with `secret not found: linux-default-token` | An external secret does not exist. Every service needs `<SERVICE>-token`, and on Linux every runner service also needs `runner-placeholder-token`. Create it, or delete the service from your copy with its entries under `secrets:` and `networks:`. On Windows, `runners.yaml` needs only `windows-default-token`, and each add-on file its own `<SERVICE>-token` |
+| `docker stack deploy` fails with `secret not found: linux-default-token` | An external secret does not exist. Every service needs `<SERVICE>-token`, and every single-task runner service (Linux and Windows) also needs `runner-placeholder-token`. Create it, or delete the service from your copy with its entries under `secrets:` and `networks:`. On Windows, `runners.yaml` needs `windows-default-token` and `runner-placeholder-token`, and each add-on file its own `<SERVICE>-token` |
 | `Swarm is encrypted and needs to be unlocked before it can be used` | Autolock, and this manager restarted. Run `docker swarm unlock` and enter the key from `docker swarm unlock-key` on an unlocked manager ([Unlock a locked swarm](operations.md#unlock-a-locked-swarm)) |
 | `This node is not a swarm manager` | You ran a Swarm command on a worker. Run it on a manager (`docker node ls` lists them) |
 | `docker swarm join` times out or fails with a connection error | The manager is not reachable on its advertised address and port 2377, or listens on loopback only. Open the [Inter-node ports](multi-node.md#inter-node-ports), and initialize the swarm with a routable `--advertise-addr` |
@@ -190,7 +199,7 @@ Refer to [Back up the managers, and recover](operations.md#back-up-the-managers-
 | A task is `rejected` with `No such image` or an authentication error | The node cannot pull the image: registry unreachable, image private, or rate limit. Check egress, deploy with `--with-registry-auth` for a private registry, or use a mirror ([Registry needs](multi-node.md#registry-needs), [What needs the internet](security.md#what-needs-internet)) |
 | `docker service logs` prints nothing, or less than you expect | Swarm prunes old tasks of a slot with their logs (history limit 5 by default, 2 with the setup helper), and the command reads only the `local`, `json-file` and `journald` drivers. Use `docker service ps --no-trunc`, `docker logs <CONTAINER>` on the node, and [Ship the logs](operations.md#ship-the-logs) |
 | A job exits with code 137, or a build fails with `fork: Resource temporarily unavailable` or `Cannot allocate memory` | 137 is SIGKILL: the kernel kills a job over the memory limit (`docker inspect <CONTAINER>` shows `OOMKilled: true`), or a stop outlasted `stop_grace_period`. More processes than `limits.pids` (4096) fails to fork. Raise `limits.memory` or `limits.pids` and keep the reservation equal ([Size the limits](resource-classes.md#size-the-limits)) |
-| A job fails with a message that points at an issue with your infrastructure, and its log just stops | The runner stopped during the job: a node died or rebooted, a stop from outside (update, scale-down, drain) outlasted the grace period (on Windows it kills the job after about 5 seconds), or an out-of-memory kill. Find the task with `docker service ps --no-trunc runners_<SERVICE>`, then rerun the job: runners do not retry ([Node death](operations.md#node-death), [Stop a busy Windows container](operations.md#stop-a-busy-windows-container)) |
+| A job fails with a message that points at an issue with your infrastructure, and its log just stops | The runner stopped during the job: a node died or rebooted, a stop from outside (update, scale-down, drain) outlasted the grace period (on Windows, change a class only while it is idle), or an out-of-memory kill. Find the task with `docker service ps --no-trunc runners_<SERVICE>`, then rerun the job: runners do not retry ([Node death](operations.md#node-death), [Stop a busy Windows container](operations.md#stop-a-busy-windows-container)) |
 
 ## Linux
 
@@ -341,9 +350,9 @@ A `SHA-256 mismatch`, `cannot download` or `not adopting it` line names the caus
 
 Symptom: a job ends about 5 seconds after a rolling update, scale-down, node drain or `docker stop`, and `docker service ps --no-trunc` shows `task: non-zero exit (3221225786)` (`0xC000013A`).
 
-**Cause.** The container was stopped from outside while it ran a job, and Windows gives a stock Server Core container about 5 seconds, whatever `stop_grace_period` says. A job that finishes by itself does not end this way.
+**Cause.** The container was stopped from outside while it ran a job. A job that finishes by itself does not end this way.
 
-**Fix.** Rerun the interrupted jobs, and change a service only while its class runs no job ([Stop a busy Windows container](operations.md#stop-a-busy-windows-container)).
+**Fix.** Rerun the interrupted jobs, and change a class only while it is idle ([why](operations.md#stop-a-busy-windows-container)).
 
 ## Collect information for a bug report
 

@@ -32,6 +32,7 @@
 #                         component token-proxy-image, environment docker-hub, version = X.Y.Z. Only a run that publishes is recorded
 #                         (both tokens set, signing on). A marker never fails the release.
 #   RELEASE_OUT           output directory (default /tmp/release)
+#   RELEASE_RUNNER_MANIFEST   path to a local circleci-runner manifest.json (tests only; the release job fetches the manifest over HTTPS)
 #
 # Never run this with `set -x`: the OIDC token and GITHUB_TOKEN are in the environment.
 set -euo pipefail
@@ -90,24 +91,61 @@ install_tools() {
 # The stack files pin one exact runner version by default, the newest that CI tests (docs/releasing.md says how a release bumps it).
 # It must be the same in every stack file, and CircleCI's manifest must still list it for every platform that the stack runs on.
 check_runner_pin() {
-  local f pin first=
+  local f pin first= manifest_file tmp_manifest=
   for f in linux/stack/runners.yaml linux/stack/microvm.yaml windows/stack/runners.yaml; do
     pin="$(sed -n 's/^  MACHINE_RUNNER_SWARM_RUNNER_VERSION: \${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-\([0-9][0-9.]*\)}.*/\1/p' "${f}")"
     [ -n "${pin}" ] || die "${f} has no exact default of MACHINE_RUNNER_SWARM_RUNNER_VERSION"
     [ -z "${first}" ] || [ "${pin}" = "${first}" ] || die "${f} pins runner ${pin}, another stack file pins ${first}: they must be equal"
     first="${pin}"
   done
-  curl -fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json |
-    python3 -c '
-import json, sys
-pin = sys.argv[1]
-entry = json.load(sys.stdin)["releases"].get(pin)
+  if [ -n "${RELEASE_RUNNER_MANIFEST:-}" ]; then
+    manifest_file="${RELEASE_RUNNER_MANIFEST}"
+    [ -f "${manifest_file}" ] || die "RELEASE_RUNNER_MANIFEST is not a file: ${manifest_file}"
+  else
+    manifest_file="$(mktemp)"
+    tmp_manifest="${manifest_file}"
+    curl -fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors \
+      https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json -o "${manifest_file}"
+  fi
+  if ! python3 -c '
+import json, re, sys
+pin, manifest_path = sys.argv[1], sys.argv[2]
+manifest = json.load(open(manifest_path))
+entry = (manifest.get("releases") or {}).get(pin)
 want = {"linux": ["amd64", "arm64", "ppc64le", "s390x"], "windows": ["amd64", "arm64"]}
 missing = [o + "/" + a for o, archs in want.items() for a in archs if not (entry or {}).get(o, {}).get(a, {}).get("sha256")]
 if missing:
     sys.exit("runner " + pin + " is not in the manifest of CircleCI for " + ", ".join(missing))
-' "${first}" || die "the pinned runner ${first} is not usable: bump it (docs/releasing.md)"
-  say "Runner pin ${first}: in CircleCI's manifest for every platform"
+sha_re = re.compile(r"^  MACHINE_RUNNER_SWARM_RUNNER_SHA256: \$\{MACHINE_RUNNER_SWARM_RUNNER_SHA256:-([0-9a-f,]*)\}$")
+checks = [
+    ("linux/stack/runners.yaml", "linux", ["amd64", "arm64", "ppc64le", "s390x"]),
+    ("linux/stack/microvm.yaml", "linux", ["amd64", "arm64", "ppc64le", "s390x"]),
+    ("windows/stack/runners.yaml", "windows", ["amd64", "arm64"]),
+]
+together = "bump the runner pin and its SHA-256 list together (docs/releasing.md)"
+for path, os_name, archs in checks:
+    got_shas = None
+    with open(path) as fh:
+        for line in fh:
+            m = sha_re.match(line.rstrip("\n"))
+            if m:
+                got_shas = [h for h in m.group(1).split(",") if h]
+                break
+    if got_shas is None:
+        sys.exit(path + ": has no default list of MACHINE_RUNNER_SWARM_RUNNER_SHA256")
+    if len(got_shas) != len(archs):
+        sys.exit(path + " " + os_name + ": the default SHA-256 list has " + str(len(got_shas)) + " value(s), want " + str(len(archs)) + ": " + together)
+    for i, arch in enumerate(archs):
+        want = entry[os_name][arch]["sha256"].lower()
+        got = got_shas[i].lower()
+        if got != want:
+            sys.exit(path + " " + os_name + "/" + arch + ": SHA-256 " + got + " does not match the manifest for pin " + pin + " (" + want + "): " + together)
+' "${first}" "${manifest_file}"; then
+    [ -n "${tmp_manifest}" ] && rm -f "${tmp_manifest}"
+    exit 1
+  fi
+  [ -n "${tmp_manifest}" ] && rm -f "${tmp_manifest}"
+  say "Runner pin ${first}: in CircleCI's manifest for every platform, SHA-256 lists match"
 }
 
 # Sets $version, $resume (true when this commit already has its release tag) or exits 0.
@@ -289,8 +327,10 @@ main() {
   fi
 }
 
-case "${1:-}" in
-  install-tools) install_tools ;;
-  "") main ;;
-  *) die "usage: ci/release.sh [install-tools]" ;;
-esac
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  case "${1:-}" in
+    install-tools) install_tools ;;
+    "") main ;;
+    *) die "usage: ci/release.sh [install-tools]" ;;
+  esac
+fi

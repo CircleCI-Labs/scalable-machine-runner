@@ -253,8 +253,7 @@ sudo env MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circl
   jq -r '.releases as $r | $r.current.linux.amd64.sha256 as $s | $r | to_entries[] | select(.key | test("^[0-9]")) | select(.value.linux.amd64.sha256 == $s) | .key' mirror/manifest.json
   ```
 
-- The distributor uses the `wget` and CA bundle of the stock Alpine image, so an `https` mirror needs a certificate from a public authority. Otherwise use an `http://` mirror with the SHA-256 list (the list, not the transport, is what you trust), or an image of your own for `runner-distributor` (`FROM` the pinned Alpine, your CA added; not tested). Do not use one proxy for both the distributor and the mirror ([Proxies and certificate authorities, component by component](#proxies-and-certificate-authorities-component-by-component)).
-- Over plain `http`, an exact pin needs a usable SHA-256 list (the default one is enough), because the manifest would otherwise be the only root of trust and would travel unprotected. A floating value has no list, so it is refused. `MACHINE_RUNNER_SWARM_ALLOW_HTTP=true` accepts it for a lab.
+- The distributor uses the `wget` and CA bundle of the stock Alpine image, so an `https` mirror needs a certificate from a public authority. Otherwise use an `http://` mirror with the SHA-256 list (an exact pin needs a usable list over `http`, and the default list is enough), or an image of your own for `runner-distributor` (not tested). `MACHINE_RUNNER_SWARM_ALLOW_HTTP=true` accepts `http` with no list, for a lab ([Proxies and certificate authorities](#proxies-and-certificate-authorities-component-by-component)).
 - The mirror replaces the runner download only. Every runner container still downloads its task agent from `circleci-binary-releases.s3.amazonaws.com`, and every node still pulls `alpine` from a registry ([Does it work on hosts without internet access?](faq.md#does-it-work-on-hosts-without-internet-access)).
 
 ### Upgrade the runner on Windows
@@ -432,7 +431,7 @@ The start line names one of these states for each class:
 - **`no state (a first start)` with `CircleCI reports M running task(s)`, or `CircleCI does not say how many tasks run`.** The proxy cannot tell which runners hold the tasks, so it fails safe and latches every runner present until Swarm replaces it.
 - **`state lost; ...` or `no state directory; ...`.** The state file is damaged or removed, or there is no state directory: the same decision for every class, from what CircleCI says.
 
-With no state the proxy asks CircleCI (`GET /api/v3/runner/scale` with each class's token, up to three times, within 25 seconds in all). With no running task the runners present may claim. With a running task, or when the call fails, is late or answers anything else, the proxy latches every runner of that class present, so a runner that holds a job cannot claim a second one. A refused runner gets 403 until it recycles: at its idle timeout (1 hour in the shipped files) or at once with the command above.
+A refused runner gets 403 until it recycles: at its idle timeout (1 hour in the shipped files) or at once with the command above. A 401 and a 403 on a claim behave the same in the runner: it keeps its container and claims again every 5 seconds.
 
 ## Drain a node for patching
 
@@ -480,7 +479,7 @@ An update that restarts the Docker daemon or the node ends every container on it
 
 ### The node of the proxy
 
-Draining the node that runs `token-proxy` stops the proxy. A proxy pinned to a labeled node stays `Pending` until that node is `active`, then starts there with its state. No claim is possible meanwhile, so choose a quiet period and patch that node last. A proxy with the default placement moves to another manager and its state stays behind ([Where the proxy runs, and when it moves](#where-the-proxy-runs-and-when-it-moves)). Draining every manager, or the only node that can run the proxy, stops every claim: keep one node undrained for it ([the warning in Multi-Node Clusters](multi-node.md#managers-and-quorum)).
+Draining the node that runs `token-proxy` stops the proxy: no claim is possible until it runs again, so patch that node last, in a quiet period ([Where the proxy runs, and when it moves](#where-the-proxy-runs-and-when-it-moves)). Draining every manager, or the only node that can run the proxy, stops every claim: keep one node undrained for it ([the warning in Multi-node clusters](multi-node.md#managers-and-quorum)).
 
 ### Stop a busy Windows container
 
@@ -500,20 +499,17 @@ Invoke-RestMethod -Headers $h -Uri "$api/api/v3/runner/tasks/running?resource-cl
 
 #### Optional: an image that lets a job finish after a stop (DIY)
 
-Your own image can lift the limit by setting `WaitToKillServiceTimeout` once, at build time, in milliseconds: at least your longest job plus a margin. This example is 18,300,000 (5 hours and 5 minutes, the runner's `max_run_time` plus 5 minutes):
+Your own image can lift the limit by setting `WaitToKillServiceTimeout` once, at build time, in milliseconds: at least your longest job plus a margin. This example is 18,300,000 (5 hours and 5 minutes, the `max_run_time` of the runner plus 5 minutes):
 
 ```dockerfile
 FROM mcr.microsoft.com/windows/servercore:ltsc2022
 RUN reg add HKLM\SYSTEM\CurrentControlSet\Control /v WaitToKillServiceTimeout /t REG_SZ /d 18300000 /f
 ```
 
-> [!NOTE]
-> Set the value at build time. Setting it at run time with `reg add` inside a running container does not work: Windows reads the value only when the container boots.
-
-Use it as the `image:` of the service, which still mounts the runner and Git and sets `PATH` as in the shipped stack file. Build one image per Server Core tag, and rebuild it after each Patch Tuesday update of the base image.
+Set the value at build time: Windows reads it only when the container boots, so `reg add` in a running container does nothing. Use the image as the `image:` of the service, which still mounts the runner and Git and sets `PATH` as in the shipped stack file. Build one image per Server Core tag, and rebuild it after each Patch Tuesday update of the base image.
 
 > [!WARNING]
-> Never use `New-Item -Force` on an existing registry key, in an image build or a running container. It replaces the key and deletes its values and subkeys. On the `cexecsvc` service key, the container then fails to start with `hcs::System::Start: context deadline exceeded`. Use `reg add` or `Set-ItemProperty`, which set one value.
+> Never use `New-Item -Force` on an existing registry key, in an image build or a running container. It deletes the values and subkeys of the key, and on the `cexecsvc` service key the container then fails to start with `hcs::System::Start: context deadline exceeded`. Use `reg add` or `Set-ItemProperty`.
 
 Machine runner swarm does not build or test such an image. Before you rely on it, run a job of a few minutes on a non-production node, force an update of its service, and check that the job finishes.
 
@@ -525,7 +521,7 @@ Reference for production: logs that survive, signals to watch, deploy variables,
 
 `docker service logs` reads only logs of tasks Swarm still holds. Every finished job ends a task, and the task history limit of 2 makes Swarm prune old tasks, so a job log is gone after a few more jobs. The stack files keep logs on the node (`local` driver on Linux, 3 files of 20 MB; `json-file` on Windows) and rotate them.
 
-The token proxy logs one line (about 85 bytes) per forwarded claim, a 204 included: about one per idle runner every 5 seconds. With 50 idle runners that is about 70 MB a day, so the Linux proxy's 60 MB wrap in under a day and the Windows proxy's 10 MB in a few hours, and the lines that matter after an incident (`refused`, `state restored`, `released`) are among the first lost. Before the fleet is large, ship the proxy log off the node or raise `max-file` of `token-proxy` in your copy of the stack file. To keep logs, choose one:
+The token proxy logs one line (about 85 bytes) per forwarded claim, a 204 included: about one per idle runner every 5 seconds. With 50 idle runners that is about 70 MB a day, so the 60 MB of the Linux proxy and the 10 MB of the Windows proxy wrap within a day, and the lines that matter after an incident (`refused`, `state restored`, `released`) go first. Ship the proxy log off the node, or raise `max-file` of `token-proxy` in your copy of the stack file. To keep logs, choose one:
 
 - **A logging driver.** Change `logging:` in your copy of every stack file to a shipping driver such as `syslog`, `fluentd` or `gelf`. The stack files set the driver per service, so a default in `daemon.json` does not apply. `docker service logs` then fails for these drivers.
 - **A log agent on every node.** It reads container logs through the Docker API and forwards them. The stack files stay as they are, and `docker service logs` keeps working.
@@ -608,7 +604,7 @@ docker service logs --tail 30 runners_token-proxy
 
 **Limits.** Each client IP gets 2 claims a second (burst 10, answer 429) and 50 requests a second (burst 200) on all paths. At most 512 requests are served at once, and one above that gets 503 with `Retry-After`. The proxy waits 60 seconds for CircleCI's response headers. A runner and a job stay far below these numbers.
 
-**If the proxy is down,** runners cannot claim and CircleCI keeps jobs queued. Idle runners keep polling and fail, and they cannot go around the proxy, because they hold only the placeholder. A runner that runs a job keeps its container, but its calls and its task agent's calls to the API fail meanwhile. `linux/tests/proxy.sh` measures this with the real runner: a proxy restart while jobs run does not end them, and a proxy down when jobs end only delays the report (the runner sends the end of the job once the proxy is back and exits 0). The end-to-end test restarts the proxy in the middle of a real job too (probe `b2`). Swarm restarts a failed proxy task after 5 seconds on Linux and 10 on Windows, so an outage that short is harmless. Do not leave the proxy down long while jobs run: how long the real task agent keeps retrying is not documented.
+**If the proxy is down,** runners cannot claim and CircleCI keeps jobs queued. A runner that runs a job keeps its container, but its calls to the API wait. `linux/tests/proxy.sh` measures this with the real runner: a restart while jobs run does not end them, and a proxy that is down when jobs end only delays the report. Swarm restarts a failed proxy task after 5 seconds on Linux and 10 on Windows. Do not leave the proxy down long while jobs run: how long the task agent keeps retrying is not documented.
 
 #### Replace refused runners on Windows
 
@@ -648,9 +644,9 @@ The proxy saves a runner's address before it hands the task over. If the save fa
 
 #### Where the proxy runs, and when it moves
 
-The proxy runs on a manager by default (`node.role == manager`), with no label. With one manager it never moves. Its state, the addresses of runners that have claimed, is the volume `proxy-state` of its node.
+The proxy runs on a manager by default (`node.role == manager`). Its state, the addresses of runners that have claimed, is the volume `proxy-state` of its node.
 
-**The worst case.** If the proxy moves, its state is lost: the new node has an empty volume. A move happens by itself when its node is down and another manager matches, or by hand when you change the placement. The proxy then asks CircleCI for each class ([Restart the proxy](#restart-the-proxy)). With running tasks in a class, or no answer, it **refuses the existing runners** of that class (403) until they recycle (a runner that runs a job is unaffected). Replace the idle ones with `docker service update --force --update-parallelism 0 runners_<SERVICE>` per Linux class, and on Windows as in [Replace refused runners on Windows](#replace-refused-runners-on-windows). This is the safe side: no runner can claim twice.
+**If the proxy moves, its state is lost.** A move happens by itself when its node is down and another manager matches, or by hand when you change the placement. The new node has an empty volume, so the proxy asks CircleCI for each class ([Restart the proxy](#restart-the-proxy)). With running tasks in a class, or no answer, it refuses the existing runners of that class (403) until they recycle. A runner that runs a job is unaffected. Replace the idle ones with `docker service update --force --update-parallelism 0 runners_<SERVICE>` per Linux class, and on Windows as in [Replace refused runners on Windows](#replace-refused-runners-on-windows). No runner can claim twice.
 
 To move the proxy by hand (if no node matches, the service stays pending and no runner can claim):
 
@@ -658,16 +654,16 @@ To move the proxy by hand (if no node matches, the service stays pending and no 
 docker service update --constraint-rm 'node.role == manager' --constraint-add 'node.hostname == <NEW_MANAGER>' runners_token-proxy
 ```
 
-**Several managers, or a cluster with workers.** The default lets the proxy start on any manager, and runners may share a node with it. In a cluster, label the proxy's node and say so at deploy time ([Keep the deploy variables in version control](#keep-the-deploy-variables-in-version-control)):
+**In a cluster, pin the proxy.** Label its node and say so at deploy time ([Keep the deploy variables in version control](#keep-the-deploy-variables-in-version-control)):
 
 ```sh
 docker node update --label-add machine-runner-swarm.proxy=true <MANAGER>
 sudo env MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true' docker stack deploy -c deploy/runners.yaml runners
 ```
 
-The placement variable pins the proxy to a labeled node (manager or worker), and runner services never run on a labeled node, so no job shares a node with the class tokens. On a single node, with no label, the proxy and runners share the node. If the labeled node dies, the service stays pending until you label another. The labeled node runs no jobs: size the cluster so the other nodes carry the replicas.
+The proxy then runs on the labeled node (a manager or a worker), and runner services never run on it, so no job shares a node with the class tokens. On a single node, set no label. If the labeled node dies, the service stays pending until you label another. The labeled node runs no jobs, so size the cluster for that.
 
-**Planned work on the proxy's node.** A reboot keeps the state, and a move loses it. If the proxy is pinned, drain the node, patch it and set it `active`: the proxy is pending meanwhile, no runner can claim, and running jobs wait for the proxy at the end. It then starts on the same node with its state. Keep the downtime to the patch, and patch this node last ([Drain a node for patching](#drain-a-node-for-patching)). With the default placement and other managers, draining moves the proxy with an empty state (the worst case above): pin it first, or accept replacing the refused runners afterwards.
+**Planned work on that node.** A reboot keeps the state. Drain the node, patch it and set it `active`: no runner can claim meanwhile, and running jobs wait for the proxy at the end. Patch this node last ([Drain a node for patching](#drain-a-node-for-patching)). With the default placement, draining moves the proxy with an empty state: pin it first, or accept replacing the refused runners afterwards.
 
 ### Keep the deploy variables in version control
 
@@ -713,7 +709,7 @@ docker stack deploy -c deploy\runners.yaml runners
 
 The cluster state is `/var/lib/docker/swarm` on each manager. It holds the Raft log with every Swarm secret, so **the backup holds every runner token**. Keep it like a password vault and delete old copies.
 
-The method needs a second manager: Docker stops on the manager you copy, and the others must keep the quorum. A one-manager cluster has no safe way to copy while it runs: keep your stack files and deploy variables in version control and rely on the redeploy below.
+Docker stops on the manager you copy, so the others must keep the quorum: the method needs a second manager. With one manager, keep your stack files and deploy variables in version control and rely on the redeploy below.
 
 1. If the managers use autolock, save the key: `docker swarm unlock-key`.
 2. Choose a manager that is not the leader (`docker node ls`, `MANAGER STATUS`) and does not run `token-proxy`. Use three managers so the quorum stands while one is stopped.
@@ -796,9 +792,9 @@ A full disk is the most common way a node stops running jobs, and a full manager
 
 ### Where the space goes
 
-- **Stopped containers.** A job runs in its container's writable layer, which stays until Swarm prunes the task. A slot keeps its running task and up to `task-history-limit` finished ones (Swarm's default is 5), so R replicas can hold R times (1 plus the limit) layers. A job that leaves gigabytes behind makes this the largest item.
-- **Images.** Every tag a job image has had, and every version of your own images, stays until something removes it. `docker image prune` removes only untagged images.
-- **Logs:** 3 files of 20 MB (60 MB) per runner on both systems and for the Linux proxy, 10 MB for the Windows proxy. **A docker-build node's engine:** images, volumes and build cache that jobs leave. **Raft log and Swarm state**, in `/var/lib/docker/swarm` of each manager.
+- **Stopped containers.** A job runs in the writable layer of its container, which stays until Swarm prunes the task. A slot keeps its running task and up to `task-history-limit` finished ones (default 5), so R replicas can hold R times (1 plus the limit) layers.
+- **Images.** Every tag a job image has had stays until something removes it. `docker image prune` removes only untagged images.
+- **Logs and state.** Logs are 3 files of 20 MB per runner on both systems and for the Linux proxy (10 MB for the Windows proxy). A docker-build node keeps the images, volumes and build cache that jobs leave. Each manager keeps the Raft log in `/var/lib/docker/swarm`.
 
 ### Prevent it
 

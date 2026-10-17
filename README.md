@@ -34,12 +34,12 @@ The table is the short answer. [CI/CD](docs/ci.md#what-is-tested) lists every te
 | Linux, Ubuntu amd64, one node: install, token proxy, clean container for every job, default and hardened class | Tested | Stack tests without Swarm, a fresh VM for the install and the Swarm tests, and real CircleCI jobs in the end-to-end group |
 | Windows Server 2022 and 2025, one host, amd64 | Tested | The same, on real Windows hosts |
 | Linux arm64 | Partly tested | Every pipeline checks that the stack installs the runner and starts. On `main` and `smr-swarm/*` branches, three probe jobs also run on a real arm64 runner. Refer to [CI/CD](docs/ci.md#what-is-tested) |
-| A mixed cluster of a Linux manager and a Windows worker | Verified by hand | Real jobs ran on both operating systems. CI cannot run it, because its Linux and Windows VMs do not reach each other |
-| Multi-host clusters, and day-two operations: a drain with a busy job, a rolling update during a job, token rotation, manager loss and restore | Documented, not tested | CI runs two Swarm nodes as containers on one VM, and every Windows test runs on one host |
+| A mixed cluster of a Linux manager and a Windows worker | Verified by hand | A cluster of a Linux manager and a Windows Server 2022 worker, with both token proxies, ran real CircleCI jobs by hand on 2026-10-16. CI cannot run it, because its Linux and Windows VMs do not reach each other |
+| Multi-host clusters, and day-two operations: a drain with a busy job, a rolling update during a job, token rotation, manager loss and restore | Documented, not tested in CI | CI runs two Swarm nodes as containers on one VM, and every Windows test runs on one host. The mixed cluster above ran real jobs by hand, and the day-two operations in this row were not run |
 | RHEL 8 or later | Documented, not tested | The steps follow Docker's documentation |
 | ppc64le and s390x | Emulated start only | CI starts the distributor and the token proxy image under emulation. No job runs |
 | CircleCI server, hosts without internet access, proxies and private certificate authorities | Not tested | The stack is tested against CircleCI cloud only. Refer to [What needs internet](docs/security.md#what-needs-internet) |
-| MicroVM classes (Kata Containers) | Experimental | A fake CircleCI API on nested KVM on one cloud and one CPU architecture. No real job runs in CI |
+| MicroVM classes (Kata Containers) | Experimental | A fake CircleCI API on nested KVM on one cloud and one CPU architecture. No real job runs in CI. One real CircleCI job ran by hand on a Kata Cloud Hypervisor class |
 | Docker-build, persistent, and Rerun job with SSH classes | Experimental | CI checks that the files merge and keep their contract. The persistent classes run with a fake or idle runner. The Swarm side of SSH was proven once by hand, and the Windows file is untested |
 | Windows Server 2019, Hyper-V isolation, `add_ssh_keys` | Not tested | Not exercised, and the pages say so |
 

@@ -60,7 +60,7 @@ Choose by what you already run and by the isolation that you need.
 
 Swarm mode is part of Docker Engine, and the stack files use only its core features: services, secrets, constraints, and rolling updates. To move to the orchestrator or to a plain machine runner later, keep the resource class names, and the jobs with `machine: true` stay as they are. Container runner needs the jobs to change to a `docker:` executor. CircleCI lists its own options in the [runner overview](https://circleci.com/docs/guides/execution-runner/runner-overview/).
 
-The [microVM add-on](microvm.md) of this repository runs each job in a Kata Containers microVM on Swarm nodes that have KVM. It is experimental: CI runs the real runner against a fake CircleCI API on nested virtualization on AWS (amd64), and no real CircleCI job, other cloud, or arm64 is tested. If you need a hardware boundary today, the orchestrator is the documented route.
+The [microVM add-on](microvm.md) of this repository runs each job in a Kata Containers microVM on Swarm nodes that have KVM. It is experimental: CI runs the real runner against a fake CircleCI API on nested virtualization on AWS (amd64), and no real CircleCI job, other cloud, or arm64 is tested in CI. One real CircleCI job ran by hand on a Kata Cloud Hypervisor class. If you need a hardware boundary today, the orchestrator is the documented route.
 
 ## Why not plain Docker Compose?
 

@@ -1,0 +1,866 @@
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Machine runner swarm – Get started</title><link>https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/</link><description>Recent content in Get started on Machine runner swarm</description><generator>Hugo -- gohugo.io</generator><language>en-US</language><atom:link href="https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/index.xml" rel="self" type="application/rss+xml"/><item><title>Quickstart on Linux</title><link>https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/quickstart-linux/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/quickstart-linux/</guid><description>
+&lt;p&gt;This page takes you from nothing to a first job on Linux with the shipped stack file and the setup helper, from a signed release. It sets up one class, &lt;code&gt;linux-default&lt;/code&gt;. Nothing is installed on a node by hand: the stack has a service that installs the runner on every node. The page explains little. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-linux/"&gt;Install on Linux with Docker Swarm&lt;/a&gt; has every step by hand with the reasons, and &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/concepts/"&gt;Concepts&lt;/a&gt; explains the model.&lt;/p&gt;
+&lt;div
+data-alert="note" class="hextra-alert"
+&gt;
+&lt;p class="hextra-alert-title"&gt;&lt;svg height=20px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"&gt;&lt;circle cx="12" cy="12" r="10"/&gt;&lt;path d="M12 16v-4"/&gt;&lt;path d="M12 8h.01"/&gt;&lt;/svg&gt;
+&lt;span class="hextra-alert-title-text"&gt;Note&lt;/span&gt;
+&lt;/p&gt;
+&lt;div class="hextra-alert-content"&gt;&lt;p&gt;This is a CircleCI Labs project. CircleCI support does not cover it. It is a &lt;code&gt;0.x&lt;/code&gt; release: a minor release can change your stack files, so read the release notes before you upgrade. It is tested against CircleCI cloud only. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/#what-is-tested"&gt;What is tested&lt;/a&gt; says how, and &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/"&gt;Security&lt;/a&gt; says what a job on a runner can reach.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Availability.&lt;/strong&gt; One token proxy runs on a manager, and every runner API call goes through it. While the proxy or its manager is down, no new job starts, and Swarm restarts the proxy. Use three managers for a production cluster. This is not an autoscaling or high-availability product: the replicas are fixed, and the nodes are yours.&lt;/p&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;h2 data-hextra-search-id="before-you-start"&gt;Before you start&lt;span class="hx:absolute hx:-mt-20" id="before-you-start"&gt;&lt;/span&gt;
+&lt;a href="#before-you-start" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;A node with Ubuntu LTS, Docker Engine 24 or later, a clock on NTP, and outbound HTTPS. CI tests Ubuntu 26.04 on amd64 with real jobs, and the start of the stack on arm64, with probe jobs on a real arm64 runner on &lt;code&gt;main&lt;/code&gt;. RHEL 8 or later is documented and not tested. ppc64le and s390x start under emulation only, and no job runs there. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-linux/#2-prepare-each-node"&gt;Prepare each node&lt;/a&gt; shows how to install Docker. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-linux/#prerequisites"&gt;Prerequisites&lt;/a&gt; has the details, and &lt;a href="#sizing-and-pending-replicas"&gt;Sizing&lt;/a&gt; the CPU and memory.&lt;/li&gt;
+&lt;li&gt;Outbound HTTPS from the node to &lt;code&gt;runner.circleci.com&lt;/code&gt;, &lt;code&gt;circleci-binary-releases.s3.amazonaws.com&lt;/code&gt;, &lt;code&gt;circleci-tasks-prod.s3.us-east-1.amazonaws.com&lt;/code&gt;, your VCS host, &lt;code&gt;github.com&lt;/code&gt; (the release download), and the registries for the images (Docker Hub). &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#egress-hosts"&gt;Egress hosts&lt;/a&gt; says what each is for, and &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#what-needs-internet"&gt;What needs internet&lt;/a&gt; lists everything. A node without internet access does not work in this release.&lt;/li&gt;
+&lt;li&gt;An organization admin who accepted the &lt;a href="https://circleci.com/legal/runner-terms/" target="_blank" rel="noopener"&gt;CircleCI Runner Terms&lt;/a&gt;, in the web app or by using the CLI for self-hosted runners, as &lt;a href="https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-linux/#self-hosted-runner-terms-agreement" target="_blank" rel="noopener"&gt;CircleCI documents&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;The &lt;a href="https://circleci.com/docs/guides/toolkit/circleci-cli/" target="_blank" rel="noopener"&gt;CircleCI CLI&lt;/a&gt; 1.4.0 or later on your workstation or on the node. Step 1 signs it in.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://docs.sigstore.dev/cosign/system_config/installation/" target="_blank" rel="noopener"&gt;cosign&lt;/a&gt; 3.1.3 or a later 3.x (CI signs and verifies with 3.1.3, and earlier versions are not tested), and &lt;code&gt;jq&lt;/code&gt; and &lt;code&gt;curl&lt;/code&gt;, on the node, to verify the release.&lt;/li&gt;
+&lt;li&gt;A bash shell. Run the commands on the node with &lt;code&gt;sudo&lt;/code&gt;, or as a user in the &lt;code&gt;docker&lt;/code&gt; group. The &lt;code&gt;docker&lt;/code&gt; group is equivalent to root, so limit it.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Replace &lt;code&gt;&amp;lt;namespace&amp;gt;&lt;/code&gt; with your runner namespace, and &lt;code&gt;&amp;lt;org&amp;gt;&lt;/code&gt; with your organization slug such as &lt;code&gt;gh/my-org&lt;/code&gt;, or its UUID.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="steps"&gt;Steps&lt;span class="hx:absolute hx:-mt-20" id="steps"&gt;&lt;/span&gt;
+&lt;a href="#steps" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;Sign in, and check that your organization has a namespace. Each organization has one namespace, which orbs and runners share, and only CircleCI support can change it. If your organization publishes orbs, it has one. &lt;code&gt;circleci namespace get &amp;lt;namespace&amp;gt;&lt;/code&gt; looks up a name that you know. If your organization has none, create it.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;circleci auth login
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;circleci namespace create &amp;lt;namespace&amp;gt; --org &amp;lt;org&amp;gt; &lt;span class="c1"&gt;# only when the organization has no namespace yet&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Create a resource class and a token for it. The command prints the token once, so keep it for step 5. Without &lt;code&gt;--org&lt;/code&gt;, the CLI takes the organization of the git remote of the current directory.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;circleci runner resource-class create &amp;lt;namespace&amp;gt;/linux-default --org &amp;lt;org&amp;gt; --generate-token&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;On the node, download a release, verify it, and unpack it. A release is the install path: its stack file names the token proxy image of that release by tag and digest, and the CircleCI job that made it signed the checksums with a keyless &lt;a href="https://docs.sigstore.dev/cosign/overview/" target="_blank" rel="noopener"&gt;cosign&lt;/a&gt; signature. A &lt;code&gt;git clone&lt;/code&gt; of a branch or a tag gets the stack files with the default image &lt;code&gt;latest&lt;/code&gt;, which is not pinned. The token proxy image is &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt;: &lt;code&gt;ccilabs&lt;/code&gt; is the Docker Hub organization of CircleCI Labs, and the signature check, not the name, is the trust root (&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#verify-the-token-proxy-image"&gt;Verify the token proxy image&lt;/a&gt;).&lt;/p&gt;
+&lt;p&gt;Set &lt;code&gt;version&lt;/code&gt; once, to the number of the &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/releases/latest" target="_blank" rel="noopener"&gt;latest release&lt;/a&gt; without the &lt;code&gt;v&lt;/code&gt;, and read its notes. The line below is a placeholder: with it unchanged, the download fails and nothing runs.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;version&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;X.Y.Z&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Then paste this block. It runs in a subshell with &lt;code&gt;set -euo pipefail&lt;/code&gt;, so the first failing check ends it. The three checks are the signature, the ref in the certificate, and the checksum, and only a bundle that passes all three is unpacked.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="o"&gt;(&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nb"&gt;set&lt;/span&gt; -euo pipefail
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nv"&gt;base&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download/v&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;version&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; curl -fsSLO &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;base&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;/machine-runner-swarm-&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;version&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;.tar.gz&amp;#34;&lt;/span&gt; -O &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;base&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;/SHA256SUMS&amp;#34;&lt;/span&gt; -O &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;base&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;/SHA256SUMS.sigstore.json&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c1"&gt;# 1. the signature: the CircleCI project and pipeline definition of this repository signed SHA256SUMS&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --certificate-identity &lt;span class="s2"&gt;&amp;#34;https://circleci.com/api/v2/projects/7bbdbb66-6ba8-4f6c-982e-d4fb401ec257/pipeline-definitions/8b2a66db-3f28-5c80-88e4-03f4694b5b60&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --certificate-oidc-issuer &lt;span class="s2"&gt;&amp;#34;https://oidc.circleci.com&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c1"&gt;# 2. the ref: a job of any branch can sign with that identity, so the certificate must also say that the job ran for refs/heads/main&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c1"&gt;# (the long string is the OID 1.3.6.1.4.1.57264.1.14 followed by the value refs/heads/main)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nv"&gt;hex&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="k"&gt;$(&lt;/span&gt;jq -r &lt;span class="s1"&gt;&amp;#39;.verificationMaterial | (.certificate // .x509CertificateChain.certificates[0]).rawBytes&amp;#39;&lt;/span&gt; SHA256SUMS.sigstore.json &lt;span class="p"&gt;|&lt;/span&gt; base64 -d &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="p"&gt;|&lt;/span&gt; od -An -v -tx1 &lt;span class="p"&gt;|&lt;/span&gt; tr -d &lt;span class="s1"&gt;&amp;#39; \n&amp;#39;&lt;/span&gt;&lt;span class="k"&gt;)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; grep -Eq &lt;span class="s1"&gt;&amp;#39;^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e&amp;#39;&lt;/span&gt; &lt;span class="o"&gt;&amp;lt;&amp;lt;&amp;lt;&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;hex&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="se"&gt;\
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="o"&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class="nb"&gt;echo&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;signed for refs/heads/main&amp;#34;&lt;/span&gt; &lt;span class="o"&gt;||&lt;/span&gt; &lt;span class="o"&gt;{&lt;/span&gt; &lt;span class="nb"&gt;echo&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;NOT signed for refs/heads/main: stop&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;;&lt;/span&gt; &lt;span class="nb"&gt;exit&lt;/span&gt; 1&lt;span class="p"&gt;;&lt;/span&gt; &lt;span class="o"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c1"&gt;# 3. the file: its checksum is in the signed list&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; sha256sum -c SHA256SUMS --ignore-missing
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c1"&gt;# only a verified bundle is unpacked&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; tar -xzf &lt;span class="s2"&gt;&amp;#34;machine-runner-swarm-&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;version&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;.tar.gz&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nb"&gt;echo&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;RELEASE VERIFIED&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="o"&gt;)&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Continue only when the last line is &lt;code&gt;RELEASE VERIFIED&lt;/code&gt;. Anything else, an error message or no output at all, means that the release is not verified: delete the downloaded files and start again, or ask in an issue. The ref check exists because the signing identity is the same for every branch, so the block looks in the certificate for the extension &lt;code&gt;1.3.6.1.4.1.57264.1.14&lt;/code&gt; (the OID in the long string) with the value &lt;code&gt;refs/heads/main&lt;/code&gt;, and fails when a job of another branch signed the file. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-linux/#verify-a-release"&gt;Verify a release&lt;/a&gt; explains the identity and what a valid signature does not prove, and &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/docs/releasing.md#how-the-signature-works" target="_blank" rel="noopener"&gt;How the signature works&lt;/a&gt; explains the ref check.&lt;/p&gt;
+&lt;p&gt;Change into the unpacked bundle. The paths below are relative to it.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;machine-runner-swarm-&lt;/span&gt;&lt;span class="si"&gt;${&lt;/span&gt;&lt;span class="nv"&gt;version&lt;/span&gt;&lt;span class="si"&gt;}&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Check the node and create the Swarm. Choose one of two forks. A Swarm that listens on the loopback address cannot accept other nodes, so a trial cannot grow into a cluster without a new &lt;code&gt;swarm init&lt;/code&gt; and new secrets. Decide now.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;strong&gt;Trial, one node.&lt;/strong&gt; The Swarm listens on the loopback address, so nothing is exposed and no other node can join. The runners and the token proxy share the node, so a job that escaped its container could read the class tokens: use it for a trial.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo linux/setup.sh --check --swarm-init&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;strong&gt;Cluster.&lt;/strong&gt; Check every node, create the Swarm on the first one with an address that the others can reach, join the rest, and label the manager that runs the token proxy. Open the &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/multi-node/#inter-node-ports"&gt;inter-node ports&lt;/a&gt; first. The shipped Linux class overlays are encrypted, so a multi-node cluster also needs IP protocol 50 (ESP) between nodes (&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/multi-node/#encrypted-class-networks"&gt;Encrypted class networks&lt;/a&gt;). A first cluster of one manager and two workers is enough to try it. A node needs nothing else: the stack installs the runner on each node that joins.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo linux/setup.sh --check &lt;span class="c1"&gt;# on every node&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo docker swarm init --advertise-addr &amp;lt;manager IP address&amp;gt; &lt;span class="c1"&gt;# on the manager&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo docker swarm update --task-history-limit &lt;span class="m"&gt;2&lt;/span&gt; &lt;span class="c1"&gt;# on the manager&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo docker swarm join-token worker &lt;span class="c1"&gt;# prints the join command: run it on each worker&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo docker node ls &lt;span class="c1"&gt;# on the manager: every node is Ready&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo docker node update --label-add machine-runner-swarm.proxy&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="nb"&gt;true&lt;/span&gt; &amp;lt;manager node name&amp;gt; &lt;span class="c1"&gt;# on the manager&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The label marks the node that runs the proxy, which holds every class token. Runner services never run on a node with this label, so jobs do not share a node with the tokens. With no worker, the runner replicas stay &lt;code&gt;Pending&lt;/code&gt;. With one manager, the proxy runs there by default. With several managers, pin the proxy to the labelled one when you deploy in step 6: &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#where-the-proxy-runs-and-when-it-moves"&gt;Where the proxy runs, and when it moves&lt;/a&gt; shows the variable. Keep one manager that you do not drain, because the proxy needs it.&lt;/p&gt;
+&lt;p&gt;Run steps 5 to 7 on the manager. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/multi-node/"&gt;Multi-Node Clusters&lt;/a&gt; for labels, zones, quorum, and encrypted overlays.&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Create the Swarm secret for the token. The helper asks for it with hidden input and never prints it. The token goes to the token proxy only. Then create the placeholder that the runners read instead of a token: any value works.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo linux/setup.sh --secret linux-default
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;printf&lt;/span&gt; %s machine-runner-swarm-placeholder &lt;span class="p"&gt;|&lt;/span&gt; sudo linux/setup.sh --secret runner-placeholder&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Copy the stack directory, and deploy your copy. For a first run, change nothing in it. You review it later, and from here on you deploy your copy and never the shipped files. The directory holds the stack files and the two scripts that they ship as Swarm configs, which the stack files name next to themselves. A new release changes the shipped files, so an upgrade is a merge of your copy with the new files: &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-linux/#upgrade"&gt;Upgrade&lt;/a&gt; shows how.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;cp -r linux/stack deploy
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;This is the whole install. The service &lt;code&gt;runner-distributor&lt;/code&gt; starts on every Linux node (a node that you label for the microVM add-on is the exception: it has its own copy), downloads the runner of CircleCI, checks its SHA-256, and makes it available to the runner services. A runner container that starts first waits up to 2 minutes for it. In a release bundle, the token proxy image is pinned by digest. The helper warns when &lt;code&gt;MACHINE_RUNNER_SWARM_PROXY_IMAGE&lt;/code&gt; is not pinned by digest.&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Check that the runners are up and connected. &lt;code&gt;docker stack deploy&lt;/code&gt; does not wait, so the replicas need a minute to start.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo docker stack services runners
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo docker service logs --tail &lt;span class="m"&gt;20&lt;/span&gt; runners_runner-distributor
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo docker service logs --tail &lt;span class="m"&gt;20&lt;/span&gt; runners_linux-default
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;circleci runner instance list --org &amp;lt;org&amp;gt; --resource-class &amp;lt;namespace&amp;gt;/linux-default&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The runners are healthy when &lt;code&gt;REPLICAS&lt;/code&gt; shows &lt;code&gt;2/2&lt;/code&gt; for &lt;code&gt;runners_linux-default&lt;/code&gt; (or fewer for &lt;a href="#sizing-and-pending-replicas"&gt;Pending replicas&lt;/a&gt;) and &lt;code&gt;1/1&lt;/code&gt; for &lt;code&gt;runners_token-proxy&lt;/code&gt;, the distributor shows one task for each node and logs a line such as &lt;code&gt;[ ok ] current -&amp;gt; versions/3.1.13&lt;/code&gt;, the log of the runners has no &lt;code&gt;401&lt;/code&gt; or &lt;code&gt;error&lt;/code&gt; lines, and the CLI lists an instance with the status &lt;code&gt;online&lt;/code&gt;. The same list is in the web app under &lt;strong&gt;Runners&lt;/strong&gt;.&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Run a job. Save the following as &lt;code&gt;.circleci/config.yml&lt;/code&gt; in a project of your organization, replace &lt;code&gt;my-namespace&lt;/code&gt;, commit, and push. The same file is &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/examples/linux-hello.yml" target="_blank" rel="noopener"&gt;&lt;code&gt;examples/linux-hello.yml&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-yaml" data-lang="yaml"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;version&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="m"&gt;2.1&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;jobs&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;hello&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;machine&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="kc"&gt;true&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;resource_class&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;my-namespace/linux-default&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;steps&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;- &lt;span class="nt"&gt;run&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;name&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;Show where this job runs&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;command&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="p"&gt;|&lt;/span&gt;&lt;span class="sd"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="sd"&gt; echo &amp;#34;runner: $CIRCLECI_RUNNER_NAME&amp;#34;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="sd"&gt; echo &amp;#34;user: $(id -un)&amp;#34;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="sd"&gt; if [ -e /tmp/hello-marker ]; then echo &amp;#34;the container was reused&amp;#34;; exit 1; fi
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="sd"&gt; touch /tmp/hello-marker
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="sd"&gt; echo &amp;#34;clean container: no marker from an earlier job&amp;#34;&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;workflows&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;hello&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;jobs&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;- &lt;span class="l"&gt;hello&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Run the workflow twice. Both runs pass, because Swarm starts a new container for each job.&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h2 data-hextra-search-id="sizing-and-pending-replicas"&gt;Sizing and Pending replicas&lt;span class="hx:absolute hx:-mt-20" id="sizing-and-pending-replicas"&gt;&lt;/span&gt;
+&lt;a href="#sizing-and-pending-replicas" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The shipped file reserves 4 CPUs and 8 GB of memory for the runners: two replicas of &lt;code&gt;linux-default&lt;/code&gt; (2 CPUs, 4 GB each). The token proxy and the distributor reserve little. A replica needs its whole reservation free on one node. Leave about 1 CPU and 2 GB for the operating system and Docker. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/resource-classes/#size-the-limits"&gt;Size the limits&lt;/a&gt; has a table of every shipped class, with the CPU and memory of a replica, the default replicas, and what else it needs.&lt;/p&gt;
+&lt;p&gt;The cost of the project is your own hardware, plus the runner concurrency of your CircleCI plan: the replicas of all classes and the jobs that wait share the concurrency limit of your organization. Disk is not limited per container. Each finished job leaves a stopped container until Swarm prunes its task (the setup in step 4 keeps the last 2 for each slot), and the images take space too. This repository has no measurement of the disk that a job needs, so watch a node during a trial.&lt;/p&gt;
+&lt;p&gt;A replica that does not fit stays &lt;code&gt;Pending&lt;/code&gt;. That is not an error: Swarm waits for room, the other replicas work, and &lt;code&gt;docker service ps --no-trunc runners_&amp;lt;service&amp;gt;&lt;/code&gt; shows &lt;code&gt;insufficient resources on 1 node&lt;/code&gt;. To fit a small node, lower &lt;code&gt;deploy.replicas&lt;/code&gt; in your copy and deploy it again with the same command. The smallest useful test is &lt;code&gt;replicas: 1&lt;/code&gt; for &lt;code&gt;linux-default&lt;/code&gt;, which needs 2 CPUs and 4 GB. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/troubleshooting/#a-task-stays-pending"&gt;A task stays pending&lt;/a&gt; for the other causes.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="what-you-did-not-do"&gt;What you did not do&lt;span class="hx:absolute hx:-mt-20" id="what-you-did-not-do"&gt;&lt;/span&gt;
+&lt;a href="#what-you-did-not-do" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The helper checks the node, starts Swarm, creates the secrets, and deploys the stack. It does not install Docker, create classes or tokens, edit the stack file, label or join nodes, or build images. It does not install the runner either: the &lt;code&gt;runner-distributor&lt;/code&gt; service of the stack does that on every Linux node. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-linux/#optional-use-the-setup-helper"&gt;Optional: use the setup helper&lt;/a&gt; lists each step.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="next"&gt;Next&lt;span class="hx:absolute hx:-mt-20" id="next"&gt;&lt;/span&gt;
+&lt;a href="#next" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-linux/"&gt;Install on Linux with Docker Swarm&lt;/a&gt;: the same steps by hand, RHEL, and the release verification.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/resource-classes/"&gt;Resource Classes&lt;/a&gt;: add classes, and change sizes and replica counts. &lt;code&gt;linux-java&lt;/code&gt; and &lt;code&gt;linux-hardened&lt;/code&gt; are in &lt;code&gt;linux/stack/classes-extra.yaml&lt;/code&gt;; deploy that file with an extra &lt;code&gt;-c&lt;/code&gt; together with &lt;code&gt;runners.yaml&lt;/code&gt;. A class is a service, its token secret &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt; and its network, and the secret and the network are also listed on &lt;code&gt;token-proxy&lt;/code&gt;, which finds its classes in its secrets: there is no variable to set.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/"&gt;Security&lt;/a&gt;: choose between the default and the hardened class before you give a class to a team, and read what a job on a cloud node can reach.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/"&gt;Operations&lt;/a&gt;: pin or roll back the runner version, rotate tokens, and run the cluster.&lt;/li&gt;
+&lt;/ul&gt;</description></item><item><title>Quickstart on Windows Server</title><link>https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/quickstart-windows/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/quickstart-windows/</guid><description>
+&lt;p&gt;This page takes you from nothing to a first job on one Windows Server node with the shipped stack file and the setup helper, from a signed release. It explains little. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-windows/"&gt;Install on Windows Server with Docker Swarm&lt;/a&gt; has every step by hand with the reasons, and &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/concepts/"&gt;Concepts&lt;/a&gt; explains the model. Nothing is built and nothing is installed on the host: the service uses the stock Server Core image, and the distributor service of the stack installs the runner and Git.&lt;/p&gt;
+&lt;div
+data-alert="note" class="hextra-alert"
+&gt;
+&lt;p class="hextra-alert-title"&gt;&lt;svg height=20px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"&gt;&lt;circle cx="12" cy="12" r="10"/&gt;&lt;path d="M12 16v-4"/&gt;&lt;path d="M12 8h.01"/&gt;&lt;/svg&gt;
+&lt;span class="hextra-alert-title-text"&gt;Note&lt;/span&gt;
+&lt;/p&gt;
+&lt;div class="hextra-alert-content"&gt;&lt;p&gt;This is a CircleCI Labs project. CircleCI support does not cover it. It is a &lt;code&gt;0.x&lt;/code&gt; release: a minor release can change your stack files, so read the release notes before you upgrade. It is tested against CircleCI cloud only. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/#what-is-tested"&gt;What is tested&lt;/a&gt; says how, and &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/"&gt;Security&lt;/a&gt; says what a job on a runner can reach.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Availability.&lt;/strong&gt; One token proxy (&lt;code&gt;token-proxy-windows&lt;/code&gt;) runs on a manager, and every runner API call goes through it. While the proxy or its manager is down, no new job starts, and Swarm restarts the proxy. This page sets up one host, which runs the proxy and the jobs together: use it for a trial. This is not an autoscaling or high-availability product: the replicas are fixed, and the nodes are yours.&lt;/p&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;h2 data-hextra-search-id="before-you-start"&gt;Before you start&lt;span class="hx:absolute hx:-mt-20" id="before-you-start"&gt;&lt;/span&gt;
+&lt;a href="#before-you-start" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;A Windows Server 2022 or 2025 host that is not a domain controller, amd64, with a clock on NTP and outbound HTTPS. CI tests both versions with real jobs. Windows Server 2019 is not tested.&lt;/li&gt;
+&lt;li&gt;Docker Engine and CLI 28.0 or later in Windows-container mode (the stack files mount a subpath of a volume; &lt;code&gt;.\windows\Setup.ps1&lt;/code&gt; checks the version), and the Windows Containers feature, which needs a reboot. The &lt;code&gt;Install-DockerCE&lt;/code&gt; script in the &lt;code&gt;helpful_tools&lt;/code&gt; directory of the &lt;a href="https://github.com/microsoft/Windows-Containers" target="_blank" rel="noopener"&gt;Microsoft Windows Containers repository&lt;/a&gt; installs both (&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-windows/#prerequisites"&gt;Prerequisites&lt;/a&gt; has the details). The first pull of the &lt;code&gt;servercore&lt;/code&gt; base image is about 2.2 GB and takes minutes to tens of minutes, depending on the network (about 10 minutes on the CI machines). Refer to &lt;a href="#sizing-and-pending-replicas"&gt;Sizing&lt;/a&gt; for the CPU and memory.&lt;/li&gt;
+&lt;li&gt;Outbound HTTPS from the host to &lt;code&gt;runner.circleci.com&lt;/code&gt;, &lt;code&gt;circleci-binary-releases.s3.amazonaws.com&lt;/code&gt;, &lt;code&gt;circleci-tasks-prod.s3.us-east-1.amazonaws.com&lt;/code&gt;, your VCS host, &lt;code&gt;github.com&lt;/code&gt; and &lt;code&gt;release-assets.githubusercontent.com&lt;/code&gt; (the release, Git, and 7-Zip), &lt;code&gt;mcr.microsoft.com&lt;/code&gt;, and Docker Hub. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#egress-hosts"&gt;Egress hosts&lt;/a&gt; says what each is for, and &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#what-needs-internet"&gt;What needs internet&lt;/a&gt; lists everything. A host without internet access does not work in this release.&lt;/li&gt;
+&lt;li&gt;An organization admin who accepted the &lt;a href="https://circleci.com/legal/runner-terms/" target="_blank" rel="noopener"&gt;CircleCI Runner Terms&lt;/a&gt;, in the web app or by using the CLI for self-hosted runners, as &lt;a href="https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-windows/#self-hosted-runner-terms-agreement" target="_blank" rel="noopener"&gt;CircleCI documents&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;The &lt;a href="https://circleci.com/docs/guides/toolkit/circleci-cli/" target="_blank" rel="noopener"&gt;CircleCI CLI&lt;/a&gt; 1.4.0 or later. It can run on your workstation. Step 1 signs it in.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://docs.sigstore.dev/cosign/system_config/installation/" target="_blank" rel="noopener"&gt;cosign&lt;/a&gt; 3.1.3 or a later 3.x on the host, to verify the release (CI signs and verifies with 3.1.3, and earlier versions are not tested). &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-windows/#install-cosign"&gt;Install cosign&lt;/a&gt; shows how.&lt;/li&gt;
+&lt;li&gt;An elevated Windows PowerShell 5.1 session on the host for the steps that start with &lt;code&gt;docker&lt;/code&gt; or &lt;code&gt;.\windows&lt;/code&gt;.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Replace &lt;code&gt;&amp;lt;namespace&amp;gt;&lt;/code&gt; with your runner namespace, and &lt;code&gt;&amp;lt;org&amp;gt;&lt;/code&gt; with your organization slug such as &lt;code&gt;gh/my-org&lt;/code&gt;, or its UUID.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="steps"&gt;Steps&lt;span class="hx:absolute hx:-mt-20" id="steps"&gt;&lt;/span&gt;
+&lt;a href="#steps" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;Sign in, and check that your organization has a namespace. Each organization has one namespace, which orbs and runners share, and only CircleCI support can change it. If your organization publishes orbs, it has one. &lt;code&gt;circleci namespace get &amp;lt;namespace&amp;gt;&lt;/code&gt; looks up a name that you know. If your organization has none, create it.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="n"&gt;circleci&lt;/span&gt; &lt;span class="n"&gt;auth&lt;/span&gt; &lt;span class="n"&gt;login&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="n"&gt;circleci&lt;/span&gt; &lt;span class="n"&gt;namespace&lt;/span&gt; &lt;span class="n"&gt;create&lt;/span&gt; &lt;span class="p"&gt;&amp;lt;&lt;/span&gt;&lt;span class="n"&gt;namespace&lt;/span&gt;&lt;span class="p"&gt;&amp;gt;&lt;/span&gt; &lt;span class="p"&gt;-&lt;/span&gt;&lt;span class="n"&gt;-org&lt;/span&gt; &lt;span class="p"&gt;&amp;lt;&lt;/span&gt;&lt;span class="n"&gt;org&lt;/span&gt;&lt;span class="p"&gt;&amp;gt;&lt;/span&gt; &lt;span class="c"&gt;# only when the organization has no namespace yet&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Create the resource class and its token. The command prints the token once, so keep it for step 6.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="n"&gt;circleci&lt;/span&gt; &lt;span class="n"&gt;runner&lt;/span&gt; &lt;span class="nb"&gt;resource-class&lt;/span&gt; &lt;span class="n"&gt;create&lt;/span&gt; &lt;span class="p"&gt;&amp;lt;&lt;/span&gt;&lt;span class="n"&gt;namespace&lt;/span&gt;&lt;span class="p"&gt;&amp;gt;/&lt;/span&gt;&lt;span class="nb"&gt;windows-default&lt;/span&gt; &lt;span class="p"&gt;-&lt;/span&gt;&lt;span class="n"&gt;-org&lt;/span&gt; &lt;span class="p"&gt;&amp;lt;&lt;/span&gt;&lt;span class="n"&gt;org&lt;/span&gt;&lt;span class="p"&gt;&amp;gt;&lt;/span&gt; &lt;span class="p"&gt;-&lt;/span&gt;&lt;span class="n"&gt;-generate-token&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;On the host, download a release, verify it, and unpack it. A release is the install path: its stack file names the token proxy image of that release by tag and digest, and the CircleCI job that made it signed the checksums with a keyless cosign signature. A &lt;code&gt;git clone&lt;/code&gt; of a branch or a tag gets the stack files with the default image &lt;code&gt;latest&lt;/code&gt;, which is not pinned. The token proxy image is &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt;: &lt;code&gt;ccilabs&lt;/code&gt; is the Docker Hub organization of CircleCI Labs, and the signature check, not the name, is the trust root (&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#verify-the-token-proxy-image"&gt;Verify the token proxy image&lt;/a&gt;).&lt;/p&gt;
+&lt;p&gt;Set &lt;code&gt;$version&lt;/code&gt; once, to the number of the &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/releases/latest" target="_blank" rel="noopener"&gt;latest release&lt;/a&gt; without the &lt;code&gt;v&lt;/code&gt;, and read its notes. The first line is a placeholder: with it unchanged, the download fails and nothing runs.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;$version&lt;/span&gt; &lt;span class="p"&gt;=&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;X.Y.Z&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;$base&lt;/span&gt; &lt;span class="p"&gt;=&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download/v&lt;/span&gt;&lt;span class="nv"&gt;$version&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nv"&gt;$zip&lt;/span&gt; &lt;span class="p"&gt;=&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;machine-runner-swarm-&lt;/span&gt;&lt;span class="nv"&gt;$version&lt;/span&gt;&lt;span class="s2"&gt;.zip&amp;#34;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Then paste this block. It stops at the first failing check, and only a bundle that passes all three checks (the signature, the ref in the certificate, and the checksum) is unpacked.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;&amp;amp;&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nv"&gt;$ErrorActionPreference&lt;/span&gt; &lt;span class="p"&gt;=&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;Stop&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="k"&gt;foreach&lt;/span&gt; &lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="nv"&gt;$f&lt;/span&gt; &lt;span class="k"&gt;in&lt;/span&gt; &lt;span class="nv"&gt;$zip&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;SHA256SUMS&amp;#39;&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;SHA256SUMS.sigstore.json&amp;#39;&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt; &lt;span class="nb"&gt;Invoke-WebRequest&lt;/span&gt; &lt;span class="n"&gt;-UseBasicParsing&lt;/span&gt; &lt;span class="n"&gt;-Uri&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$base&lt;/span&gt;&lt;span class="s2"&gt;/&lt;/span&gt;&lt;span class="nv"&gt;$f&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="n"&gt;-OutFile&lt;/span&gt; &lt;span class="nv"&gt;$f&lt;/span&gt; &lt;span class="p"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c"&gt;# 1. the signature: the CircleCI project and pipeline definition of this repository signed SHA256SUMS&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="n"&gt;cosign&lt;/span&gt; &lt;span class="nb"&gt;verify-blob&lt;/span&gt; &lt;span class="n"&gt;SHA256SUMS&lt;/span&gt; &lt;span class="p"&gt;-&lt;/span&gt;&lt;span class="n"&gt;-bundle&lt;/span&gt; &lt;span class="n"&gt;SHA256SUMS&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;sigstore&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;json&lt;/span&gt; &lt;span class="p"&gt;`&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="p"&gt;-&lt;/span&gt;&lt;span class="n"&gt;-certificate-identity&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;https://circleci.com/api/v2/projects/7bbdbb66-6ba8-4f6c-982e-d4fb401ec257/pipeline-definitions/8b2a66db-3f28-5c80-88e4-03f4694b5b60&amp;#39;&lt;/span&gt; &lt;span class="p"&gt;`&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="p"&gt;-&lt;/span&gt;&lt;span class="n"&gt;-certificate-oidc-issuer&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;https://oidc.circleci.com&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="k"&gt;if&lt;/span&gt; &lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="nv"&gt;$LASTEXITCODE&lt;/span&gt; &lt;span class="o"&gt;-ne&lt;/span&gt; &lt;span class="mf"&gt;0&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt; &lt;span class="k"&gt;throw&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;the signature does not verify: stop&amp;#39;&lt;/span&gt; &lt;span class="p"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c"&gt;# 2. the ref: a job of any branch can sign with that identity, so the certificate must also say that the job ran for refs/heads/main&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c"&gt;# (the long string is the OID 1.3.6.1.4.1.57264.1.14 followed by the value refs/heads/main)&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nv"&gt;$material&lt;/span&gt; &lt;span class="p"&gt;=&lt;/span&gt; &lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="nb"&gt;Get-Content&lt;/span&gt; &lt;span class="n"&gt;-Raw&lt;/span&gt; &lt;span class="n"&gt;-LiteralPath&lt;/span&gt; &lt;span class="n"&gt;SHA256SUMS&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;sigstore&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;json&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; &lt;span class="nb"&gt;ConvertFrom-Json&lt;/span&gt;&lt;span class="p"&gt;).&lt;/span&gt;&lt;span class="py"&gt;verificationMaterial&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="k"&gt;if&lt;/span&gt; &lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="nv"&gt;$material&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="n"&gt;certificate&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt; &lt;span class="nv"&gt;$cert&lt;/span&gt; &lt;span class="p"&gt;=&lt;/span&gt; &lt;span class="nv"&gt;$material&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;certificate&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;rawBytes&lt;/span&gt; &lt;span class="p"&gt;}&lt;/span&gt; &lt;span class="k"&gt;else&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt; &lt;span class="nv"&gt;$cert&lt;/span&gt; &lt;span class="p"&gt;=&lt;/span&gt; &lt;span class="nv"&gt;$material&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;x509CertificateChain&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="n"&gt;certificates&lt;/span&gt;&lt;span class="p"&gt;[&lt;/span&gt;&lt;span class="mf"&gt;0&lt;/span&gt;&lt;span class="p"&gt;].&lt;/span&gt;&lt;span class="py"&gt;rawBytes&lt;/span&gt; &lt;span class="p"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nv"&gt;$hex&lt;/span&gt; &lt;span class="p"&gt;=&lt;/span&gt; &lt;span class="n"&gt;-join&lt;/span&gt; &lt;span class="p"&gt;([&lt;/span&gt;&lt;span class="no"&gt;Convert&lt;/span&gt;&lt;span class="p"&gt;]::&lt;/span&gt;&lt;span class="n"&gt;FromBase64String&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="nv"&gt;$cert&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; &lt;span class="nb"&gt;ForEach-Object&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt; &lt;span class="nv"&gt;$_&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;ToString&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;x2&amp;#39;&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="p"&gt;})&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="k"&gt;if&lt;/span&gt; &lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="nv"&gt;$hex&lt;/span&gt; &lt;span class="o"&gt;-notmatch&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e&amp;#39;&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt; &lt;span class="k"&gt;throw&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;NOT signed for refs/heads/main: stop&amp;#39;&lt;/span&gt; &lt;span class="p"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c"&gt;# 3. the file: its checksum is in the signed list&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nv"&gt;$want&lt;/span&gt; &lt;span class="p"&gt;=&lt;/span&gt; &lt;span class="p"&gt;((&lt;/span&gt;&lt;span class="nb"&gt;Get-Content&lt;/span&gt; &lt;span class="n"&gt;SHA256SUMS&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; &lt;span class="nb"&gt;Where-Object&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt; &lt;span class="nv"&gt;$_&lt;/span&gt; &lt;span class="o"&gt;-match&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;\s&lt;/span&gt;&lt;span class="p"&gt;$([&lt;/span&gt;&lt;span class="no"&gt;regex&lt;/span&gt;&lt;span class="p"&gt;]::&lt;/span&gt;&lt;span class="n"&gt;Escape&lt;/span&gt;&lt;span class="p"&gt;(&lt;/span&gt;&lt;span class="nv"&gt;$zip&lt;/span&gt;&lt;span class="p"&gt;))&lt;/span&gt;&lt;span class="s2"&gt;$&amp;#34;&lt;/span&gt; &lt;span class="p"&gt;})&lt;/span&gt; &lt;span class="n"&gt;-split&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;\s+&amp;#39;&lt;/span&gt;&lt;span class="p"&gt;)[&lt;/span&gt;&lt;span class="mf"&gt;0&lt;/span&gt;&lt;span class="p"&gt;]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="k"&gt;if&lt;/span&gt; &lt;span class="p"&gt;((&lt;/span&gt;&lt;span class="nb"&gt;Get-FileHash&lt;/span&gt; &lt;span class="n"&gt;-Algorithm&lt;/span&gt; &lt;span class="n"&gt;SHA256&lt;/span&gt; &lt;span class="n"&gt;-LiteralPath&lt;/span&gt; &lt;span class="nv"&gt;$zip&lt;/span&gt;&lt;span class="p"&gt;).&lt;/span&gt;&lt;span class="py"&gt;Hash&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;ToLower&lt;/span&gt;&lt;span class="p"&gt;()&lt;/span&gt; &lt;span class="o"&gt;-ne&lt;/span&gt; &lt;span class="nv"&gt;$want&lt;/span&gt;&lt;span class="p"&gt;)&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt; &lt;span class="k"&gt;throw&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;the checksum of &lt;/span&gt;&lt;span class="nv"&gt;$zip&lt;/span&gt;&lt;span class="s2"&gt; is not the signed one: stop&amp;#34;&lt;/span&gt; &lt;span class="p"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="c"&gt;# only a verified bundle is unpacked&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nb"&gt;Expand-Archive&lt;/span&gt; &lt;span class="n"&gt;-LiteralPath&lt;/span&gt; &lt;span class="nv"&gt;$zip&lt;/span&gt; &lt;span class="n"&gt;-DestinationPath&lt;/span&gt; &lt;span class="p"&gt;.&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="s1"&gt;&amp;#39;RELEASE VERIFIED&amp;#39;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;}&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Continue only when the last line is &lt;code&gt;RELEASE VERIFIED&lt;/code&gt;. Anything else, an error message or no output at all, means that the release is not verified: delete the downloaded files and start again, or ask in an issue. The ref check exists because the signing identity is the same for every branch, so the block looks in the certificate for the extension &lt;code&gt;1.3.6.1.4.1.57264.1.14&lt;/code&gt; (the OID in the long string) with the value &lt;code&gt;refs/heads/main&lt;/code&gt;, and fails when a job of another branch signed the file. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-windows/#verify-a-release"&gt;Verify a release&lt;/a&gt; explains it, and &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/docs/releasing.md#how-the-signature-works" target="_blank" rel="noopener"&gt;How the signature works&lt;/a&gt; has the details.&lt;/p&gt;
+&lt;p&gt;Change into the unpacked bundle. The paths below are relative to it.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd &lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;machine-runner-swarm-&lt;/span&gt;&lt;span class="nv"&gt;$version&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Pull the base image before you create the Swarm, because the network of the host drops for a few seconds after &lt;code&gt;docker swarm init&lt;/code&gt;. A Server 2025 host runs this &lt;code&gt;ltsc2022&lt;/code&gt; image too.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="n"&gt;docker&lt;/span&gt; &lt;span class="n"&gt;pull&lt;/span&gt; &lt;span class="n"&gt;mcr&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;microsoft&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="n"&gt;com&lt;/span&gt;&lt;span class="p"&gt;/&lt;/span&gt;&lt;span class="n"&gt;windows&lt;/span&gt;&lt;span class="p"&gt;/&lt;/span&gt;&lt;span class="n"&gt;servercore&lt;/span&gt;&lt;span class="err"&gt;:&lt;/span&gt;&lt;span class="n"&gt;ltsc2022&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Copy the stack directory. For a first run, change nothing in it. You review it later, and from here on you deploy your copy and never the shipped files. The directory holds the stack files and the script that &lt;code&gt;runners.yaml&lt;/code&gt; ships as a Swarm config, which the file names next to itself. A new release changes the shipped files, so an upgrade is a merge of your copy with the new files: &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-windows/#upgrade"&gt;Upgrade&lt;/a&gt; says how.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;Copy-Item&lt;/span&gt; &lt;span class="n"&gt;-Recurse&lt;/span&gt; &lt;span class="n"&gt;windows&lt;/span&gt;&lt;span class="p"&gt;\&lt;/span&gt;&lt;span class="n"&gt;stack&lt;/span&gt; &lt;span class="n"&gt;deploy&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Run the helper. It creates the Swarm, labels the node with the image tags it can run (the node is a manager, where the token proxy runs by default, so it needs no other label), asks for the token with hidden input, creates the secrets &lt;code&gt;windows-default-token&lt;/code&gt; (the token proxy holds it) and &lt;code&gt;runner-placeholder-token&lt;/code&gt; (what the runners read), and deploys your copy. Use the IPv4 address of the host. This is the whole install: the service &lt;code&gt;runner-distributor-windows&lt;/code&gt; downloads and verifies the runner that the stack pins (the newest version that CI tests) and the pinned portable Git on its own, and Swarm pulls the token proxy image of this release by its digest.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;.\&lt;/span&gt;&lt;span class="n"&gt;windows&lt;/span&gt;&lt;span class="p"&gt;\&lt;/span&gt;&lt;span class="n"&gt;Setup&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;ps1&lt;/span&gt; &lt;span class="n"&gt;-InitSwarm&lt;/span&gt; &lt;span class="n"&gt;-AdvertiseAddr&lt;/span&gt; &lt;span class="p"&gt;&amp;lt;&lt;/span&gt;&lt;span class="n"&gt;host&lt;/span&gt; &lt;span class="n"&gt;IPv4&lt;/span&gt; &lt;span class="n"&gt;address&lt;/span&gt;&lt;span class="p"&gt;&amp;gt;&lt;/span&gt; &lt;span class="n"&gt;-Class&lt;/span&gt; &lt;span class="nb"&gt;windows-default&lt;/span&gt; &lt;span class="n"&gt;-StackFile&lt;/span&gt; &lt;span class="p"&gt;.\&lt;/span&gt;&lt;span class="n"&gt;deploy&lt;/span&gt;&lt;span class="p"&gt;\&lt;/span&gt;&lt;span class="n"&gt;runners&lt;/span&gt;&lt;span class="p"&gt;.&lt;/span&gt;&lt;span class="py"&gt;yaml&lt;/span&gt; &lt;span class="n"&gt;-Deploy&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Check that the runners are up and connected, and then run a job. &lt;code&gt;docker stack deploy&lt;/code&gt; does not wait, so the replicas need a few minutes to start: the first download of the distributor takes a while, the first runner tasks fail until it is done and are started again every 10 seconds, and the first task also pulls the image if you skipped step 4. &lt;code&gt;docker service logs runners_runner-distributor-windows&lt;/code&gt; shows the install.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-powershell" data-lang="powershell"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="n"&gt;docker&lt;/span&gt; &lt;span class="n"&gt;stack&lt;/span&gt; &lt;span class="n"&gt;services&lt;/span&gt; &lt;span class="n"&gt;runners&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="n"&gt;circleci&lt;/span&gt; &lt;span class="n"&gt;runner&lt;/span&gt; &lt;span class="n"&gt;instance&lt;/span&gt; &lt;span class="n"&gt;list&lt;/span&gt; &lt;span class="p"&gt;-&lt;/span&gt;&lt;span class="n"&gt;-org&lt;/span&gt; &lt;span class="p"&gt;&amp;lt;&lt;/span&gt;&lt;span class="n"&gt;org&lt;/span&gt;&lt;span class="p"&gt;&amp;gt;&lt;/span&gt; &lt;span class="p"&gt;-&lt;/span&gt;&lt;span class="n"&gt;-resource-class&lt;/span&gt; &lt;span class="p"&gt;&amp;lt;&lt;/span&gt;&lt;span class="n"&gt;namespace&lt;/span&gt;&lt;span class="p"&gt;&amp;gt;/&lt;/span&gt;&lt;span class="nb"&gt;windows-default&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The runners are healthy when &lt;code&gt;REPLICAS&lt;/code&gt; shows &lt;code&gt;2/2&lt;/code&gt; (or fewer for &lt;a href="#sizing-and-pending-replicas"&gt;Pending replicas&lt;/a&gt;) and the CLI lists an instance with the status &lt;code&gt;online&lt;/code&gt;. The same list is in the web app under &lt;strong&gt;Runners&lt;/strong&gt;. Then save the following as &lt;code&gt;.circleci/config.yml&lt;/code&gt; in a project of your organization, replace &lt;code&gt;my-namespace&lt;/code&gt;, commit, and push. Run the workflow twice.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-yaml" data-lang="yaml"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;version&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="m"&gt;2.1&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;jobs&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;hello&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;machine&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="kc"&gt;true&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;resource_class&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;my-namespace/windows-default&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;steps&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;- &lt;span class="nt"&gt;run&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;echo &amp;#34;computer $COMPUTERNAME, instance $MACHINE_RUNNER_SWARM_INSTANCE_ID&amp;#34;&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;workflows&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;hello&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;jobs&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;- &lt;span class="l"&gt;hello&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;The two runs print different values, because Swarm starts a new container for each job. The file &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/examples/windows-job.yml" target="_blank" rel="noopener"&gt;&lt;code&gt;examples/windows-job.yml&lt;/code&gt;&lt;/a&gt; has more steps.&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h2 data-hextra-search-id="two-things-that-differ-from-linux"&gt;Two things that differ from Linux&lt;span class="hx:absolute hx:-mt-20" id="two-things-that-differ-from-linux"&gt;&lt;/span&gt;
+&lt;a href="#two-things-that-differ-from-linux" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;A job on Windows runs as an administrator. In a single-task class such as &lt;code&gt;windows-default&lt;/code&gt;, the runner container holds only a placeholder, and the class token is in the service &lt;code&gt;token-proxy-windows&lt;/code&gt;. A job can read the placeholder, and it may be able to send packets with a forged source address, because a Windows container cannot drop &lt;code&gt;NET_RAW&lt;/code&gt; the way a Linux one can. This is not tested on Windows, and &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/"&gt;Security&lt;/a&gt; says what it could gain. The &lt;code&gt;windows-persistent&lt;/code&gt; class is the exception: its container holds the real token, and a job can read it. Treat each class as a trust boundary. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#token-model-on-each-os"&gt;Token model on each OS&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;A stop of a busy container from outside, such as an update, a scale-down, or a node drain, kills its job after about 5 seconds. A job that finishes ends its container cleanly. Change a Windows class while it is idle. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#stop-a-busy-windows-container"&gt;Stop a busy Windows container&lt;/a&gt;.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2 data-hextra-search-id="sizing-and-pending-replicas"&gt;Sizing and Pending replicas&lt;span class="hx:absolute hx:-mt-20" id="sizing-and-pending-replicas"&gt;&lt;/span&gt;
+&lt;a href="#sizing-and-pending-replicas" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The shipped file runs two replicas of &lt;code&gt;windows-default&lt;/code&gt;, and each reserves 2 CPUs and 4 GB of memory, so the service needs 4 CPUs and 8 GB. The distributor and the token proxy set limits and reserve nothing (1 CPU and 1 GB, and 1 CPU and 512 MB), so leave room for them and for the operating system. The Windows engine rejects a CPU limit above the CPU count of the host. A replica needs its whole reservation free on one node. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/resource-classes/#size-the-limits"&gt;Size the limits&lt;/a&gt; has a table of every shipped class. The cost of the project is your own hardware, plus the runner concurrency of your CircleCI plan, and the disk is not measured here: the base image alone is about 2.2 GB, and every finished container keeps its layer until Swarm prunes it.&lt;/p&gt;
+&lt;p&gt;A replica that does not fit, or that no node is allowed to run, stays &lt;code&gt;Pending&lt;/code&gt;. That is not an error: Swarm waits, and the other replica works. &lt;code&gt;docker service ps --no-trunc runners_windows-default&lt;/code&gt; shows the reason, such as &lt;code&gt;insufficient resources&lt;/code&gt; or &lt;code&gt;scheduling constraints not satisfied&lt;/code&gt;. For a small host, lower &lt;code&gt;deploy.replicas&lt;/code&gt; in your copy and deploy it again. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/troubleshooting/#a-task-stays-pending"&gt;A task stays pending&lt;/a&gt; for the other causes.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="what-you-did-not-do"&gt;What you did not do&lt;span class="hx:absolute hx:-mt-20" id="what-you-did-not-do"&gt;&lt;/span&gt;
+&lt;a href="#what-you-did-not-do" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The helper starts Swarm. It does not install Docker or the runner, create classes or tokens, edit the stack file, label nodes for the optional classes, or build images. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-windows/#optional-use-the-setup-helper"&gt;Optional: use the setup helper&lt;/a&gt; lists each option.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="next"&gt;Next&lt;span class="hx:absolute hx:-mt-20" id="next"&gt;&lt;/span&gt;
+&lt;a href="#next" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-windows/"&gt;Install on Windows Server with Docker Swarm&lt;/a&gt;: the same steps by hand, with the release verification.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/images/"&gt;Images&lt;/a&gt;: add your own tools on top of Server Core.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/"&gt;Security&lt;/a&gt;: the token model and BitLocker.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/"&gt;Operations&lt;/a&gt;: upgrade, rotate tokens, and run the cluster.&lt;/li&gt;
+&lt;/ul&gt;</description></item><item><title>Concepts</title><link>https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/concepts/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/concepts/</guid><description>
+&lt;p&gt;This page explains the model behind the stack files in this repository. Read it before you change a stack file or choose between the default and the hardened class.&lt;/p&gt;
+&lt;p&gt;The stack runs CircleCI machine runner 3 as Docker Swarm services. Swarm handles replicas, restarts, secrets, and placement. This repository adds only a stack file for each operating system, a small entrypoint and a runner distributor service for Linux, and optional setup helpers.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="services-are-resource-classes"&gt;Services are resource classes&lt;span class="hx:absolute hx:-mt-20" id="services-are-resource-classes"&gt;&lt;/span&gt;
+&lt;a href="#services-are-resource-classes" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Each Swarm service is one CircleCI resource class. The service name is the short name of the class, so the service &lt;code&gt;linux-default&lt;/code&gt; serves the resource class &lt;code&gt;&amp;lt;namespace&amp;gt;/linux-default&lt;/code&gt;. A job selects the class in its config:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-yaml" data-lang="yaml"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;jobs&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;build&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;machine&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="kc"&gt;true&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;resource_class&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;&amp;lt;namespace&amp;gt;/linux-default&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;p&gt;Each service also has one Swarm secret named &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt;. The secret holds the token of that class. The single-task classes do not mount it in their runners: the &lt;a href="#the-token-proxy"&gt;token proxy&lt;/a&gt; holds it and adds it to the claims of the runners of that class, so a runner can only claim jobs for its own class. A runner holds a made-up placeholder. A persistent class mounts its token in the runner container itself.&lt;/p&gt;
+&lt;div class="cci-diagram"&gt;&lt;pre class="mermaid hx:mt-6"&gt;flowchart TB
+nodes[&amp;#34;Nodes: Linux amd64, Linux arm64, Windows&amp;lt;br/&amp;gt;Labels decide where tasks may run&amp;#34;]
+subgraph services[&amp;#34;Swarm services: one for each resource class&amp;#34;]
+direction LR
+s1[&amp;#34;linux-default&amp;lt;br/&amp;gt;replicas: 2&amp;#34;]
+s2[&amp;#34;linux-python&amp;lt;br/&amp;gt;replicas: 1&amp;#34;]
+s3[&amp;#34;windows-default&amp;lt;br/&amp;gt;replicas: 2&amp;#34;]
+end
+r1[&amp;#34;container 1&amp;#34;]
+r2[&amp;#34;container 2&amp;#34;]
+r3[&amp;#34;container 1&amp;#34;]
+r4[&amp;#34;container 1&amp;#34;]
+r5[&amp;#34;container 2&amp;#34;]
+api[&amp;#34;runner.circleci.com&amp;lt;br/&amp;gt;Runners connect outbound over HTTPS 443 only&amp;#34;]
+nodes --&amp;gt; services
+s1 --&amp;gt; r1 &amp;amp; r2
+s2 --&amp;gt; r3
+s3 --&amp;gt; r4 &amp;amp; r5
+r1 &amp;amp; r2 &amp;amp; r3 &amp;amp; r4 &amp;amp; r5 --&amp;gt; api&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;The runner containers poll CircleCI for work. Nothing connects to a runner, so the stack publishes no ports.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="the-token-proxy"&gt;The token proxy&lt;span class="hx:absolute hx:-mt-20" id="the-token-proxy"&gt;&lt;/span&gt;
+&lt;a href="#the-token-proxy" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The service &lt;code&gt;token-proxy&lt;/code&gt; of the Linux &lt;code&gt;runners.yaml&lt;/code&gt; (on Windows &lt;code&gt;token-proxy-windows&lt;/code&gt; of the Windows &lt;code&gt;runners.yaml&lt;/code&gt;, which works the same way, with the differences in &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#windows"&gt;Windows&lt;/a&gt;: Windows has no &lt;code&gt;NET_RAW&lt;/code&gt; drop, and nothing there is tested for a forged source address) keeps the class tokens away from the runners and their jobs. A runner sends its API calls to the proxy (&lt;code&gt;CIRCLECI_RUNNER_API_URL: http://token-proxy:8080&lt;/code&gt;) and holds only a made-up placeholder token. The proxy adds the class token to one call, the task claim, and passes every other call on to CircleCI. The runner and its task agent use the task token from the claim response for the rest.&lt;/p&gt;
+&lt;div class="cci-diagram"&gt;&lt;pre class="mermaid hx:mt-6"&gt;flowchart LR
+subgraph cls[&amp;#34;Class overlay networks&amp;#34;]
+r1[&amp;#34;linux-default runners&amp;lt;br/&amp;gt;placeholder token&amp;#34;]
+r2[&amp;#34;linux-python runners&amp;lt;br/&amp;gt;placeholder token&amp;#34;]
+end
+p[&amp;#34;token-proxy&amp;lt;br/&amp;gt;one replica&amp;lt;br/&amp;gt;holds every class token&amp;#34;]
+api[&amp;#34;runner.circleci.com&amp;#34;]
+r1 -- &amp;#34;claim, task calls&amp;#34; --&amp;gt; p
+r2 -- &amp;#34;claim, task calls&amp;#34; --&amp;gt; p
+p -- &amp;#34;HTTPS: the class token on the claim only&amp;#34; --&amp;gt; api&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;The proxy decides who may claim from the network and not from what a runner says. It allows a claim only from an address that Swarm DNS lists now for &lt;code&gt;tasks.&amp;lt;service&amp;gt;&lt;/code&gt; of a class, once for each container, and gives it the token of that class. A container that is not a runner, or a runner that claims a second time, gets 403. A claim whose outcome is unknown (the request reached CircleCI and the answer was lost) counts as a claim, so the proxy fails closed. For this the proxy is attached to the overlay network of every class, runs with &lt;code&gt;endpoint_mode: dnsrr&lt;/code&gt; so that it sees the real source address, and the runners drop &lt;code&gt;NET_RAW&lt;/code&gt; so that they cannot forge one. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#the-token-proxy"&gt;The token proxy&lt;/a&gt; for what it protects and what it does not, and to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#monitor-the-token-proxy"&gt;Monitor the token proxy&lt;/a&gt; for what happens when it is down.&lt;/p&gt;
+&lt;p&gt;What this changes for you:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;Secrets.&lt;/strong&gt; You create the class secrets &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt; as before, and one more secret, &lt;code&gt;runner-placeholder-token&lt;/code&gt;, with a made-up token. Only the proxy mounts the class secrets. Every runner mounts the placeholder.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Classes.&lt;/strong&gt; A new single-task class needs two lines in the proxy: its network (Linux) and its secret &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt;, which the proxy takes as a class named &lt;code&gt;&amp;lt;service&amp;gt;&lt;/code&gt;. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/resource-classes/#define-a-class"&gt;Resource classes&lt;/a&gt;. The persistent classes do not use the proxy.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;The image.&lt;/strong&gt; The proxy is a static Go binary in a published container image, &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt; on Docker Hub (&lt;code&gt;ccilabs&lt;/code&gt; is the Docker Hub organization of CircleCI Labs, and the signature is the trust root, not the name), on a minimal base: no shell, uid 65534 on Linux, a read-only root file system. One tag covers Linux &lt;code&gt;amd64&lt;/code&gt;, &lt;code&gt;arm64&lt;/code&gt;, &lt;code&gt;ppc64le&lt;/code&gt; and &lt;code&gt;s390x&lt;/code&gt;, and Windows Server 2022 and 2025 (&lt;code&gt;amd64&lt;/code&gt;). The service &lt;code&gt;token-proxy&lt;/code&gt; pulls it by itself, so no distributor installs it. A release bundle names the image of its release by tag and digest, and a checkout names &lt;code&gt;latest&lt;/code&gt;, which only a release moves. Every digest is signed. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-linux/#the-token-proxy-image"&gt;The token proxy image&lt;/a&gt; and &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#verify-the-token-proxy-image"&gt;Verify the token proxy image&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;The state.&lt;/strong&gt; The proxy keeps the addresses of the runners that have claimed in the small volume &lt;code&gt;proxy-state&lt;/code&gt;, on the node that it runs on: a manager by default. A restart on that node refuses only the runners that claimed, and a runner that started before the proxy is never locked out. If the proxy moves to another node, the state stays behind: refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#where-the-proxy-runs-and-when-it-moves"&gt;Where the proxy runs, and when it moves&lt;/a&gt;. In a cluster, label the node that runs the proxy &lt;code&gt;machine-runner-swarm.proxy=true&lt;/code&gt;: runner services never run on a node with that label, so jobs do not share a node with the proxy. On a single node, set no label. With several managers, the label and a placement variable pin the proxy to one.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2 data-hextra-search-id="add-on-stack-files-and-how-they-merge"&gt;Add-on stack files and how they merge&lt;span class="hx:absolute hx:-mt-20" id="add-on-stack-files-and-how-they-merge"&gt;&lt;/span&gt;
+&lt;a href="#add-on-stack-files-and-how-they-merge" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Each operating system has one main stack file, &lt;code&gt;runners.yaml&lt;/code&gt;, that defines the default classes and deploys on its own. The optional classes live in add-on stack files next to it: &lt;code&gt;persistent.yaml&lt;/code&gt;, &lt;code&gt;docker-build.yaml&lt;/code&gt;, and &lt;code&gt;ssh-rerun.yaml&lt;/code&gt; on both systems, &lt;code&gt;custom-image.yaml&lt;/code&gt; on Windows, and &lt;code&gt;microvm.yaml&lt;/code&gt; on Linux (&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/microvm/"&gt;MicroVM jobs&lt;/a&gt;). An add-on stack file is not a patch of the main file. It defines services of its own, and each service needs its own resource class and its own &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt; secret. The one exception on Linux is the &lt;code&gt;token-proxy&lt;/code&gt; service: &lt;code&gt;docker-build.yaml&lt;/code&gt;, &lt;code&gt;ssh-rerun.yaml&lt;/code&gt;, and &lt;code&gt;microvm.yaml&lt;/code&gt; also add their classes to it (a network, a secret, and a variable), so deploy them together with &lt;code&gt;runners.yaml&lt;/code&gt;. &lt;code&gt;persistent.yaml&lt;/code&gt; does not touch the proxy.&lt;/p&gt;
+&lt;p&gt;&lt;code&gt;docker stack deploy -c runners.yaml -c persistent.yaml runners&lt;/code&gt; reads the files in the order given and merges them into one stack, as Docker Compose does for several &lt;code&gt;-f&lt;/code&gt; files. A service, network, secret, or volume that only one file defines is added, and a key that several files set takes the value of the later file. The shipped add-on stack files only add services. YAML anchors work inside one file only, so each add-on stack file repeats the common service settings, and a change to one of them goes into every file that you use.&lt;/p&gt;
+&lt;p&gt;Pass the same list of files, in the same order, on every deploy. Swarm updates the services of the files you name. The services of a file you leave out stay as they are and stop following your edits, and &lt;code&gt;--prune&lt;/code&gt; removes them. Check a merge without a Swarm with &lt;code&gt;docker stack config -c runners.yaml -c persistent.yaml&lt;/code&gt;.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="replicas-set-the-concurrency"&gt;Replicas set the concurrency&lt;span class="hx:absolute hx:-mt-20" id="replicas-set-the-concurrency"&gt;&lt;/span&gt;
+&lt;a href="#replicas-set-the-concurrency" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;&lt;code&gt;deploy.replicas&lt;/code&gt; is the number of runners in the class, and so the number of jobs the class runs at the same time. A replica that cannot fit on any node stays in the &lt;code&gt;Pending&lt;/code&gt; state until capacity is free. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/resource-classes/"&gt;Resource Classes&lt;/a&gt; for sizing and for choosing the count.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="single-task-and-continuous-mode"&gt;Single-task and continuous mode&lt;span class="hx:absolute hx:-mt-20" id="single-task-and-continuous-mode"&gt;&lt;/span&gt;
+&lt;a href="#single-task-and-continuous-mode" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Machine runner 3 has two modes. The stack files set the mode with the &lt;code&gt;CIRCLECI_RUNNER_MODE&lt;/code&gt; environment variable.&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Mode&lt;/th&gt;
+&lt;th&gt;Value&lt;/th&gt;
+&lt;th&gt;Behavior&lt;/th&gt;
+&lt;th&gt;Environment&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;Single-task&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;single-task&lt;/code&gt; (default in every stack file)&lt;/td&gt;
+&lt;td&gt;The runner claims one job, runs it, and exits. Swarm starts a new container for the next job.&lt;/td&gt;
+&lt;td&gt;Clean for every job&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Continuous&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;continuous&lt;/code&gt; (persistent classes only)&lt;/td&gt;
+&lt;td&gt;The runner stays up and claims job after job in the same container.&lt;/td&gt;
+&lt;td&gt;Shared by all jobs on that runner&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;Use continuous mode only for trusted projects that need warm caches. The optional persistent classes are the only services that use it. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/resource-classes/#persistent-mode"&gt;Persistent mode&lt;/a&gt;.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="job-lifecycle"&gt;Job lifecycle&lt;span class="hx:absolute hx:-mt-20" id="job-lifecycle"&gt;&lt;/span&gt;
+&lt;a href="#job-lifecycle" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Swarm never reuses a container. Every exit, whether a finished job, an idle timeout, or a crash, leads to a new task and a new container because the restart policy is &lt;code&gt;condition: any&lt;/code&gt;.&lt;/p&gt;
+&lt;div class="cci-diagram"&gt;&lt;pre class="mermaid hx:mt-6"&gt;sequenceDiagram
+participant S as Swarm
+participant C as Container
+participant A as runner.circleci.com
+participant N as New container
+S-&amp;gt;&amp;gt;C: start a task from the image
+C-&amp;gt;&amp;gt;A: poll for a job (single-task mode)
+A--&amp;gt;&amp;gt;C: claim one job
+C-&amp;gt;&amp;gt;C: run the job in a clean container
+C--&amp;gt;&amp;gt;S: runner exits, container stops
+Note over S: restart_policy any, delay 10s
+S-&amp;gt;&amp;gt;N: create a NEW task and container
+N-&amp;gt;&amp;gt;A: poll for the next job&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;The steps in order:&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;Swarm starts a container from the service image. On Linux the entrypoint checks the runner, sets up the users, and starts the runner. On Windows the runner is the main process.&lt;/li&gt;
+&lt;li&gt;The runner downloads its task agent, polls CircleCI, and claims one job.&lt;/li&gt;
+&lt;li&gt;The runner steps the job down to the job user on Linux, runs it, and exits when the job ends.&lt;/li&gt;
+&lt;li&gt;Swarm sees the exit, waits for the restart delay of 10 seconds, and starts a new container.&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;Three timing facts follow from this design:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;A replica needs about 10 seconds plus container start-up before it can claim the next job. The other replicas of the class keep claiming jobs in the meantime.&lt;/li&gt;
+&lt;li&gt;Every new container downloads the task agent from &lt;code&gt;circleci-binary-releases.s3.amazonaws.com&lt;/code&gt;. Allow this host in your egress rules.&lt;/li&gt;
+&lt;li&gt;A single-task runner that finds no job exits after &lt;code&gt;CIRCLECI_RUNNER_IDLE_TIMEOUT&lt;/code&gt;, which is &lt;code&gt;1h&lt;/code&gt; in the stack files. Swarm replaces it, so idle replicas pick up a rotated secret or a new image within an hour.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Stopping a service sends SIGTERM to the runner. The runner drains (a runner drain), which means it accepts no new job and lets the running job finish. The stack sets &lt;code&gt;stop_grace_period: 5h5m&lt;/code&gt;, which is the runner &lt;code&gt;max_run_time&lt;/code&gt; of 5 hours plus 5 minutes.&lt;/p&gt;
+&lt;p&gt;On Windows, &lt;code&gt;stop_grace_period&lt;/code&gt; does not hold a busy container: a stop from outside kills its job after about 5 seconds. A finished job ends its container by itself, so only an update, a scale-down, or a node drain is affected. Change a Windows service while its class is idle. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#stop-a-busy-windows-container"&gt;Stop a busy Windows container&lt;/a&gt;.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="what-a-clean-environment-covers"&gt;What a clean environment covers&lt;span class="hx:absolute hx:-mt-20" id="what-a-clean-environment-covers"&gt;&lt;/span&gt;
+&lt;a href="#what-a-clean-environment-covers" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;A clean environment means that a job starts in a container created from the image, with nothing left by an earlier job.&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Covered&lt;/th&gt;
+&lt;th&gt;Not covered&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;Files and installed packages anywhere in the container filesystem&lt;/td&gt;
+&lt;td&gt;Anything on a mounted volume: persistent classes keep a named volume by design&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;The home directory, &lt;code&gt;/tmp&lt;/code&gt;, and the working directory&lt;/td&gt;
+&lt;td&gt;The Docker engine of the node when a class mounts its socket or named pipe: images, containers, and build cache persist&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Processes, environment variables, and shell history&lt;/td&gt;
+&lt;td&gt;State outside the node, such as databases, registries, and shared storage&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Users, groups, and sudo rules created by an earlier job&lt;/td&gt;
+&lt;td&gt;The kernel: all containers on a node share it&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;On Windows, the registry, the user profile, &lt;code&gt;%TEMP%&lt;/code&gt;, and &lt;code&gt;C:\ProgramData&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;Data of finished containers that Swarm has not yet pruned from the node disk&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;The runner is mounted read-only, so a job cannot change what the next job runs. On Linux it comes from the per-node volume &lt;code&gt;runner-bin&lt;/code&gt;, which a service of the stack fills. Refer to &lt;a href="#the-runner-distributor-on-linux"&gt;The runner distributor on Linux&lt;/a&gt;. On Windows it comes from the same volume, filled by the service &lt;code&gt;runner-distributor-windows&lt;/code&gt;, through two links that Docker resolves when it creates a container. Refer to &lt;a href="#the-runner-distributor-on-windows"&gt;The runner distributor on Windows&lt;/a&gt;. A new runner version is a new directory and a moved link, so the next job runs the new version, and a job that runs now finishes on the old one. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#upgrade-the-runner-and-images"&gt;Upgrade the runner&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;The working directory needs no cleanup in a single-task class, because the container is discarded. On Linux, the runner does not clean it at all. The runner user cannot remove files that the job user owns, so the stack sets &lt;code&gt;CIRCLECI_RUNNER_CLEANUP_WORK_DIR&lt;/code&gt; to &lt;code&gt;&amp;quot;false&amp;quot;&lt;/code&gt;. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#working-directory-cleanup"&gt;Working directory cleanup&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;Containers are not a virtual machine boundary. Read &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/"&gt;Security&lt;/a&gt; before you run untrusted code.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="the-runner-distributor-on-linux"&gt;The runner distributor on Linux&lt;span class="hx:absolute hx:-mt-20" id="the-runner-distributor-on-linux"&gt;&lt;/span&gt;
+&lt;a href="#the-runner-distributor-on-linux" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The Linux services use stock images such as &lt;code&gt;cimg/base&lt;/code&gt;, and the image holds none of the runner. The service &lt;code&gt;runner-distributor&lt;/code&gt; puts the runner on every Linux node that runs the classes of &lt;code&gt;runners.yaml&lt;/code&gt;, so nothing is installed on a node by hand. &lt;code&gt;docker stack deploy&lt;/code&gt; is the whole install, and it is the only upgrade path.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;The service.&lt;/strong&gt; &lt;code&gt;runner-distributor&lt;/code&gt; is a &lt;code&gt;global&lt;/code&gt; service, so it runs on every Linux node, on a Docker-build node too, and on a node that joins later, except a microVM node (&lt;code&gt;machine-runner-swarm.microvm=true&lt;/code&gt;): the microVM classes download their own runner into each VM (&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/microvm/#the-runner-in-a-vm"&gt;MicroVM jobs&lt;/a&gt;). It runs the stock &lt;code&gt;alpine:3&lt;/code&gt; image, pinned by digest. Its script, &lt;code&gt;linux/stack/runner-distributor.sh&lt;/code&gt;, is a Swarm config.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;The volume.&lt;/strong&gt; The distributor writes to &lt;code&gt;runner-bin&lt;/code&gt;, a named volume that exists once on every node. Each version has a directory &lt;code&gt;versions/&amp;lt;version&amp;gt;&lt;/code&gt; with &lt;code&gt;bin/circleci-runner&lt;/code&gt;, &lt;code&gt;SHA256&lt;/code&gt;, &lt;code&gt;VERSION&lt;/code&gt;, and &lt;code&gt;TARBALL&lt;/code&gt;. The link &lt;code&gt;current&lt;/code&gt; points to the active version and moves with one atomic rename. The file &lt;code&gt;history&lt;/code&gt; lists the versions in the order they were active.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;The runner services.&lt;/strong&gt; Every class mounts &lt;code&gt;runner-bin&lt;/code&gt; read-only at &lt;code&gt;/opt/machine-runner-swarm&lt;/code&gt;. The entrypoint is another Swarm config, mounted at &lt;code&gt;/circleci-runner-entrypoint&lt;/code&gt; with the mode &lt;code&gt;0555&lt;/code&gt;, and it starts as root. A job cannot change either of them.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Not the token proxy.&lt;/strong&gt; The distributor installs the runner only. The token proxy is an image that Swarm pulls: refer to &lt;a href="#the-token-proxy"&gt;The token proxy&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;The wait.&lt;/strong&gt; The entrypoint waits up to &lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_WAIT&lt;/code&gt; seconds (default 120) until &lt;code&gt;current&lt;/code&gt; exists, so a first deploy and a new node need no order. Then it resolves &lt;code&gt;current&lt;/code&gt; once, when the container starts, and checks the binary against its record. Without a runner, or with a binary that differs, it exits with code 80, and Swarm tries again after the restart delay.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Because a container resolves &lt;code&gt;current&lt;/code&gt; once, a running job and its container keep their version. The next container, which is the next job, gets the new one. A persistent class runs one container for all jobs, so it picks up a new version when its container restarts. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#recycle-a-class"&gt;Recycle a class&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;The runner services carry no version and no hash. Which version the nodes run is a setting of the distributor service only, so an upgrade, a pin, and a rollback change that one service, and the runner services never restart. An idle replica keeps the old binary until it recycles, which takes at most the idle timeout of 1 hour.&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Setting&lt;/th&gt;
+&lt;th&gt;Behavior&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1.13&lt;/code&gt; (an exact version, the default: the newest that CI tests)&lt;/td&gt;
+&lt;td&gt;The distributor pins that version, and checks the tarball against the SHA-256 values that the stack file carries for it, not against the manifest. It never changes by itself, it makes no request once the version is installed, and it switches to an installed version without any network, so a rollback needs no download. A release of this repository bumps the version and its SHA-256 values together&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1&lt;/code&gt; or &lt;code&gt;3&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;A floating line: the newest &lt;code&gt;3.1.x&lt;/code&gt;, or the newest &lt;code&gt;3.x.y&lt;/code&gt;, of CircleCI&amp;rsquo;s manifest. The distributor looks again every 24 hours, ignores the default SHA-256 list of the pin, and trusts the hash of the manifest, which is weaker&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_VERSION=current&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;A floating value: CircleCI&amp;rsquo;s current release, within major version 3. It looks again every 24 hours, ignores the default list, and trusts the hash of the manifest&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;Like machine runner 3 and container runner, the runner version is chosen by the operator: an exact pin by default, a floating value on request. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#the-version-policy"&gt;The version policy&lt;/a&gt; for the rules, and to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#how-this-compares-with-machine-runner-3-container-runner-and-the-orchestrator"&gt;how this compares with machine runner 3, container runner and the orchestrator&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;The distributor verifies every download against a SHA-256 and records the SHA-256 of the binary next to it. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#upgrade-the-runner-on-linux"&gt;Upgrade the runner on Linux&lt;/a&gt; for the settings and to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#runner-binary-integrity-on-linux"&gt;Runner binary integrity on Linux&lt;/a&gt; for the checks.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="the-runner-distributor-on-windows"&gt;The runner distributor on Windows&lt;span class="hx:absolute hx:-mt-20" id="the-runner-distributor-on-windows"&gt;&lt;/span&gt;
+&lt;a href="#the-runner-distributor-on-windows" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The Windows services use the stock Server Core image, and the image holds none of the runner and none of Git. The service &lt;code&gt;runner-distributor-windows&lt;/code&gt; does what the Linux distributor does, with the same settings, the same version policy and the same rule that a runner service carries no version: &lt;code&gt;docker stack deploy&lt;/code&gt; is the whole install, and the only upgrade path.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;The service.&lt;/strong&gt; A &lt;code&gt;global&lt;/code&gt; service on the nodes with the label &lt;code&gt;machine-runner-swarm.windows-ltsc2022&lt;/code&gt;, from the stock &lt;code&gt;servercore:ltsc2022&lt;/code&gt; image with process isolation. Its PowerShell script, &lt;code&gt;windows\stack\runner-distributor.ps1&lt;/code&gt;, is a Swarm config.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;The volume and the links.&lt;/strong&gt; It writes to &lt;code&gt;runner-bin&lt;/code&gt;: &lt;code&gt;versions\&amp;lt;version&amp;gt;&lt;/code&gt; for the runner (with &lt;code&gt;SHA256&lt;/code&gt;, &lt;code&gt;TARBALL&lt;/code&gt; and &lt;code&gt;VERSION&lt;/code&gt;), &lt;code&gt;git\&amp;lt;git version&amp;gt;&lt;/code&gt; for portable Git, and two relative directory symbolic links, &lt;code&gt;current&lt;/code&gt; and &lt;code&gt;git\current&lt;/code&gt;. Every class mounts the volume read-only twice, with &lt;code&gt;volume.subpath&lt;/code&gt;: &lt;code&gt;current&lt;/code&gt; at &lt;code&gt;C:\machine-runner-swarm&lt;/code&gt;, and &lt;code&gt;git\current&lt;/code&gt; at &lt;code&gt;C:\Program Files\Git&lt;/code&gt;, where the task agent expects &lt;code&gt;tar.exe&lt;/code&gt;.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;No entrypoint.&lt;/strong&gt; &lt;code&gt;circleci-runner.exe&lt;/code&gt; is the main process. A runner task that starts before the first flip fails and starts again after the restart delay, so a new node needs no order, and nothing checks the binary when a container starts. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#runner-binary-integrity-on-windows"&gt;Runner binary integrity on Windows&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Not the token proxy.&lt;/strong&gt; It installs the runner and Git only. The service &lt;code&gt;token-proxy-windows&lt;/code&gt; runs the Windows image of the token proxy, which Swarm pulls: refer to &lt;a href="#the-token-proxy"&gt;The token proxy&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Locked files.&lt;/strong&gt; Windows cannot replace or delete files that a running container uses. The distributor installs a version next to the others, flips the link, and removes an old version only when no container uses it. A running job keeps its version, and the runner services never restart, so no busy job is killed by an upgrade.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#upgrade-the-runner-on-windows"&gt;Upgrade the runner on Windows&lt;/a&gt; for the settings.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="users-and-the-runner-token-on-linux"&gt;Users and the runner token on Linux&lt;span class="hx:absolute hx:-mt-20" id="users-and-the-runner-token-on-linux"&gt;&lt;/span&gt;
+&lt;a href="#users-and-the-runner-token-on-linux" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Inside each Linux container, two accounts exist:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;strong&gt;The runner user&lt;/strong&gt; &lt;code&gt;circleci-runner&lt;/code&gt; (uid 2000) runs &lt;code&gt;circleci-runner&lt;/code&gt; and owns the token file. It has no sudo rights and cannot write to &lt;code&gt;/opt/machine-runner-swarm&lt;/code&gt;.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;The job user&lt;/strong&gt; runs every job step. It is &lt;code&gt;circleci&lt;/code&gt; in the &lt;code&gt;cimg&lt;/code&gt; images, or the account you name with &lt;code&gt;MACHINE_RUNNER_SWARM_JOB_USER&lt;/code&gt;.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;The runner steps each job down to the job user with &lt;code&gt;command_prefix&lt;/code&gt;: &lt;code&gt;sudo -niHu &amp;lt;job user&amp;gt; --&lt;/code&gt; in the default class, or &lt;code&gt;setpriv&lt;/code&gt; when the image has no sudo, and always &lt;code&gt;setpriv --no-new-privs&lt;/code&gt; in the hardened class. The token is never in the job environment, and the config file that the runner reads is readable only by the runner user and root. In the single-task classes, that file holds the placeholder: the class token is in the &lt;a href="#the-token-proxy"&gt;token proxy&lt;/a&gt;, not in the container.&lt;/p&gt;
+&lt;p&gt;What happens next depends on one setting, &lt;code&gt;MACHINE_RUNNER_SWARM_JOB_SUDO&lt;/code&gt;.&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Class type&lt;/th&gt;
+&lt;th&gt;Setting&lt;/th&gt;
+&lt;th&gt;Jobs have sudo&lt;/th&gt;
+&lt;th&gt;Can a job read the class token&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;Default (&lt;code&gt;linux-default&lt;/code&gt;, and &lt;code&gt;linux-java&lt;/code&gt; of &lt;code&gt;classes-extra.yaml&lt;/code&gt;)&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_JOB_SUDO: &amp;quot;true&amp;quot;&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;Yes, passwordless, as in the Docker executor&lt;/td&gt;
+&lt;td&gt;No, the container holds a placeholder. Only a job that escapes the container onto the node of the proxy can&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Hardened (&lt;code&gt;linux-hardened&lt;/code&gt; of &lt;code&gt;classes-extra.yaml&lt;/code&gt;)&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_JOB_SUDO: &amp;quot;false&amp;quot;&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;No&lt;/td&gt;
+&lt;td&gt;No, for the same reason&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Persistent (&lt;code&gt;linux-persistent&lt;/code&gt;, no proxy)&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_JOB_SUDO: &amp;quot;false&amp;quot;&lt;/code&gt; (the shipped file; &lt;code&gt;&amp;quot;true&amp;quot;&lt;/code&gt; is the opt-in)&lt;/td&gt;
+&lt;td&gt;No (with &lt;code&gt;&amp;quot;true&amp;quot;&lt;/code&gt;: yes)&lt;/td&gt;
+&lt;td&gt;No, as in the hardened class. With &lt;code&gt;&amp;quot;true&amp;quot;&lt;/code&gt;, yes if the job uses sudo. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#the-persistent-class"&gt;The persistent class&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;&lt;strong&gt;The default class.&lt;/strong&gt; Jobs keep the passwordless sudo that many orgs and orbs expect, for example &lt;code&gt;sudo apt-get install&lt;/code&gt;. A job that uses sudo is root in its container: it can read the placeholder and the files of the runner, and become the runner user. It finds no class token. The test &lt;code&gt;linux/tests/token.sh&lt;/code&gt; measures what the user of a job can read in the runner&amp;rsquo;s config file, and &lt;code&gt;linux/tests/proxy.sh&lt;/code&gt; scans the containers as root and finds no class token.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;The hardened class.&lt;/strong&gt; The entrypoint steps every job down with util-linux &lt;code&gt;setpriv --no-new-privs&lt;/code&gt;, even when the image has sudo, and edits no file of the image. Swarm ignores &lt;code&gt;no-new-privileges&lt;/code&gt;, so setuid binaries such as &lt;code&gt;sudo&lt;/code&gt; and &lt;code&gt;su&lt;/code&gt; stay in the image, and the class keeps &lt;code&gt;SETUID&lt;/code&gt; and &lt;code&gt;SETGID&lt;/code&gt; for the step-down. The kernel flag that &lt;code&gt;setpriv&lt;/code&gt; sets is inherited by the job and everything it starts and cannot be cleared, and it makes them ignore the setuid bit. The &lt;code&gt;sudo&lt;/code&gt; of the image, with its rules intact, therefore cannot lift a job to root, and neither can any other setuid binary, even through a local-root bug. The job user then has no way to become root or the runner user, so the files and processes of the runner are out of reach of jobs. The container refuses to start if the image has no util-linux &lt;code&gt;setpriv&lt;/code&gt; (exit code 80). The trade-off is that jobs cannot install system packages at run time, and that nothing in a job can gain privileges through setuid or file capabilities, for example &lt;code&gt;ping&lt;/code&gt; or &lt;code&gt;mount&lt;/code&gt;, so you build the tools into the image. CircleCI also recommends pre-installing dependencies as the most secure option. A kernel or container-runtime bug can still lift a job to root, because the containers share the host kernel.&lt;/p&gt;
+&lt;p&gt;Choose the hardened class for shared or regulated work. Choose the default class for a single trusted team that needs sudo. A stolen token lets its holder run a runner on that class and claim jobs, which exposes the code and secrets of those jobs, so the proxy matters more than the sudo setting. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/"&gt;Security&lt;/a&gt;.&lt;/p&gt;
+&lt;h3 data-hextra-search-id="what-the-linux-entrypoint-does"&gt;What the Linux entrypoint does&lt;span class="hx:absolute hx:-mt-20" id="what-the-linux-entrypoint-does"&gt;&lt;/span&gt;
+&lt;a href="#what-the-linux-entrypoint-does" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The entrypoint &lt;code&gt;circleci-runner-entrypoint&lt;/code&gt; starts as root, prepares the container, and then runs the runner as the runner user. It never reads the token or the placeholder. In order, it:&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;Waits for the runner distributor of the node, resolves the link &lt;code&gt;current&lt;/code&gt; once, and checks the runner binary against its SHA-256 record. Then it checks that the runner and every directory above it, up to &lt;code&gt;/opt/machine-runner-swarm&lt;/code&gt;, are owned by root and not writable by the group or others. Refer to &lt;a href="#the-runner-distributor-on-linux"&gt;The runner distributor on Linux&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;Looks for the tools it needs. &lt;code&gt;sudo&lt;/code&gt; or util-linux &lt;code&gt;setpriv&lt;/code&gt; steps jobs down, and &lt;code&gt;setpriv&lt;/code&gt; or &lt;code&gt;su&lt;/code&gt; starts the runner. With &lt;code&gt;MACHINE_RUNNER_SWARM_JOB_SUDO=false&lt;/code&gt;, util-linux &lt;code&gt;setpriv&lt;/code&gt; with &lt;code&gt;--no-new-privs&lt;/code&gt; is required, whether or not the image has sudo. Without the tools it exits with code 80. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/images/#what-an-image-needs"&gt;What an image needs&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;Creates the users with &lt;code&gt;useradd&lt;/code&gt; or &lt;code&gt;adduser&lt;/code&gt;: &lt;code&gt;circleci-runner&lt;/code&gt; with uid and gid 2000, and the job user when the image has none. It does not edit &lt;code&gt;/etc/passwd&lt;/code&gt; by hand, because sudo refuses a user that has no &lt;code&gt;passwd&lt;/code&gt; and no &lt;code&gt;shadow&lt;/code&gt; entry.&lt;/li&gt;
+&lt;li&gt;Sets &lt;code&gt;CIRCLECI_RUNNER_COMMAND_PREFIX&lt;/code&gt;. A value in the service environment does not override it.
+&lt;ul&gt;
+&lt;li&gt;With sudo, the prefix is &lt;code&gt;[&amp;quot;sudo&amp;quot;,&amp;quot;-niHu&amp;quot;,&amp;quot;&amp;lt;job user&amp;gt;&amp;quot;,&amp;quot;--&amp;quot;]&lt;/code&gt;. The file &lt;code&gt;/etc/sudoers.d/90-circleci-runner&lt;/code&gt; lets uid 2000 run commands as the job user only, keeps the &lt;code&gt;PATH&lt;/code&gt; of the image, and keeps the environment variables of the image.&lt;/li&gt;
+&lt;li&gt;Without sudo, or with &lt;code&gt;MACHINE_RUNNER_SWARM_JOB_SUDO=false&lt;/code&gt;, the prefix is a &lt;code&gt;setpriv&lt;/code&gt; command that gives the job no capabilities. In the hardened class it also carries &lt;code&gt;--no-new-privs&lt;/code&gt;. It runs the job through &lt;code&gt;env -u&lt;/code&gt; for every &lt;code&gt;CIRCLECI_RUNNER_*&lt;/code&gt; and &lt;code&gt;MACHINE_RUNNER_SWARM_*&lt;/code&gt; variable of the container (the runner name stays), so the settings of the runner and the stack do not reach the job, as with the reset environment of sudo. The runner holds &lt;code&gt;CAP_SETUID&lt;/code&gt; and &lt;code&gt;CAP_SETGID&lt;/code&gt; as ambient capabilities only to call it.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;li&gt;Creates the directories: the task agent directory, owned by uid 2000, and the working directory with its parent &lt;code&gt;/var/opt/circleci&lt;/code&gt;, owned by the job user.&lt;/li&gt;
+&lt;li&gt;Adds the job user to the group of &lt;code&gt;/var/run/docker.sock&lt;/code&gt; when the class mounts the socket and the group is not root. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/docker-builds/"&gt;Docker Builds&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;Runs the runner with &lt;code&gt;exec&lt;/code&gt; as uid 2000. The init process of the container (&lt;code&gt;init: true&lt;/code&gt;) passes SIGTERM to it, which starts the runner drain.&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;The entrypoint does not validate the runner name, the token, the mode, or the timeouts, and it has no guard against the reuse of a container. The runner checks its own settings and exits with code 80 for a bad one, and Swarm never reuses a container.&lt;/p&gt;
+&lt;p&gt;With sudo, a job gets the environment variables of the image, such as &lt;code&gt;PATH&lt;/code&gt;, &lt;code&gt;JAVA_HOME&lt;/code&gt;, and &lt;code&gt;LANG&lt;/code&gt;, the variables you set in the service, such as a proxy, and &lt;code&gt;CIRCLECI_RUNNER_NAME&lt;/code&gt;. It gets nothing else from the runner. The runner runs a few commands of its own, such as &lt;code&gt;circleci-agent version&lt;/code&gt;, without the step-down, as the runner user.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="users-and-the-runner-token-on-windows"&gt;Users and the runner token on Windows&lt;span class="hx:absolute hx:-mt-20" id="users-and-the-runner-token-on-windows"&gt;&lt;/span&gt;
+&lt;a href="#users-and-the-runner-token-on-windows" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Windows containers have no step-down. The runner and the jobs run as &lt;code&gt;ContainerAdministrator&lt;/code&gt;, because the runner needs the symbolic link privilege of that account to install the task agent. A job can therefore read the config file of its runner. In a single-task class that file holds only the placeholder, and the class token is in the service &lt;code&gt;token-proxy-windows&lt;/code&gt;. In the persistent class it holds the real token. The token is not in the job environment. A hostile job on the same host as the proxy can still reach the token, because process isolation is not a security boundary: refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#windows"&gt;Windows&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;Treat each Windows resource class as a trust boundary: use one token for each class, restrict who can use the class, and rotate tokens. The Linux variables &lt;code&gt;MACHINE_RUNNER_SWARM_JOB_SUDO&lt;/code&gt; and &lt;code&gt;MACHINE_RUNNER_SWARM_JOB_USER&lt;/code&gt; do not exist on Windows, and Windows ignores them. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/#token-model-on-each-os"&gt;Token model on each OS&lt;/a&gt;.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="placement"&gt;Placement&lt;span class="hx:absolute hx:-mt-20" id="placement"&gt;&lt;/span&gt;
+&lt;a href="#placement" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Services carry constraints and nodes advertise capabilities. The built-in properties are &lt;code&gt;node.platform.os&lt;/code&gt; and &lt;code&gt;node.platform.arch&lt;/code&gt;. This repository adds the node labels &lt;code&gt;machine-runner-swarm.zone&lt;/code&gt;, &lt;code&gt;machine-runner-swarm.docker-build&lt;/code&gt;, &lt;code&gt;machine-runner-swarm.microvm&lt;/code&gt;, &lt;code&gt;machine-runner-swarm.windows-ltsc2022&lt;/code&gt;, &lt;code&gt;machine-runner-swarm.windows-ltsc2025&lt;/code&gt;, and &lt;code&gt;machine-runner-swarm.class.&amp;lt;service&amp;gt;&lt;/code&gt;. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/multi-node/"&gt;Multi-Node Clusters&lt;/a&gt;.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="why-swarm-and-not-plain-compose"&gt;Why Swarm and not plain Compose&lt;span class="hx:absolute hx:-mt-20" id="why-swarm-and-not-plain-compose"&gt;&lt;/span&gt;
+&lt;a href="#why-swarm-and-not-plain-compose" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;A plain &lt;code&gt;docker compose up&lt;/code&gt; restarts the same container, so the environment is not clean. Swarm creates a new container for every task. The &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/faq/#why-not-plain-docker-compose"&gt;FAQ&lt;/a&gt; lists the trade-offs.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="glossary"&gt;Glossary&lt;span class="hx:absolute hx:-mt-20" id="glossary"&gt;&lt;/span&gt;
+&lt;a href="#glossary" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Term&lt;/th&gt;
+&lt;th&gt;Meaning&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;Stack file&lt;/td&gt;
+&lt;td&gt;A Compose-format YAML file that &lt;code&gt;docker stack deploy&lt;/code&gt; reads. Each OS has a main stack file (&lt;code&gt;runners.yaml&lt;/code&gt;) and optional add-on stack files. This documentation never calls an add-on stack file an overlay, because an overlay network is a different thing&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Stack&lt;/td&gt;
+&lt;td&gt;The services that one &lt;code&gt;docker stack deploy&lt;/code&gt; creates. The documentation names it &lt;code&gt;runners&lt;/code&gt;, so the service &lt;code&gt;linux-default&lt;/code&gt; is &lt;code&gt;runners_linux-default&lt;/code&gt; in Swarm commands&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Resource class, service&lt;/td&gt;
+&lt;td&gt;A resource class is the CircleCI name, &lt;code&gt;&amp;lt;namespace&amp;gt;/&amp;lt;name&amp;gt;&lt;/code&gt;, that a job selects with &lt;code&gt;resource_class&lt;/code&gt;. A service is the Swarm object that runs it. One service serves one class, and the service name is the class name without the namespace&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Replica, container&lt;/td&gt;
+&lt;td&gt;A replica is one runner of a service, and &lt;code&gt;deploy.replicas&lt;/code&gt; says how many. Swarm runs each replica as a task, which is one container at a time. When a job ends, the container ends, and Swarm creates a new task and container for the same slot&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Node&lt;/td&gt;
+&lt;td&gt;A host in the Swarm, a manager or a worker. Node labels and service constraints decide where a replica may run&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Single-task mode, continuous mode&lt;/td&gt;
+&lt;td&gt;The two modes of machine runner 3. Single-task runs one job and exits, which gives a clean environment. Continuous keeps the runner up for many jobs. Refer to &lt;a href="#single-task-and-continuous-mode"&gt;Single-task and continuous mode&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Persistent class&lt;/td&gt;
+&lt;td&gt;A class that runs in continuous mode with a named volume, so jobs share state. It gives up the clean environment&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Default class, hardened class&lt;/td&gt;
+&lt;td&gt;The Linux default classes (&lt;code&gt;linux-default&lt;/code&gt;, and &lt;code&gt;linux-java&lt;/code&gt; of &lt;code&gt;classes-extra.yaml&lt;/code&gt;) keep passwordless sudo for jobs. The hardened class (&lt;code&gt;linux-hardened&lt;/code&gt; of &lt;code&gt;classes-extra.yaml&lt;/code&gt;) steps every job down with &lt;code&gt;setpriv --no-new-privs&lt;/code&gt;, so sudo cannot raise the job user. Refer to &lt;a href="#users-and-the-runner-token-on-linux"&gt;Users and the runner token on Linux&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Token secret&lt;/td&gt;
+&lt;td&gt;The Swarm secret &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt;. It is a runner config file that holds the token of the resource class. The token proxy mounts it, or, in a persistent class, the runner does&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Token proxy&lt;/td&gt;
+&lt;td&gt;The service &lt;code&gt;token-proxy&lt;/code&gt; of &lt;code&gt;runners.yaml&lt;/code&gt;: it holds the class tokens of the Linux single-task classes and adds the token of a class to the claims of that class&amp;rsquo;s runners. Refer to &lt;a href="#the-token-proxy"&gt;The token proxy&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Placeholder secret&lt;/td&gt;
+&lt;td&gt;The Swarm secret &lt;code&gt;runner-placeholder-token&lt;/code&gt;: a runner config with a made-up token, which every proxied runner reads instead of a real token&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Entrypoint&lt;/td&gt;
+&lt;td&gt;On Linux, the script &lt;code&gt;circleci-runner-entrypoint&lt;/code&gt;, which a Swarm config delivers. It checks the runner, prepares the users, and then starts the runner. On Windows there is none: the runner is the main process&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Runner distributor&lt;/td&gt;
+&lt;td&gt;On Linux, the &lt;code&gt;global&lt;/code&gt; service &lt;code&gt;runner-distributor&lt;/code&gt;; on Windows, &lt;code&gt;runner-distributor-windows&lt;/code&gt; (it installs portable Git too). On every node it downloads, verifies, and installs the runner into &lt;code&gt;runner-bin&lt;/code&gt;, moves &lt;code&gt;current&lt;/code&gt;, and looks again every &lt;code&gt;MACHINE_RUNNER_SWARM_CHECK_INTERVAL&lt;/code&gt;. Refer to &lt;a href="#the-runner-distributor-on-linux"&gt;The runner distributor on Linux&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;runner-bin&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The named volume, one on every Linux node, that holds the runner versions. The distributor writes it, and the runner services mount it read-only at &lt;code&gt;/opt/machine-runner-swarm&lt;/code&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;current&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The link in &lt;code&gt;runner-bin&lt;/code&gt; that points to the active &lt;code&gt;versions/&amp;lt;version&amp;gt;&lt;/code&gt;. A container resolves it once, when it starts. As a value of &lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_VERSION&lt;/code&gt;, &lt;code&gt;current&lt;/code&gt; is one of the floating values (with &lt;code&gt;3.1&lt;/code&gt; and &lt;code&gt;3&lt;/code&gt;): it makes the distributor follow CircleCI&amp;rsquo;s current release&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Record&lt;/td&gt;
+&lt;td&gt;The file &lt;code&gt;versions/&amp;lt;version&amp;gt;/SHA256&lt;/code&gt;, which holds the SHA-256 of the binary in the format of &lt;code&gt;sha256sum -c&lt;/code&gt;. The distributor writes it when it installs a version, and the entrypoint checks the binary against it at every container start&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Setup helper&lt;/td&gt;
+&lt;td&gt;The optional scripts &lt;code&gt;linux/setup.sh&lt;/code&gt; and &lt;code&gt;windows\Setup.ps1&lt;/code&gt;, which run steps of the install pages with checks. On Linux the helper checks the node, starts Swarm, creates secrets, and deploys. It installs nothing, because the distributor installs the runner&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Stock image, custom image&lt;/td&gt;
+&lt;td&gt;A stock image is a publisher&amp;rsquo;s image as it is, for example &lt;code&gt;cimg/base&lt;/code&gt; or Windows Server Core. The stack mounts the runner into it, on Linux from the volume &lt;code&gt;runner-bin&lt;/code&gt; and on Windows from the host. A custom image is one you derive from it, for example to add tools. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/images/"&gt;Images&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Drain&lt;/td&gt;
+&lt;td&gt;The word has two meanings. A &lt;strong&gt;runner drain&lt;/strong&gt; happens when the runner gets SIGTERM: it takes no new job and finishes the running one. A &lt;strong&gt;node drain&lt;/strong&gt; is &lt;code&gt;docker node update --availability drain&lt;/code&gt;: Swarm stops the tasks of that node, which starts a runner drain in each, and starts replacements on other nodes. This documentation always says which one&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;</description></item></channel></rss>

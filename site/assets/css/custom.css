@@ -247,7 +247,7 @@ body {
 }
 
 /* The call to action of the header: the primary button of the brand */
-.hextra-nav-container nav > a[href$="/docs/get-started"] {
+.hextra-nav-container nav > a[href*="docs/get-started"] {
   margin-left: 0.5rem;
   padding: 0.5rem 1.25rem;
   border-radius: 9999px;
@@ -257,7 +257,7 @@ body {
   transition: filter 0.1s ease-out;
 }
 
-.hextra-nav-container nav > a[href$="/docs/get-started"]:hover {
+.hextra-nav-container nav > a[href*="docs/get-started"]:hover {
   background: var(--cci-green);
   color: var(--cci-terminal);
   filter: brightness(0.94);
@@ -1321,6 +1321,15 @@ body {
   margin-top: 0.5rem;
 }
 
+.cci-first-job {
+  margin-top: 2.5rem;
+}
+
+.cci-first-job-more {
+  margin-top: 1rem;
+  color: var(--cci-muted);
+}
+
 .cci-snippet-note {
   margin-top: 0.75rem;
   color: var(--cci-muted);
@@ -1428,8 +1437,8 @@ body {
 }
 
 @media (min-width: 48rem) and (max-width: 63.99rem) {
-  .hextra-nav-container nav > a[href$="/docs/security"],
-  .hextra-nav-container nav > a[href$="/docs/faq"] {
+  .hextra-nav-container nav > a[href*="docs/security"],
+  .hextra-nav-container nav > a[href*="docs/faq"] {
     display: none;
   }
 

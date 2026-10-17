@@ -57,31 +57,35 @@ params:
   description: Run CircleCI machine runner 3 as Docker Swarm services, one service for each resource class.
   externalLinkDecoration: false
 
-  # The landing page (layouts/home.html). The sections below the cards are the Markdown of README.md.
+  # The landing page (layouts/home.html). "When to use it" comes from README.md; the rest is in the template.
   home:
     title: Machine runner swarm
-    tagline: CircleCI machine runners on Docker Swarm, in containers or microVMs
+    tagline: CircleCI machine runners on Docker Swarm, in containers
     notice: >-
       Not an official CircleCI product and not supported by CircleCI Support.
       Field engineers at CircleCI created it and maintain it on a best-effort basis.
-    lead: One Swarm service for each resource class, a clean environment for every job, on Linux and on Windows Server.
+    lead: For platform teams that run Docker hosts or Windows Server and want a clean container for every job, without Kubernetes.
     features:
       - icon: layers
         title: One service for each resource class
         text: A Swarm service is a resource class, and deploy.replicas sets how many runners it has. Labels and constraints decide which nodes run it.
-        link: docs/get-started/concepts/
+        link: docs/get-started/concepts/#services-are-resource-classes
+        linkText: How a class maps to a service
       - icon: refresh-cw
         title: A clean environment for every job
         text: By default a runner claims one job and exits, and Swarm starts a new one, so no job inherits files from an earlier job.
-        link: docs/get-started/concepts/
+        link: docs/get-started/concepts/#what-a-clean-environment-covers
+        linkText: What a clean environment covers
       - icon: server
         title: Linux and Windows Server
-        text: Ubuntu LTS and RHEL 8 or later on amd64 and arm64, and Windows Server 2022 and 2025, in one cluster with stock images.
+        text: Linux amd64 and arm64 and Windows Server 2022 and 2025 are tested with real jobs. Multi-node clusters are tested in CI on two-node Swarms; ppc64le and s390x only under emulation.
         link: docs/install/multi-node/
+        linkText: Multi-node clusters
       - icon: shield-check
         title: Hardening and a threat model
         text: A documented threat model and token model, a hardened class without sudo, and guidance on egress.
-        link: docs/security/security/
+        link: docs/security/#threat-model
+        linkText: Threat model
 
   banner:
     # The banner cannot be dismissed: custom.css hides the close button, and custom/banner.html renders the text.

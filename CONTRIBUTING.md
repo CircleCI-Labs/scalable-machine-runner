@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for helping to improve the machine runner swarm. This repository is part of CircleCI Labs. Field engineering reviews issues and pull requests on a best-effort basis and does not provide an SLA. CircleCI support does not cover this repository.
+Thank you for helping to improve the machine runner swarm. This repository is part of CircleCI Labs. Field engineering reviews issues and pull requests on a best-effort basis, with no SLA. CircleCI support does not cover this repository.
 
 ## Reporting a bug
 
@@ -18,27 +18,27 @@ Do not open a public issue for a security vulnerability. Email [security@circlec
 
 ## Requesting a feature
 
-Open an issue with the feature request template. Describe the problem you want to solve, and name the platform and the files it affects. For problems in the CircleCI platform or the runner agent, contact [CircleCI support](https://support.circleci.com/hc/en-us) instead.
+Open an issue with the feature request template. Describe the problem, and name the platform and the files it affects. For problems in the CircleCI platform or the runner agent, contact [CircleCI support](https://support.circleci.com/hc/en-us) instead.
 
 ## Opening a pull request
 
 Before you open a pull request:
 
 1. Discuss large changes in an issue first.
-2. Run the tests for the platform you changed. Refer to [Development](#development).
-3. Update the documentation in `docs/` when you change a variable, label, secret, port, or default.
-4. Write every commit message, and the pull request title, as a Conventional Commit. The release notes are generated from them, so there is no changelog entry to add. Refer to [Commit messages](#commit-messages).
-5. Check that the diff has no tokens, host names, or customer or vendor names. The repository is public.
+1. Run the tests for the platform you changed ([Development](#development)).
+1. Update `docs/` when you change a variable, label, secret, port, or default.
+1. Write every commit message, and the pull request title, as a Conventional Commit ([Commit messages](#commit-messages)). The release notes are generated from them, so there is no changelog entry to add.
+1. Check that the diff has no tokens, host names, or customer or vendor names. The repository is public.
 
-**A pull request from a fork gets no CI.** The project builds no forked pull request and passes no secret to one, because the code of a fork would otherwise run with this project's settings ([Secrets and public logs](docs/ci.md#secrets-and-public-logs)). A maintainer reads the change, and to run CI on it pushes its commits to a branch of this repository by hand. **Never push or mirror an outside branch to `main` or to a branch named `smr-swarm/*`:** those two names get the e2e runner tokens and, on `main`, the publishing contexts, and the configuration of a job comes from its own branch.
+**A pull request from a fork gets no CI.** The project builds no forked pull request and passes no secret to one ([Secrets and public logs](docs/ci.md#secrets-and-public-logs)). A maintainer reads the change and, to run CI, pushes its commits to a branch of this repository by hand. **Never push or mirror an outside branch to `main` or to a branch named `smr-swarm/*`:** those names get the e2e runner tokens and, on `main`, the publishing contexts, and a job takes its configuration from its own branch.
 
 A pull request that changes only documentation (`docs/`, `site/`, Markdown files) runs the lint jobs and the docs site build, and skips the builds and the Swarm tests ([Documentation-only changes](docs/ci.md#documentation-only-changes)).
 
-Use the pull request template. Maintainers choose the merge method for each pull request. A squash merge turns the pull request title into the commit message on `main`, and a merge commit or a rebase keeps your commits. Refer to [Merge method](docs/releasing.md#merge-method).
+Use the pull request template. Maintainers choose the merge method: a squash merge turns the pull request title into the commit message on `main`, and a merge commit or rebase keeps your commits ([Merge method](docs/releasing.md#merge-method)).
 
 ### Commit messages
 
-Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`. The release job reads these messages to choose the version and to write the release notes.
+Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`. The release job reads these messages to choose the version and write the release notes. Keep each commit small and atomic.
 
 | Type | Use for |
 |---|---|
@@ -52,7 +52,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): 
 
 Common scopes are `linux`, `windows`, `docs`, `readme`, and `ci`.
 
-A breaking change appears first in the release notes. Mark it in the commit message, in one of two ways, and write what the user has to change:
+A breaking change appears first in the release notes, and while the version is `0.x` it raises the minor number. Mark it in one of two ways, and write what the user has to change:
 
 - Add `!` after the type or scope: `feat(linux)!: rename the persistent service`.
 - Add a `BREAKING CHANGE:` footer:
@@ -63,71 +63,55 @@ A breaking change appears first in the release notes. Mark it in the commit mess
   BREAKING CHANGE: the service is now linux-persistent. Rename it in your stack file.
   ```
 
-While the version is `0.x`, a breaking change raises the minor number.
-
-Keep each commit small and atomic.
-
 ## Development
 
 Requirements: Docker with privileged containers for the Linux suite, bash, and PowerShell 7 for the Windows unit tests.
 
 ```bash
-linux/tests/run-all.sh                 # the whole Linux suite, a Swarm inside Docker-in-Docker
-linux/tests/run-all.sh token drain     # a subset
-linux/tests/stack-config.sh            # stack file contract, no daemon needed
-pwsh -File windows/tests/Invoke-UnitTests.ps1 -InstallModules     # PSScriptAnalyzer and Pester
+linux/tests/run-all.sh
+linux/tests/run-all.sh token drain
+linux/tests/stack-config.sh
+pwsh -File windows/tests/Invoke-UnitTests.ps1 -InstallModules
 ```
 
-The Linux tests run a Swarm inside `docker:dind` containers, so your own Docker engine never enters Swarm mode. The Windows Swarm tests run on a Windows host, and the CI pipeline runs them on Windows Server 2022 and 2025. Refer to [CI/CD](docs/ci.md) for the pipeline and for every lint command.
+The commands run the whole Linux suite, a subset, the stack file contract (no daemon needed), and the Windows unit tests (PSScriptAnalyzer and Pester).
 
-Each Linux test prints `RESULT` lines and exits 0 when it passes. `run-all.sh` runs all of them against one shared pair of Docker-in-Docker containers.
+The Linux tests run a Swarm inside `docker:dind` containers, so your own Docker engine never enters Swarm mode. Each test prints `RESULT` lines and exits 0 when it passes. CI runs the Windows Swarm tests on Windows Server 2022 and 2025. [CI/CD](docs/ci.md) lists the pipeline and every lint command.
 
-CI runs the groups as four parallel jobs, each with its own list of groups (`linux-swarm` in `.circleci/continue.yml`). A new test goes into `all` in `run-all.sh` and into one of those lists; `lint-circleci` fails when a group is in no list or in two. Refer to [CI/CD](docs/ci.md#linux-jobs-without-a-token) for the lists and their durations.
+CI runs the Linux groups as four parallel jobs, each with its own list (`linux-swarm` in `.circleci/continue.yml`). Add a new test to `all` in `run-all.sh` and to one of those lists: `lint-circleci` fails when a group is in no list or in two ([Linux jobs without a token](docs/ci.md#linux-jobs-without-a-token)).
 
 | Test | What it checks |
 |---|---|
-| `stack-config.sh` | `docker stack config` for every combination of stack files, the settings of each service, and the names of the Swarm configs. Needs no daemon |
-| `helper.sh` | `setup.sh --swarm-init`, `--secret`, and `--deploy` against a fresh Docker-in-Docker daemon |
-| `ephemerality.sh` | A new container for every job and no residue. The negative control runs `docker run --restart always` |
+| `stack-config.sh` | `docker stack config` for every combination of stack files, and the Swarm config names |
+| `helper.sh` | `setup.sh --swarm-init`, `--secret` and `--deploy` on a fresh Docker-in-Docker daemon |
+| `ephemerality.sh` | A new container for every job and no residue, with `docker run --restart always` as the negative control |
 | `exit80.sh` | The restart delay, no hot loop, and the exit codes 80 and 1 of the real runner |
 | `token.sh` | What a job can read in the default class and in the hardened class |
-| `task.sh` | The real runner runs tasks as the job user, against a fake API. Also the failure with `CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true`, and a persistent runner |
+| `task.sh` | The real runner runs tasks as the job user, also with `CIRCLECI_RUNNER_CLEANUP_WORK_DIR=true` and as a persistent runner |
+| `proxy.sh` | The token proxy image in a Swarm, in front of the real runner |
 | `placement.sh` | Placement on a manager and a worker, and `docker-build.yaml` |
-| `distributor.sh` | The `runner-distributor` service: runners that wait for it and then exit 80, a node with no install, a joining node, an upgrade under three busy jobs, a rollback without a download, an exact pin that never changes by itself, `3.1`, `3` and `current` that follow the manifest, the major-version guard, pruning to 3 versions, a tampered binary, a wrong SHA-256, and CircleCI's real manifest. Needs network access |
+| `distributor.sh` | The `runner-distributor` service: install, upgrade, rollback, pins, floating versions, pruning, a tampered binary, a wrong SHA-256, and CircleCI's real manifest. Needs network access |
 | `persistent.sh` | Continuous mode and `persistent.yaml` |
-| `microvm.sh` | The microVM add-on with Kata Containers: the node label, a guest kernel, DNS through the forwarder, a read-only node directory, dockerd in the VM, and the entrypoint guard. Skipped without `/dev/kvm`. Downloads Kata (about 1 GB) unless `SWARM_TEST_KATA_DIR` or `SWARM_TEST_KATA_TARBALL` points at a copy. Not part of `run-all.sh` |
+| `microvm.sh` | The microVM add-on with Kata Containers. Skipped without `/dev/kvm`. Downloads Kata (about 1 GB) unless `SWARM_TEST_KATA_DIR` or `SWARM_TEST_KATA_TARBALL` points at a copy. Not part of `run-all.sh` |
 | `drain.sh` | SIGTERM during a job: the job finishes |
-| `limits.sh` | `init`, `ulimits`, pids, memory, CPU, reservations, and the capability sets take effect |
+| `limits.sh` | `init`, `ulimits`, pids, memory, CPU, reservations, and the capability sets |
 | `network.sh` | Network isolation between classes, and between the replicas of a class |
-| `container-mode.sh` | The prototype container agent in a Swarm, against a fake API: no agent on a proxy or microVM node, a Docker-executor job with a service on `localhost`, the limits, no socket or token in the job, the cap, the cleanup, and the orphans. Needs the Go and pause images |
-| `bats/run.sh` | The unit tests of the entrypoint on `cimg/base`, Alpine, and UBI minimal |
+| `container-mode.sh` | The prototype container agent in a Swarm, against a fake API. Needs the Go and pause images |
+| `bats/run.sh` | The entrypoint unit tests on `cimg/base`, Alpine, and UBI minimal |
 
-The suite needs no installed runner. The distributor of the shipped stack installs it, as it does for a user, from a small HTTP mirror in the harness: a `manifest.json` and the tarballs of the versions that a test publishes (`publish_runner` in `lib.sh`). `ephemerality.sh`, `persistent.sh`, `limits.sh`, `network.sh`, and `drain.sh` publish `fake-runner.sh`, a stand-in for `circleci-runner` that runs a fake job through the step-down and exits, as a single-task runner does. `task.sh`, `token.sh`, `exit80.sh`, `placement.sh`, `distributor.sh`, and the idle case of `drain.sh` publish the real runner binary, which the harness downloads once and checks against the SHA-256 of CircleCI's manifest.
+The suite needs no installed runner: the distributor of the shipped stack installs one from a small HTTP mirror in the harness. Most tests publish `fake-runner.sh`, and `task.sh`, `token.sh`, `exit80.sh`, `placement.sh`, `distributor.sh` and the idle case of `drain.sh` publish the real runner binary, which the harness downloads once and checks against the SHA-256 of CircleCI's manifest.
 
-Three variables change the setup. `SWARM_TEST_DIND_IMAGE` sets the Docker-in-Docker image. `SWARM_TEST_CACHE` sets the directory that caches the real runner binary, `~/.cache/swarm-tests` by default. `SWARM_TEST_KEEP=1` keeps the Docker-in-Docker containers for debugging.
+Three variables change the setup: `SWARM_TEST_DIND_IMAGE` sets the Docker-in-Docker image, `SWARM_TEST_CACHE` sets the directory that caches the real runner binary (`~/.cache/swarm-tests` by default), and `SWARM_TEST_KEEP=1` keeps the containers for debugging.
 
-The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and one `RESULT` line, and exit 0 only when every check passes. `Invoke-UnitTests.ps1` runs the Pester tests on any system with PowerShell 7. The `Test-*.ps1` scripts need a Windows host with Docker in Windows-container mode, and none of them needs a runner token.
-
-| Test | What it checks |
-|---|---|
-| `Test-Injection.ps1` | A stock Server Core image with the mounts of the volume `runner-bin` and the `PATH` of the stack: the toolchain, GNU tar as the task agent calls it, Git long paths, the exit codes of the runner, and the config file with environment overrides. `-Online` lets the real runner download its task agent. `-Baked` tests the baked image |
-| `Test-Ephemerality.ps1` | A new container for every job and no residue, with the restart-policy negative control |
-| `Test-Exit80.ps1` | Exit 80 without a hot loop |
-| `Test-Placement.ps1` | Placement constraints and node labels |
-| `Test-StopHandling.ps1` | What a stop does to a busy stock container (it kills the job, informational), and a Swarm secret as the runner config. `-Online` stops the real runner and expects a drain |
-| `Test-Install.ps1` | The distributor installs the runner and portable Git from CircleCI's real manifest into the volume of the stack, and the stock mounts work and are read-only |
-| `Test-Distributor.ps1` | The distributor script against a local mirror: pin, `current` by SHA-256, the major-version guard, rollback, a wrong SHA-256, pruning, a changed binary, and a running container that keeps its version |
-| `Test-Persistent.ps1` | Continuous mode, and a named volume that outlives the container |
+The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and one `RESULT` line, and exit 0 only when every check passes. `Invoke-UnitTests.ps1` runs the Pester tests on any system with PowerShell 7. The `Test-*.ps1` scripts (`Injection`, `Ephemerality`, `Exit80`, `Placement`, `StopHandling`, `Install`, `Distributor` and `Persistent`) need a Windows host with Docker in Windows-container mode and no runner token. Each script's header says what it checks. `Test-Injection.ps1 -Online` and `Test-StopHandling.ps1 -Online` use the real runner.
 
 ### Swarm config names
 
-The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change `linux/stack/circleci-runner-entrypoint`, `linux/stack/runner-distributor.sh`, `windows/runner-distributor.ps1`, or a file of `linux/stack/container-agent` (the sources of the prototype container agent, which `container-mode.yaml` carries as configs), run `ci/config-names.sh --write` and commit the new names with the change. `lint-stack`, `linux/tests/stack-config.sh`, and the release job run `ci/config-names.sh` and fail on a stale name. Nobody decides when to bump a number.
+The entrypoint and distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change `linux/stack/circleci-runner-entrypoint`, `linux/stack/runner-distributor.sh`, `windows/runner-distributor.ps1`, or a file of `linux/stack/container-agent`, run `ci/config-names.sh --write` and commit the new names with the change. `lint-stack`, `linux/tests/stack-config.sh` and the release job fail on a stale name.
 
 ### Documentation checks
 
-Documentation follows the [CircleCI docs style](https://circleci.com/docs/contributors/docs-style/style-and-voice/): sentence-case headings, active voice, no contractions, and short sentences. Every `docs/*.md` page has front matter with `page-title`, `page-audience`, and `page-description`.
-
-CI checks the relative links and the Mermaid diagrams. To run the same checks locally:
+Documentation follows the [CircleCI docs style](https://circleci.com/docs/contributors/docs-style/style-and-voice/): sentence-case headings, active voice, no contractions, and short sentences. Every `docs/*.md` page has front matter with `page-title`, `page-audience`, and `page-description`. CI checks the relative links and the Mermaid diagrams. To run the same checks locally:
 
 ```bash
 docker run --rm -v "$PWD:/input" -w /input lycheeverse/lychee:0.24.2 --config lychee.toml './**/*.md'
@@ -136,25 +120,19 @@ docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.18.1 '**/*.md
 
 ### Pinned versions
 
-[Renovate](https://docs.renovatebot.com/) opens a pull request every Monday for the pinned versions: the images and their digests, the tools that CI downloads, the Go toolchain and the docs theme. The configuration is [`renovate.json`](renovate.json), and [Pinned versions](docs/ci.md#pinned-versions) lists what it covers and what stays by hand. A pull request with the label `checksum` changes a version that is pinned with a SHA-256 value: Renovate cannot compute the value, so replace it in the same branch before you merge.
+[Renovate](https://docs.renovatebot.com/) opens a pull request every Monday for the pinned versions: images and digests, the tools that CI downloads, the Go toolchain and the docs theme ([`renovate.json`](renovate.json); [Pinned versions](docs/ci.md#pinned-versions) lists what it covers). A pull request with the label `checksum` changes a version that is pinned with a SHA-256 value. Renovate cannot compute the value, so replace it in the same branch before you merge.
 
-Pin images by tag and digest, and a new download by its version and checksum together, with a `# renovate:` comment above the version (see the page above). The runner version that the stack files install by default is pinned, in three places that must stay equal (`linux/stack/runners.yaml`, `linux/stack/microvm.yaml` and `windows/stack/runners.yaml`): the newest version that CI tests, bumped by each release ([how](docs/releasing.md#bump-the-runner-version)). The `alpine:3` image of the distributor is pinned by digest in `linux/stack/runners.yaml`. The pinned Git and 7-Zip versions and their SHA-256 values are in `windows/stack/runner-distributor.ps1`, and a change of the script needs `ci/config-names.sh --write`. Pin images by tag and digest.
+Pin images by tag and digest, and a new download by its version and checksum together, with a `# renovate:` comment above the version. The default runner version is pinned in three files that must stay equal (`linux/stack/runners.yaml`, `linux/stack/microvm.yaml` and `windows/stack/runners.yaml`), and each release bumps it ([how](docs/releasing.md#bump-the-runner-version)). The pinned Git and 7-Zip versions and their SHA-256 values are in `windows/stack/runner-distributor.ps1`, and a change of the script needs `ci/config-names.sh --write`.
 
 ## Releases
 
-Maintainers do not tag releases by hand, and nobody edits a changelog. Refer to [Releasing](docs/releasing.md) for the details.
+Nobody tags a release by hand or edits a changelog. A CircleCI job runs on `main` after every test job has passed. [git-cliff](https://git-cliff.org) computes the next version from the Conventional Commits since the last release tag, with the rules in [`cliff.toml`](cliff.toml): a `fix` is a patch, a `feat` is a minor, and a breaking change is a minor in `0.x`. A push with only `docs`, `test`, `ci`, `chore`, `style`, or `refactor` commits makes no release. The project follows [Semantic Versioning](https://semver.org/), and `1.0.0` is reserved for general availability or official adoption.
 
-- **Versioning.** The project follows [Semantic Versioning](https://semver.org/) and starts at `0.x`. While the version is `0.x`, a breaking change bumps the minor number. Version `1.0.0` is reserved for general availability or official adoption.
-- **Release job.** A CircleCI job runs on `main` after every test job of that pipeline has passed. [git-cliff](https://git-cliff.org) reads the Conventional Commits since the last release tag and computes the next version, with the rules in [`cliff.toml`](cliff.toml). A `fix` is a patch. A `feat` is a minor. A breaking change is a minor in `0.x` and a major from `1.0.0`. A push that holds only `docs`, `test`, `ci`, `chore`, `style`, or `refactor` commits makes no release.
-- **Contents.** Each release is a GitHub release with a `tar.gz` and a `zip` bundle of the user-facing files, a `SHA256SUMS` file, and a keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of that file, made with the CircleCI OIDC token. The release notes are generated from the commits, with breaking changes first. The job creates the tag through the GitHub API and never pushes a commit to `main`.
-- **Changelog.** [CHANGELOG.md](CHANGELOG.md) is a short page. The release bundle contains a generated `CHANGELOG.md` with every release.
-- **Failures.** If a release fails part way, a maintainer reruns the job in CircleCI. The job finishes the release at the same commit and never creates a second one.
-
-Refer to [Verify a release](docs/install-linux.md#verify-a-release) to check a download.
+Each release is a GitHub release with a `tar.gz` and a `zip` bundle, a `SHA256SUMS` file, and a keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of that file. A maintainer reruns a release that fails part way. [Releasing](docs/releasing.md) has the details, [CHANGELOG.md](CHANGELOG.md) points to the notes, and [Verify a release](docs/install-linux.md#verify-a-release) checks a download.
 
 ### When the repository moves to CircleCI-Public
 
-Replace the Labs wording in these files: the banner and the Support section of `README.md`, `SECURITY.md`, the support paragraph at the top of this file, `.github/ISSUE_TEMPLATE/config.yml`, and `.github/CODEOWNERS`. Decide the license, because CircleCI runner repositories use Apache-2.0 and this one uses MIT.
+Replace the Labs wording in the banner and the Support section of `README.md`, `SECURITY.md`, the support paragraph at the top of this file, `.github/ISSUE_TEMPLATE/config.yml`, and `.github/CODEOWNERS`. Decide the license, because CircleCI runner repositories use Apache-2.0 and this one uses MIT.
 
 ## License
 

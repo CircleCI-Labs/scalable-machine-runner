@@ -36,7 +36,7 @@ A push with only `docs`, `test`, `ci`, `chore`, `style`, `refactor` or `build` c
 
 ## What happens on merge
 
-1. The setup phase (`.circleci/config.yml`) passes `release: true` when the branch is `main` and both e2e tokens are present. That switches on `full-suite`, the heavy suites (`windows`, `proxy-image`, `microvm`), `e2e-linux`, `e2e-windows` and `strict`. With an e2e token missing it passes `release: false`, because a release must wait for every test.
+1. The setup phase (`.circleci/config.yml`) passes `release: true` when the branch is `main`, both e2e tokens are present, and a commit of the push would make a release (`cliff.toml`). That switches on every suite, `full-suite`, `e2e-linux`, `e2e-windows` and `strict`. Otherwise it passes `release: false`, because a release must wait for every test.
 1. The `release` job requires every other job of the `ci` workflow except three optional ones. If one fails, nothing is released.
 1. The job runs in the serial group `<project slug>/release`. When a newer pipeline's release job waits in the group, the older one skips and the newer one releases both changes.
 1. `ci/release.sh` checks the Swarm config names ([Swarm config names](../CONTRIBUTING.md#swarm-config-names)) and the runner pin, computes the version and notes, pins the pipeline's token proxy image digest in the bundle's stack files, builds the bundles, signs `SHA256SUMS` and verifies the signature. It then verifies the image signature, gives the image its release tags, and creates the GitHub release, which creates the tag.

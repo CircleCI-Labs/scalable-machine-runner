@@ -437,7 +437,7 @@ The host (`ci/E2E-Host.ps1`) has the same shape, with one service and three prob
 
 ## Release
 
-The `release` job is part of the `ci` workflow. On `main` with both e2e tokens, the setup phase passes `release: true` together with `full-suite`, the three heavy suites, `e2e-linux` and `e2e-windows`, so every job that the release requires really runs. It requires every other job of the workflow except the three that `lint-circleci` names in its `$optional` list (`linux-mixed-arch`, `proxy-image-edge`, `docs-site-comment`). Other branches never run it, and neither do tag pipelines (the release creates the tag, and CircleCI schedules no job for a tag).
+The `release` job is part of the `ci` workflow. On `main` with both e2e tokens and a commit that would make a release, the setup phase passes `release: true` together with every suite, `full-suite`, `e2e-linux` and `e2e-windows`, so every job that the release requires really runs. It requires every other job of the workflow except the three that `lint-circleci` names in its `$optional` list (`linux-mixed-arch`, `proxy-image-edge`, `docs-site-comment`). Other branches never run it, and neither do tag pipelines (the release creates the tag, and CircleCI schedules no job for a tag).
 
 | Job | Executor | What it does |
 |---|---|---|
@@ -610,7 +610,7 @@ Measured on 2026-10-13 (pipeline `9aed4106`, a full run on `smr-swarm/ci`). Cred
 
 | Pipeline | Credits (about) | Wall clock |
 |---|---|---|
-| Feature branch that changes a file every heavy suite reads (measured with both Windows jobs) | 1,500, of which the two Windows jobs are 1,200 | 18 min |
+| Feature branch that changes a file every suite reads (measured with both Windows jobs) | 1,500, of which the two Windows jobs are 1,200 | 18 min |
 | `main` (every job except `release`) | 3,800 | 25 min |
 | A documentation-only pull request | 200 | |
 | The weekly [security scan](#security-scan) | 150 a run | |

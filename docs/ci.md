@@ -63,11 +63,29 @@ This section is the short answer for users and reviewers. The pipeline sections 
 | RHEL and SELinux | The steps follow Docker's documentation |
 | Rerun job with SSH (`ssh-rerun.yaml`) | CI checks that the files parse and merge and keep the contract, including the host-mode port 54782, `max_replicas_per_node: 1` and the advertise address. The Swarm side was proven by hand on a Linux Swarm with a real runner: the **Enable SSH** step runs, and the task agent answers on port 54782 of the node. No test logs in over SSH, and the Windows file is untested |
 | Windows Server 2019, Hyper-V isolation, group managed service accounts, proxies, and `add_ssh_keys` | Not exercised, and the docs say so |
+| CircleCI server, and a runner version other than the pin | The tests use CircleCI cloud, a fake API, and the exact pin of the stack files. The protocol that the proxy relies on is in [Compatibility with CircleCI](operations.md#compatibility-with-circleci) |
+| The two distributors reaching the same decision | The shell distributor and the PowerShell distributor repeat the version grammar, the hash-list rules, the record format and the pruning. Each has its own tests, and nothing runs both on the same input. They differ in two places that are known: the Linux flip of `current` is one atomic rename, and the Windows flip removes the link and creates it again, so a container that starts in between does not start and Swarm retries ([Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows)); `file://` is accepted on Windows only |
+| The settings that the stack files repeat | YAML anchors do not cross files, so the add-on files repeat the common blocks (restart policy, ulimits, logging, environment). `stack-config.sh` checks the pin and the hash list in every file, the contract of the services it names, and that `ssh-rerun.yaml` differs from `linux-default` only in the SSH settings. It does not check that every other repeated setting is identical, so such a drift is found by review |
 | `publish()` of the release job | It stops before publishing without `GITHUB_TOKEN`, so the first release is its first real run. The signing, the verification and the check of the ref in the certificate are not part of that gap: `signing-rehearsal` runs them in every pipeline on a throwaway image. The push to Docker Hub, the tags, the GitHub release and the `gh-pages` push are real only on `main` |
+
+### What the tests fetch from outside
+
+The CI can go red with no change in the repository, because some tests read live state:
+
+| What | Where | What can change |
+|---|---|---|
+| The runner manifest of CircleCI | The phase `real` of `distributor.sh`, with the version `current`, and `Test-Install.ps1` and `linux-setup`, which download from the real bucket | CircleCI publishes a new `current`, or a new major version |
+| Packages | `bats/run.sh` installs `sudo` and `util-linux` with `apt-get`, `apk` or `microdnf` in each test image at test time | A package mirror is down or slow |
+| Images | Every image is pulled by tag or digest from Docker Hub, MCR or `gcr.io` | A tag moves, or a registry limits the pulls |
+| Downloads | The Kata tarball (about 1 GB, SHA-256 checked), PortableGit and 7-Zip from GitHub | A release is removed, or a host is slow |
+| Sigstore | `signing-rehearsal` signs a throwaway image against the real Fulcio and Rekor (three tries) | A public service is down |
+| CircleCI | The e2e jobs run real jobs | The service, the runner API or the concurrency of the plan |
+
+Some tests also assert log text. `distributor.sh` counts lines such as `runner-distributor: downloading circleci-runner <version>`, so rewording a log line of the distributor fails a test, and `stack-config.sh` reads the rendered YAML with `awk` and `grep`. Change such a line together with its test.
 
 ## Pipeline shape
 
-There is one workflow, `ci`, and a small second one, `docs-site`, that publishes the documentation site on `main` ([Docs site](#docs-site)). Every job of both is listed in `.circleci/continue.yml`. The `setup` job passes eleven boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled. The setup phase itself has three mutually exclusive workflows that run the same `setup` job: `setup-e2e` for `main` and `smr-swarm/*`, with the e2e context, `setup-plain` for every other branch, without any context, and `setup-scan` for the weekly scan, without any context either ([below](#when-things-run-and-the-setup-gate)).
+There is one workflow, `ci`, and a small second one, `docs-site`, that publishes the documentation site on `main` ([Docs site](#docs-site)). Every job of both is listed in `.circleci/continue.yml`. The `setup` job passes twelve boolean parameters, and expression filters (`filters: pipeline.parameters.<name>`) switch jobs in and out, so a job that does not apply is never scheduled. The setup phase itself has three mutually exclusive workflows that run the same `setup` job: `setup-e2e` for `main` and `smr-swarm/*`, with the e2e context, `setup-plain` for every other branch, without any context, and `setup-scan` for the weekly scan, without any context either ([below](#when-things-run-and-the-setup-gate)).
 
 ```mermaid
 flowchart TD
@@ -381,6 +399,28 @@ The project is public, so job logs and artifacts are public.
 - The probes never print their environment, and read the token only to count bytes.
 - The context is attached only to `setup` and the host jobs. The probes are ordinary runner jobs.
 
+### What each job can see
+
+The project is public and a branch pusher chooses the configuration that a job of that branch runs, so what matters is which job holds which secret. A context attaches to a job by name, and a job without a context sees none of these values. This is the complete list:
+
+| Job | Context | Secrets in its environment | Runs on |
+|---|---|---|---|
+| `setup`, in the workflow `setup-e2e` | `scalable-machine-runner-e2e` | `E2E_RUNNER_TOKEN_LINUX`, `E2E_RUNNER_TOKEN_WINDOWS`. The job only checks that they are not empty | `main` and `smr-swarm/*` |
+| `setup`, in `setup-plain` and `setup-scan` | None | None | Every other branch, and the weekly scan |
+| The e2e host jobs: `e2e-linux-host`, `e2e-linux-arm64-host`, and the Windows hosts | `scalable-machine-runner-e2e` | Both e2e tokens (a host uses the one of its operating system) | `main` and `smr-swarm/*`, when the token is present |
+| The e2e probe jobs `e2e-*-b1`, `-b2`, `-b3` | None | None. They are ordinary jobs that the runner of the host claims, and they run the code of the branch | The same |
+| `proxy-image-linux-publish`, `proxy-image-windows-*-publish`, `proxy-image-publish`, `proxy-image-edge` | `scalable-machine-runner-dockerhub` | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | `main` |
+| `release` | `scalable-machine-runner-release` and `scalable-machine-runner-dockerhub` | `GITHUB_TOKEN` of the release (Contents: Read and write), `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | `main`, with both e2e tokens present |
+| `docs-site-publish` | `scalable-machine-runner-docs` | `GITHUB_TOKEN` of the docs (Contents: Read and write) | `main` |
+| `docs-site-comment` | `scalable-machine-runner-pr-comments` | `GITHUB_PR_COMMENT_TOKEN` | A push that has a pull request, on any branch |
+| Every other job | None | None | |
+
+Three things the table does not show:
+
+- **Every job can get an OIDC token**, with no context (`circleci run oidc get`: `signing-rehearsal` does). The token proves the project and the branch, which is why the signature check reads the ref ([How the signature works](releasing.md#how-the-signature-works)). The `setup` jobs also hold the continuation key of their pipeline, which can only continue that pipeline.
+- **A job on `main` runs the code of `main`.** Whoever can change `.circleci/` or `ci/` on `main` controls what runs with each of these secrets. That is why `main` needs the ruleset below.
+- **The docs token reaches as far as the release token.** Both are **Contents: Read and write** on the whole repository. The separate context decides which job can use the docs token, and not what it can do. `docs-site-publish` also downloads and runs third-party code at build time (Hugo, the Hextra module, a Mermaid script), which the project pins by version and checksum, while it holds that token. The ruleset on `main` (no bypass, a pull request required) is what stops that token from changing `main`.
+
 ## The e2e simulation
 
 `ci/tests/e2e-sim.sh` runs `ci/e2e-host.sh` and `ci/e2e-probe.sh` in a privileged `docker:dind` container with a fake runner that runs the next queued probe as an unprivileged user and exits 0, as a single-task runner does. Swarm, the stack deploy, the restart policy, `docker events`, the secrets and the evidence handling are real. Three scenarios: pass, no job queued (the host must fail with "exited without evidence"), and a probe failure (the host must fail). It also checks that the token never reaches the output. The `e2e-simulation` job runs it in about 2 minutes; run it before changing the e2e scripts, so that a real e2e run is not spent on a typo.
@@ -423,7 +463,7 @@ docker run --rm -v "$PWD:/w" -w /w mcr.microsoft.com/powershell:7.5-ubuntu-24.04
 
 ## Release
 
-The `release` job is part of the `ci` workflow. On `main`, when both e2e tokens are present, the setup phase passes `release: true` together with `full-suite`, the three heavy suites, `e2e-linux` and `e2e-windows`, so every job that the release requires really runs. The job requires every other job of the workflow, and the release waits for every test. Pipelines of other branches never run it, and neither do tag pipelines (the release creates the tag; CircleCI schedules no job for a tag).
+The `release` job is part of the `ci` workflow. On `main`, when both e2e tokens are present, the setup phase passes `release: true` together with `full-suite`, the three heavy suites, `e2e-linux` and `e2e-windows`, so every job that the release requires really runs. The job requires every other job of the workflow except the three optional ones that `lint-circleci` names in its `$optional` list (`linux-mixed-arch`, `proxy-image-edge` and `docs-site-comment`), and the release waits for every test. Pipelines of other branches never run it, and neither do tag pipelines (the release creates the tag; CircleCI schedules no job for a tag).
 
 | Job | Executor | What it does |
 |---|---|---|
@@ -508,7 +548,7 @@ The same line is in the file `docs-site/preview-url.txt` among the artifacts of 
 
 To turn the comment on, a maintainer does this once:
 
-1. Create a fine-grained personal access token with the resource owner `CircleCI-Labs`, **only** this repository, and the repository permission **Pull requests: Read and write**, and nothing else.
+1. Create a fine-grained personal access token for a dedicated bot account that is on no bypass list and has no other access, with the resource owner `CircleCI-Labs`, **only** this repository, and the repository permission **Issues: Read and write**, and nothing else. A comment on a pull request is an issue comment, and `site/preview-comment.sh` calls only the issue comment endpoints, so the token needs no pull request permission. Do not use the token of a maintainer: **Pull requests: Read and write** would also let the token submit approving reviews and edit or close pull requests, as its owner.
 2. Create the context `scalable-machine-runner-pr-comments` with the variable `GITHUB_PR_COMMENT_TOKEN`. The `docs-site-comment` job already names the context. Without the variable the job posts nothing.
 3. Restrict the context to this project, and refuse SSH reruns:
 
@@ -518,7 +558,7 @@ To turn the comment on, a maintainer does this once:
      --value 'not job.ssh.enabled and not (pipeline.config_source starts-with "api")'
    ```
 
-   The context cannot be limited to one branch: pull requests come from branches of any name. So anyone who can push a branch to the repository can make a job print the token. That is why the token can only comment on pull requests and is not the release token. A pull request from a fork gets no secret ([Secrets and public logs](#secrets-and-public-logs)), so it gets no comment.
+   The context cannot be limited to one branch: pull requests come from branches of any name. So anyone who can push a branch to the repository can make a job print the token. That is why the token has the one permission above, belongs to a bot account, and is not the release token: whoever reads it can write to issues and to the comments of pull requests as that bot, and cannot submit a review or merge. A pull request from a fork gets no secret ([Secrets and public logs](#secrets-and-public-logs)), so it gets no comment.
 
 ### GitHub Pages and the token
 
@@ -535,7 +575,7 @@ A maintainer does this once:
 
 3. After the first publication, open Settings, Pages, and set **Source** to **Deploy from a branch**, the branch to `gh-pages` and the folder to `/ (root)`. GitHub then deploys every push to that branch with its own managed `pages-build-deployment` run. There is no workflow file to maintain.
 
-The site has its own context and not the release context. The release token can publish releases, and the docs job downloads and runs a theme, a Mermaid script and a Hugo binary at build time, so it gets only the token that it needs. If one token for both is wanted, attach `scalable-machine-runner-release` to `docs-site-publish` instead: that context holds a `GITHUB_TOKEN` that can write to the repository, and no other change is needed.
+The site has its own context and not the release context. The two tokens have the same scope, **Contents: Read and write** on the repository, and the docs job downloads and runs a theme, a Mermaid script and a Hugo binary at build time while it holds its token ([What each job can see](#what-each-job-can-see)). The context limits which job can use the token, not what the token can do, and the ruleset on `main` is what keeps it from changing `main`. A token that belongs to a bot account on no bypass list is safer than one that belongs to a maintainer. If one token for both is wanted, attach `scalable-machine-runner-release` to `docs-site-publish` instead: that context holds a `GITHUB_TOKEN` that can write to the repository, and no other change is needed.
 
 When the repository is renamed to `machine-runner-swarm`, the Pages address changes with it and GitHub does not redirect the old one. Change the two lines of `site/hugo.yaml` that name the repository (`baseURL` and the GitHub link of the menu). The publication follows the repository that the pipeline runs in.
 
@@ -558,9 +598,9 @@ The Renovate GitHub App is already installed on the organization, and [`renovate
 
 ### A ruleset for main
 
-A push to `main` publishes the token proxy image, makes a release and writes the `gh-pages` branch, and the context `scalable-machine-runner-docs` holds a token with **Contents: Read and write** on the whole repository, so a job of `main` could also push to `main` itself. Nothing in the repository protects `main`: a maintainer adds a branch ruleset (Settings, Rules, Rulesets, **New branch ruleset**, target: the default branch) with:
+A push to `main` publishes the token proxy image, makes a release and writes the `gh-pages` branch, and the context `scalable-machine-runner-docs` holds a token with **Contents: Read and write** on the whole repository, so a job of `main` could also push to `main` itself. The repository cannot protect `main` by itself. A ruleset is a setting of the GitHub repository, the signature of a release is only as good as it ([What the release trust depends on](releasing.md#what-the-release-trust-depends-on)), and the files of the repository cannot show that it is set. **The maintainers have set the ruleset below on `main`** (Settings, Rules, Rulesets, **New branch ruleset**, target: the default branch), and [Check the settings](releasing.md#check-the-settings) says how to read it back:
 
-- **Require a pull request before merging**, with the number of reviews that you want. The release job never pushes a commit to `main`, so nobody and no job needs to.
+- **Require a pull request before merging**, with the number of reviews that you want. The release job never pushes a commit to `main`, so nobody and no job needs to. A required review from code owners adds nothing while [`.github/CODEOWNERS`](../.github/CODEOWNERS) is the single line `*`: it asks the same people for every path, `.circleci/` and `ci/` included.
 - **Block force pushes** and **restrict deletions**.
 - **No bypass list**, not even for administrators.
 - **Require status checks to pass**, with ONE check: the status of the workflow `ci`. Do not require anything else:
@@ -570,7 +610,7 @@ A push to `main` publishes the token proxy image, makes a release and writes the
 
 ### The e2e context and smr-swarm/*
 
-The context `scalable-machine-runner-e2e` holds the runner tokens, and its restriction names `main` and every branch that starts with `smr-swarm/` ([Secrets and public logs](#secrets-and-public-logs)). The configuration of a job comes from its own branch, so anyone who can push a branch named `smr-swarm/anything` can change `.circleci/` in it, print the tokens in a public log, and read them. That is a deliberate trade for the time that the e2e work lives on a branch of its own, and it has an end:
+The context `scalable-machine-runner-e2e` holds the runner tokens, and its restriction names `main` and every branch that starts with `smr-swarm/` ([Secrets and public logs](#secrets-and-public-logs)). The configuration of a job comes from its own branch, so anyone who can push a branch named `smr-swarm/anything` can change `.circleci/` in it, print the tokens in a public log, and read them. That is a deliberate trade for the time that the e2e work lives on a branch of its own. **The maintainers have set the second ruleset (step 3 below) before the first release**, and the end of the trade is this list:
 
 1. **After the merge, rotate both runner tokens** (`circleci runner token create <class> --nickname ci-YYYYMM`, replace the secret in the context, delete the old token: [Troubleshooting](#troubleshooting)). Any token that a branch could read before is untrusted.
 1. **Limit the context to `main`**, or to exact branch names: change the `when` of `setup-e2e` in `.circleci/config.yml`, the expression restriction of the context, `eligible` in `ci/setup-gate.sh` and the rows of `ci/tests/setup-gate.sh` and `ci/tests/setup-config.sh`.

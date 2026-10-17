@@ -10,9 +10,9 @@ Self-hosted CircleCI runners that give every job a clean container, on the Docke
 ## Why use it
 
 - **A clean container for every job.** Each Swarm service is one resource class. A runner claims one job and exits, and Swarm starts a new container, so no job inherits files from the last one.
-- **A microVM per job, experimental.** Kata Containers classes run each job in its own microVM on Linux amd64 nodes with KVM. CI runs them against a fake API only ([MicroVM jobs](docs/microvm.md)).
-- **Linux and Windows.** Linux amd64 and arm64, and Windows Server 2022 and 2025, with labels that decide where each class runs. A mixed Linux and Windows cluster was verified by hand.
-- **Class tokens stay out of runner containers.** A token proxy holds them, and the runners hold a placeholder. The persistent classes are the exception, and a job that escapes onto the proxy's node can reach the tokens ([Security](docs/security.md#the-token-proxy)).
+- **A microVM per job (experimental).** Kata Containers classes give each job its own VM and kernel, on Swarm, on Linux amd64 nodes with KVM. ([MicroVM jobs](docs/microvm.md)).
+- **Linux and Windows in one cluster.** Linux amd64 and arm64, and Windows Server 2022 and 2025, with labels that decide where each class runs.
+- **Jobs never hold the class token.** A token proxy holds it, and the runners hold a placeholder. The persistent classes are the exception ([Security](docs/security.md#the-token-proxy)).
 - **No runner install on your hosts.** A distributor service installs the runner on every node, pins a tested version and checks its SHA-256. An update changes one service and interrupts no job on Linux.
 - **Scale by setting replicas.** `deploy.replicas` is the number of concurrent jobs of a class.
 - **Signed releases.** Each release bundle carries a keyless cosign signature, and the token proxy image is pinned by digest.

@@ -57,7 +57,7 @@ menu:
       weight: 7
 
 params:
-  description: Self-hosted CircleCI runners with a clean container for every job, on Docker Swarm, for Linux and Windows Server.
+  description: Self-hosted CircleCI runners with a clean container for every job, or an experimental microVM, on Docker Swarm, for Linux and Windows Server.
   externalLinkDecoration: false
   repo: https://github.com/CircleCI-Labs/machine-runner-swarm
 
@@ -75,8 +75,8 @@ params:
         link: docs/get-started/concepts/#what-a-clean-environment-covers
         linkText: What a clean environment covers
       - icon: cpu
-        title: A microVM per job, experimental
-        text: "Kata Containers classes run each job in its own microVM, with its own kernel, on Linux amd64 with KVM. Experimental: CI runs them against a fake API only."
+        title: A microVM per job
+        text: Kata Containers classes give each job its own VM and kernel, on Swarm, on Linux amd64 nodes with KVM. Experimental.
         link: docs/configure/microvm/
         linkText: MicroVM jobs
       - icon: server
@@ -85,7 +85,7 @@ params:
         link: docs/install/multi-node/
         linkText: Multi-node clusters
       - icon: shield-check
-        title: Class tokens stay out of runner containers
+        title: Jobs never hold the class token
         text: A token proxy holds the class tokens, and the runners hold a placeholder. The persistent classes are the exception.
         link: docs/get-started/concepts/#the-token-proxy
         linkText: The token proxy

@@ -82,7 +82,9 @@ params:
         linkText: What a clean environment covers
       - icon: server
         title: Linux and Windows Server
-        text: Linux amd64 and arm64 and Windows Server 2022 and 2025 are tested with real jobs. Multi-node clusters are tested in CI on two-node Swarms; ppc64le and s390x only under emulation.
+        text: >-
+          Linux amd64 and arm64 and Windows Server 2022 and 2025 are tested with real jobs.
+          Multi-node clusters are tested in CI on two-node Swarms; ppc64le and s390x only under emulation.
         link: docs/install/multi-node/
         linkText: Multi-node clusters
       - icon: shield-check

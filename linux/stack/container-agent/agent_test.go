@@ -16,7 +16,7 @@ import (
 
 const classToken = "class-token-SENTINEL"
 
-func dockerTask(id string) *taskConfig {
+func jobConfig(id string) *taskConfig {
 	tc := &taskConfig{TaskID: id}
 	tc.Job.Config.Docker = []containerCfg{
 		{Image: "cimg/base:stable", Entrypoint: []string{"/bin/sh"}, Command: []string{"-c", "sleep 1"}, User: "circleci", Environment: map[string]string{"A": "1", "B": "${BUILT}"}},
@@ -27,29 +27,31 @@ func dockerTask(id string) *taskConfig {
 }
 
 type harness struct {
-	a  *agent
-	e  *fakeEngine
-	r  *fakeRunner
-	cl *class
+	w   *wrapper
+	drv *dockerDriver
+	e   *fakeEngine
+	r   *fakeRunner
+	cl  *class
 }
 
 func newHarness(t *testing.T, tasks ...*taskConfig) *harness {
 	t.Helper()
 	e, sock := newFakeEngine(t)
 	r := newFakeRunner(t, classToken, tasks...)
-	cl := &class{Name: "ns/docker", token: secret(classToken), Primary: limits{CPUs: 2, MemoryMB: 4096}, Service: limits{CPUs: 0.5, MemoryMB: 1024, Pids: 100}}
-	cfg := &config{RunnerAPI: r.srv.URL, PauseImage: "pause:1", MaxTasks: 2, MaxRunTime: time.Hour, PollEvery: 10 * time.Millisecond, Name: "node-1",
-		Pull: "always", Classes: []*class{cl}}
-	return &harness{a: &agent{cfg: cfg, api: newRunnerAPI(r.srv.URL), d: newDocker(sock), sem: make(chan struct{}, cfg.MaxTasks)}, e: e, r: r, cl: cl}
+	cl := &class{Name: "ns/docker", token: secret(classToken), Primary: Limits{CPUs: 2, MemoryMB: 4096}, Service: Limits{CPUs: 0.5, MemoryMB: 1024, Pids: 100}}
+	cfg := &config{RunnerAPI: r.srv.URL, MaxTasks: 2, MaxRunTime: time.Hour, PollEvery: 10 * time.Millisecond, Name: "node-1", Classes: []*class{cl},
+		Docker: dockerOptions{Socket: sock, PauseImage: "pause:1", Pull: "always"}}
+	drv := newDockerDriver(cfg.Docker)
+	return &harness{w: &wrapper{cfg: cfg, api: newRunnerAPI(r.srv.URL), driver: drv, sem: make(chan struct{}, cfg.MaxTasks)}, drv: drv, e: e, r: r, cl: cl}
 }
 
 func (h *harness) runClaimed(t *testing.T) {
 	t.Helper()
-	c, err := h.a.api.claimTask(context.Background(), h.cl.token, "node-1", "node-1")
+	c, err := h.w.api.claimTask(context.Background(), h.cl.token, "node-1", "node-1")
 	if err != nil || c == nil {
 		t.Fatalf("claim: %v %v", c, err)
 	}
-	h.a.runTask(context.Background(), h.cl, c)
+	h.w.runTask(context.Background(), h.cl, c)
 }
 
 func (h *harness) assertClean(t *testing.T) {
@@ -62,7 +64,7 @@ func (h *harness) assertClean(t *testing.T) {
 }
 
 func TestTaskPodLayout(t *testing.T) {
-	h := newHarness(t, dockerTask("Task-0001"))
+	h := newHarness(t, jobConfig("Task-0001"))
 	h.runClaimed(t)
 
 	h.e.mu.Lock()
@@ -84,28 +86,23 @@ func TestTaskPodLayout(t *testing.T) {
 }
 
 func TestContainerSpecs(t *testing.T) {
-	h := newHarness(t, dockerTask("Task-0001"))
-	// execute alone leaves the containers in the fake engine, so the specs can be read; runTask would remove them
-	c, _ := h.a.api.claimTask(context.Background(), h.cl.token, "n", "n")
-	tc, _ := h.a.api.taskConfig(context.Background(), c.TaskToken)
-	exit, err := h.a.execute(context.Background(), h.cl, c, tc, "t1")
-	if err != nil || exit != 0 {
-		t.Fatalf("execute: %d %v", exit, err)
-	}
+	h := newHarness(t, jobConfig("Task-0001"))
+	h.runClaimed(t)
+	n := "cci-" + shortID("Task-0001")
 	h.e.mu.Lock()
-	primary, svc, pause, init := h.e.byRole("primary")[0].spec, h.e.byRole("service")[0].spec, h.e.byRole("pause")[0].spec, h.e.byRole("init")[0].spec
+	primary, svc, pause, init := h.e.specs[n+"-primary"], h.e.specs[n+"-svc1"], h.e.specs[n+"-pause"], h.e.specs[n+"-init"]
 	h.e.mu.Unlock()
 
-	if got := primary.HostConfig.NetworkMode; got != "container:id-cci-t1-pause" || svc.HostConfig.NetworkMode != got {
+	if got := primary.HostConfig.NetworkMode; got != "container:id-"+n+"-pause" || svc.HostConfig.NetworkMode != got {
 		t.Errorf("primary and service must join the pause container's network: %q %q", got, svc.HostConfig.NetworkMode)
 	}
-	if pause.HostConfig.NetworkMode != "cci-t1" || init.HostConfig.NetworkMode != "none" {
+	if pause.HostConfig.NetworkMode != n || init.HostConfig.NetworkMode != "none" {
 		t.Errorf("pause on the task network, init on none: %q %q", pause.HostConfig.NetworkMode, init.HostConfig.NetworkMode)
 	}
 	if !slices.Equal(primary.Entrypoint, []string{"/opt/circleci/bin/orchestrator"}) || !slices.Equal(primary.Cmd, []string{"run-task"}) {
 		t.Errorf("primary command %v %v", primary.Entrypoint, primary.Cmd)
 	}
-	if !slices.Equal(primary.HostConfig.Binds, []string{"cci-t1-bin:/opt/circleci/bin"}) || len(svc.HostConfig.Binds) != 0 {
+	if !slices.Equal(primary.HostConfig.Binds, []string{n + "-bin:/opt/circleci/bin"}) || len(svc.HostConfig.Binds) != 0 {
 		t.Errorf("only the primary mounts the init volume: %v %v", primary.HostConfig.Binds, svc.HostConfig.Binds)
 	}
 	for _, s := range []ctrSpec{primary, svc, pause, init} {
@@ -149,7 +146,7 @@ func TestContainerSpecs(t *testing.T) {
 }
 
 func TestPrimaryFailureReportsAndCleansUp(t *testing.T) {
-	h := newHarness(t, dockerTask("Task-0002"))
+	h := newHarness(t, jobConfig("Task-0002"))
 	h.e.exit["primary"] = 3
 	h.runClaimed(t)
 	ev := h.r.eventsCopy()
@@ -164,8 +161,8 @@ func TestPrimaryFailureReportsAndCleansUp(t *testing.T) {
 }
 
 func TestKeepFailedLeavesTheContainersOfAFailedTask(t *testing.T) {
-	h := newHarness(t, dockerTask("Task-0009"), dockerTask("Task-0010"))
-	h.a.cfg.KeepFailed = true
+	h := newHarness(t, jobConfig("Task-0009"), jobConfig("Task-0010"))
+	h.drv.opts.KeepFailed = true
 	h.e.exit["primary"] = 1
 	h.runClaimed(t)
 	if len(h.e.ctrs) == 0 || len(h.e.networks) != 1 {
@@ -173,14 +170,14 @@ func TestKeepFailedLeavesTheContainersOfAFailedTask(t *testing.T) {
 	}
 	h.e.exit["primary"] = 0
 	h.runClaimed(t)
-	if n, _ := h.a.d.sweep(context.Background(), labelManaged); n == 0 {
+	if n, _ := h.drv.d.sweep(context.Background(), labelManaged); n == 0 {
 		t.Error("the start-up sweep must remove what was kept")
 	}
 	h.assertClean(t)
 }
 
 func TestSetupFailureIsUnclaimedAndCleanedUp(t *testing.T) {
-	h := newHarness(t, dockerTask("Task-0003"))
+	h := newHarness(t, jobConfig("Task-0003"))
 	h.e.failPull = "cimg/postgres:16.0"
 	h.runClaimed(t)
 	if ev := h.r.eventsCopy(); len(ev) != 2 || ev[0] != "unclaim:Task-0003" || ev[1] != "cleanup" {
@@ -193,7 +190,7 @@ func TestSetupFailureIsUnclaimedAndCleanedUp(t *testing.T) {
 }
 
 func TestSetupFailureWithNoRetriesLeftFails(t *testing.T) {
-	h := newHarness(t, dockerTask("Task-0004"))
+	h := newHarness(t, jobConfig("Task-0004"))
 	h.e.failPull = "cimg/base:stable"
 	h.r.unclaim409 = true
 	h.runClaimed(t)
@@ -219,7 +216,7 @@ func TestStartupSweepRemovesOnlyOurOrphans(t *testing.T) {
 	h.e.ctrs["id-b"] = &fakeCtr{name: "b", spec: ctrSpec{Labels: map[string]string{"app": "other"}}}
 	h.e.networks["n1"], h.e.networks["n2"] = ours, map[string]string{}
 	h.e.volumes["v1"], h.e.volumes["v2"] = ours, map[string]string{}
-	n, err := h.a.d.sweep(context.Background(), labelManaged)
+	n, err := h.drv.d.sweep(context.Background(), labelManaged)
 	if err != nil || n != 3 {
 		t.Fatalf("sweep: %d %v", n, err)
 	}
@@ -229,13 +226,13 @@ func TestStartupSweepRemovesOnlyOurOrphans(t *testing.T) {
 }
 
 func TestConcurrencyCapAndClaimOnlyWithFreeSlot(t *testing.T) {
-	h := newHarness(t, dockerTask("Task-0005"), dockerTask("Task-0006"), dockerTask("Task-0007"))
-	h.a.cfg.MaxTasks = 1
-	h.a.sem = make(chan struct{}, 1)
+	h := newHarness(t, jobConfig("Task-0005"), jobConfig("Task-0006"), jobConfig("Task-0007"))
+	h.w.cfg.MaxTasks = 1
+	h.w.sem = make(chan struct{}, 1)
 	h.e.hold = 150 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { h.a.run(ctx); close(done) }()
+	go func() { h.w.run(ctx); close(done) }()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if ev := h.r.eventsCopy(); len(ev) == 3 {
@@ -259,7 +256,7 @@ func TestTokensStayOutOfLogsAndErrors(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
-	h := newHarness(t, dockerTask("Task-0008"))
+	h := newHarness(t, jobConfig("Task-0008"))
 	h.e.exit["primary"] = 1
 	h.e.failPull = "pause:1"
 	h.runClaimed(t)
@@ -276,7 +273,7 @@ func TestTokensStayOutOfLogsAndErrors(t *testing.T) {
 // runClaimedMissing runs a claim whose config call fails (unknown task), to exercise that error path.
 func (h *harness) runClaimedMissing(t *testing.T) {
 	t.Helper()
-	h.a.runTask(context.Background(), h.cl, &claim{TaskToken: "task-token-9", Allocation: "x"})
+	h.w.runTask(context.Background(), h.cl, &claim{TaskToken: "task-token-9", Allocation: "x"})
 }
 
 func TestReadToken(t *testing.T) {
@@ -296,7 +293,7 @@ func TestReadToken(t *testing.T) {
 }
 
 func TestRegistryAuthAndAWS(t *testing.T) {
-	c := containerCfg{Auth: &authConfig{Auth: secret(base64.StdEncoding.EncodeToString([]byte("user:pw"))), ServerAddress: "r.example"}}
+	c := ContainerSpec{Auth: &RegistryAuth{Auth: secret(base64.StdEncoding.EncodeToString([]byte("user:pw"))), ServerAddress: "r.example"}}
 	a, err := registryAuth(&c)
 	if err != nil {
 		t.Fatal(err)
@@ -307,7 +304,7 @@ func TestRegistryAuthAndAWS(t *testing.T) {
 	if m["username"] != "user" || m["password"] != "pw" || m["serveraddress"] != "r.example" {
 		t.Errorf("auth %v", m)
 	}
-	if _, err := registryAuth(&containerCfg{AWSAuth: &struct{}{}}); err == nil {
+	if _, err := registryAuth(&ContainerSpec{AWSAuth: true}); err == nil {
 		t.Error("aws_auth must be rejected until it is supported")
 	}
 }

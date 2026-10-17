@@ -11,13 +11,6 @@ import (
 	"time"
 )
 
-// secret keeps a token out of logs and error messages: fmt prints it as ***.
-type secret string
-
-func (secret) String() string   { return "***" }
-func (s secret) Raw() string    { return string(s) }
-func (secret) GoString() string { return "***" }
-
 // runnerAPI is the part of the CircleCI runner API that container mode calls. The class token claims; the task
 // token that the claim returns does everything else.
 type runnerAPI struct {

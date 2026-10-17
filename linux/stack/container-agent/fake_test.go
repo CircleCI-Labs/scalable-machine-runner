@@ -19,6 +19,7 @@ type fakeEngine struct {
 	mu         sync.Mutex
 	order      []string // "create:<name>" and "start:<name>" in call order
 	ctrs       map[string]*fakeCtr
+	specs      map[string]ctrSpec // every container ever created, by name, kept after its removal
 	networks   map[string]map[string]string
 	volumes    map[string]map[string]string
 	pulled     []string
@@ -37,7 +38,7 @@ type fakeCtr struct {
 
 func newFakeEngine(t *testing.T) (*fakeEngine, string) {
 	t.Helper()
-	f := &fakeEngine{ctrs: map[string]*fakeCtr{}, networks: map[string]map[string]string{}, volumes: map[string]map[string]string{}, exit: map[string]int{}}
+	f := &fakeEngine{ctrs: map[string]*fakeCtr{}, specs: map[string]ctrSpec{}, networks: map[string]map[string]string{}, volumes: map[string]map[string]string{}, exit: map[string]int{}}
 	dir, err := os.MkdirTemp("", "cca")
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +134,7 @@ func (f *fakeEngine) serve(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&s)
 		name := q.Get("name")
 		f.ctrs["id-"+name] = &fakeCtr{name: name, spec: s}
+		f.specs[name] = s
 		f.order = append(f.order, "create:"+name)
 		reply(201, map[string]string{"Id": "id-" + name})
 	case p == "/containers/json":

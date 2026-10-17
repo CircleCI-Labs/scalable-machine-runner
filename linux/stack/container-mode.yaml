@@ -37,7 +37,9 @@ services:
       - {source: agent-main, target: /src/main.go, mode: 0444}
       - {source: agent-api, target: /src/api.go, mode: 0444}
       - {source: agent-docker, target: /src/docker.go, mode: 0444}
-      - {source: agent-task, target: /src/task.go, mode: 0444}
+      - {source: agent-driver, target: /src/driver.go, mode: 0444}
+      - {source: agent-driver-docker, target: /src/driver_docker.go, mode: 0444}
+      - {source: agent-wrapper, target: /src/wrapper.go, mode: 0444}
     init: true
     stop_grace_period: 5h5m   # the agent stops claiming on SIGTERM and lets running jobs finish (max run time 5h)
     hostname: "{{.Node.Hostname}}-container-agent"
@@ -94,7 +96,9 @@ secrets:
 configs:   # named after the SHA-256 of the file: ci/config-names.sh --write renames them after a change, and CI checks it
   agent-entrypoint: {name: machine-runner-swarm-container-agent-entrypoint-89b8049d9846, file: container-agent/entrypoint.sh}
   agent-gomod: {name: machine-runner-swarm-container-agent-gomod-3b67745ae025, file: container-agent/go.mod}
-  agent-main: {name: machine-runner-swarm-container-agent-main-d7b353a75804, file: container-agent/main.go}
-  agent-api: {name: machine-runner-swarm-container-agent-api-1dc23b34afa2, file: container-agent/api.go}
+  agent-main: {name: machine-runner-swarm-container-agent-main-ceadfb340a06, file: container-agent/main.go}
+  agent-api: {name: machine-runner-swarm-container-agent-api-ad93f2c55b40, file: container-agent/api.go}
   agent-docker: {name: machine-runner-swarm-container-agent-docker-8b40f21fd001, file: container-agent/docker.go}
-  agent-task: {name: machine-runner-swarm-container-agent-task-6acb55edd21f, file: container-agent/task.go}
+  agent-driver: {name: machine-runner-swarm-container-agent-driver-8ae9cc338595, file: container-agent/driver.go}
+  agent-driver-docker: {name: machine-runner-swarm-container-agent-driver-docker-95b6f0fdc737, file: container-agent/driver_docker.go}
+  agent-wrapper: {name: machine-runner-swarm-container-agent-wrapper-4e704e5c1001, file: container-agent/wrapper.go}

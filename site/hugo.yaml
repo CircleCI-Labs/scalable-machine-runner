@@ -81,7 +81,9 @@ params:
         linkText: MicroVM jobs
       - icon: server
         title: Linux and Windows Server
-        text: Linux amd64 and arm64, and Windows Server 2022 and 2025. Labels decide where each class runs. A mixed Linux and Windows cluster was verified by hand.
+        text: >-
+          Linux amd64 and arm64, and Windows Server 2022 and 2025. Labels decide where each class runs.
+          A mixed Linux and Windows cluster was verified by hand.
         link: docs/install/multi-node/
         linkText: Multi-node clusters
       - icon: shield-check

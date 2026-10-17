@@ -11,9 +11,12 @@
 #   - release     X.Y.Z, X.Y, X and latest for a first release; a newer patch moves the floating tags and leaves X.Y.Z of the old one; an old
 #                 release finished late moves nothing but its own tag; an X.Y.Z that is another image is refused
 #   - rehearse    the throwaway image of the signing rehearsal (without the signing, which needs the OIDC token of a CircleCI job)
+#   - signing     the signing and the check of the signature, with a stand-in for cosign (a real signature needs the OIDC token of a CircleCI job): the rehearsal
+#                 signs and verifies with the same storage mode flag; the check tries again (six tries) when nothing verifies or no signature can be read,
+#                 and then shows cosign tree and the sha256- tags; a signature of another ref fails at once, with no second try
 #   - credentials without DOCKERHUB_USERNAME and DOCKERHUB_TOKEN, push, assemble and edge say that nothing was pushed, and exit 0
 #
-# Usage: ci/tests/proxy-image.sh      Needs Docker (buildx, QEMU for the other platforms: ci/proxy-image.sh setup), crane, and a git history.
+# Usage: ci/tests/proxy-image.sh      Needs Docker (buildx, QEMU for the other platforms: ci/proxy-image.sh setup), crane, openssl, jq and a git history.
 set -euo pipefail
 # The publish jobs of main run this test with REQUIRE_CREDENTIALS=true (fail closed without Docker Hub credentials). This test drives the
 # credential handling itself, row by row (ci/tests/require-credentials.sh covers the strict mode), so it must not inherit that setting.
@@ -76,6 +79,87 @@ rehearsal_image() {
   [[ ${o} == *"throwaway image"* ]] && [[ ${o} == *"signing skipped"* ]] && [ -n "$(crane digest "localhost:${port}/signing-rehearsal:rehearsal")" ]
 }
 check rehearsal-makes-a-throwaway-image rehearsal_image
+
+# --- the signing and the check of the signature, with a stand-in for cosign -----------------------------------------------------------
+# The stand-in logs its calls, fails `verify` and gives no bundle to `download signature` for as many calls as the scenario says, and then
+# answers like cosign. The bundle holds a certificate with the ref extension (as ci/tests/signature-ref.sh makes it).
+stubs=${work}/stubs
+mkdir -p "${stubs}"
+openssl ecparam -name prime256v1 -genkey -noout -out "${work}/stub-key.pem" 2> /dev/null
+stub_bundle() { # REF: a Sigstore bundle whose certificate names REF
+  openssl req -x509 -new -key "${work}/stub-key.pem" -days 1 -subj "/CN=stub" -addext "1.3.6.1.4.1.57264.1.14=ASN1:UTF8String:$1" -outform DER -out "${work}/stub.der" 2> /dev/null
+  jq -nc --arg c "$(base64 -w0 < "${work}/stub.der")" '{mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json", verificationMaterial: {certificate: {rawBytes: $c}}}'
+}
+cat > "${stubs}/cosign" << 'STUB'
+#!/usr/bin/env bash
+echo "cosign $*" >> "${STUB_STATE}/calls"
+count() { local n; n=$(( $(cat "${STUB_STATE}/$1" 2> /dev/null || echo 0) + 1 )); echo "${n}" > "${STUB_STATE}/$1"; echo "${n}"; }
+case $1 in
+  sign) exit 0 ;;
+  verify) [ "$(count verify)" -gt "${STUB_VERIFY_FAILS:-0}" ] || { echo "Error: no signatures found" >&2; exit 1; }; echo '[]' ;;
+  download) [ "$(count download)" -gt "${STUB_DOWNLOAD_EMPTY:-0}" ] && cat "${STUB_BUNDLE}" ;;
+  tree) echo "STUB-TREE $*" ;;
+esac
+STUB
+cat > "${stubs}/circleci" << 'STUB'
+#!/usr/bin/env bash
+echo "not-a-real-token"
+STUB
+chmod +x "${stubs}/cosign" "${stubs}/circleci"
+mkdir -p "${stubs}/with-crane"
+cp "${stubs}/cosign" "${stubs}/circleci" "${stubs}/with-crane/"
+cat > "${stubs}/with-crane/crane" << 'STUB'
+#!/usr/bin/env bash
+printf '%s\n' latest sha-0123456789ab sha256-aaaa1111 sha256-bbbb2222.sig
+STUB
+chmod +x "${stubs}/with-crane/crane"
+export STUB_STATE=${work}/stub-state STUB_BUNDLE=${work}/stub-bundle.json
+mkdir -p "${STUB_STATE}"
+stub_digest=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+calls() { grep -c "^cosign $1" "${STUB_STATE}/calls" || true; }   # how many times the stand-in got a subcommand
+verify_with() { # BIN_DIR BUNDLE_REF OUTPUT_FILE [VAR=VALUE...]: ci/proxy-image.sh verify, signed (PROXY_IMAGE_SIGN back to its default)
+  local bin=$1 ref=$2 outfile=$3; shift 3
+  rm -f "${STUB_STATE}"/*
+  stub_bundle "${ref}" > "${STUB_BUNDLE}"
+  env -u PROXY_IMAGE_SIGN CI_TOOLS_BIN="${bin}" CIRCLE_PROJECT_ID=p PIPELINE_DEFINITION_ID=d SIGN_VERIFY_DELAYS="0 0 0 0 0" "$@" \
+    "${script}" verify "${stub_digest}" > "${outfile}" 2>&1
+}
+verify_first_try() { verify_with "${stubs}" refs/heads/main "${work}/v1.log" && [ "$(calls verify)" = 1 ] && [ "$(calls download)" = 1 ]; }
+check verify-passes-at-the-first-try verify_first_try
+verify_late() { # nothing verifies for three calls: the fourth passes
+  verify_with "${stubs}" refs/heads/main "${work}/v2.log" STUB_VERIFY_FAILS=3 && [ "$(calls verify)" = 4 ] && grep -q 'try 3 of 6 failed (verify)' "${work}/v2.log" && ! grep -q STUB-TREE "${work}/v2.log"
+}
+check verify-tries-again-until-the-signature-is-listed verify_late
+download_late() { # the signature verifies, but the list of signatures is empty for two reads
+  verify_with "${stubs}" refs/heads/main "${work}/v3.log" STUB_DOWNLOAD_EMPTY=2 && [ "$(calls download)" = 3 ] && grep -q 'failed (download)' "${work}/v3.log"
+}
+check the-ref-check-tries-again-while-no-signature-can-be-read download_late
+never_listed() { # six tries, then the diagnostics and a failure: the check is not weakened to pass
+  ! verify_with "${stubs}/with-crane" refs/heads/main "${work}/v4.log" STUB_VERIFY_FAILS=99 && [ "$(calls verify)" = 6 ] && grep -q 'does not verify against' "${work}/v4.log" &&
+    grep -q 'STUB-TREE tree' "${work}/v4.log" && grep -q '^sha256-aaaa1111$' "${work}/v4.log" &&
+    grep -q '^sha256-bbbb2222.sig$' "${work}/v4.log" && ! grep -qE '^(latest|sha-0123456789ab)$' "${work}/v4.log"
+}
+check a-signature-that-is-never-listed-fails-with-the-diagnostics never_listed
+never_read() {
+  ! verify_with "${stubs}/with-crane" refs/heads/main "${work}/v5.log" STUB_DOWNLOAD_EMPTY=99 && [ "$(calls download)" = 6 ] && grep -q 'reads no signature' "${work}/v5.log" && grep -q 'STUB-TREE tree' "${work}/v5.log"
+}
+check a-signature-that-cannot-be-read-fails-after-six-tries never_read
+other_ref() { # the signature verifies and names another ref: no second try
+  ! verify_with "${stubs}/with-crane" refs/heads/feature/x "${work}/v6.log" && [ "$(calls verify)" = 1 ] && [ "$(calls download)" = 1 ] && grep -q 'does not name refs/heads/main' "${work}/v6.log"
+}
+check a-signature-of-another-ref-fails-at-once other_ref
+rehearsal_same_mode() { # the signing rehearsal signs and verifies in one storage mode, and its ref check refuses the other ref
+  local o s v
+  rm -f "${STUB_STATE}"/*
+  stub_bundle refs/heads/feature/x > "${STUB_BUNDLE}"
+  o=$(env -u PROXY_IMAGE_SIGN CI_TOOLS_BIN="${stubs}" CIRCLE_BRANCH=feature/x CIRCLE_SHA1="${newer}" CIRCLE_PROJECT_ID=p PIPELINE_DEFINITION_ID=d REHEARSAL_REGISTRY="localhost:${port}" \
+    SIGN_VERIFY_DELAYS="0 0 0 0 0" "${script}" rehearse 2>&1) || { echo "${o}"; return 1; }
+  [[ ${o} == *"the ref check works"* ]] || { echo "${o}"; return 1; }
+  s=$(grep '^cosign sign ' "${STUB_STATE}/calls" | head -n 1)
+  v=$(grep '^cosign verify ' "${STUB_STATE}/calls" | head -n 1)
+  [[ ${s} == *"--new-bundle-format=true"* ]] && [[ ${v} == *"--new-bundle-format=true"* ]] || { cat "${STUB_STATE}/calls"; return 1; }
+}
+check the-rehearsal-signs-and-verifies-in-the-same-mode rehearsal_same_mode
 
 export DOCKERHUB_USERNAME=test DOCKERHUB_TOKEN=test
 short_new=${newer:0:12}

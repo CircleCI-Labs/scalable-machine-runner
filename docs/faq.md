@@ -6,13 +6,13 @@ page-description: Short answers about the Swarm runner stack: what it is, suppor
 
 # FAQ
 
-## What is this repository?
+## What is machine runner swarm?
 
-Docker Swarm stack files, a Linux entrypoint, a service that keeps the runner on every node, optional setup helpers, and documentation. Together they run CircleCI machine runner 3 in containers, with one resource class for each Swarm service and a new container for every job. Refer to [Concepts](concepts.md).
+It runs CircleCI machine runner 3 as Docker Swarm services: one resource class for each service, and a new container for every job. It ships stack files, a Linux entrypoint, a runner distributor service, optional setup helpers and these docs. See [Concepts](concepts.md).
 
 ## Does CircleCI support it?
 
-No. It is part of CircleCI Labs, a pre-release `0.x` project, and CircleCI support does not cover it. Field engineering handles issues on a best-effort basis. Your normal CircleCI support covers the runner itself, the platform, and your resource classes. [What is tested](../README.md#what-is-tested) says how each claim is checked, and which are not.
+No. See [Support](../README.md#support). Your normal CircleCI support covers the runner itself, the platform, and your resource classes. [What is tested](../README.md#what-is-tested) says how each claim is checked, and which are not.
 
 ## What must I build?
 
@@ -50,7 +50,7 @@ Choose by what you already run and the isolation you need.
 | A boundary stronger than a container, privileged or KVM jobs, a full OS, autoscaling | [Machine runner orchestrator](https://circleci.com/docs/guides/execution-runner/machine-runner-orchestrator/): a VM for each job on Kubernetes with KubeVirt, and the token stays out of the VM ([comparison](security.md#compared-with-the-official-runner-installs)) |
 | One host or a few, jobs that need the whole machine | [Machine runner 3 on a host](https://circleci.com/docs/guides/execution-runner/runner-overview/#choosing-a-runner-execution-environment): the simplest setup, nothing separates one job from the next |
 | The same, in a container | [Machine runner 3 on Docker](https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-docker/): the container is reused, so the environment is not clean |
-| Docker hosts or Windows containers, no Kubernetes, a clean container for every job | This repository: replicas, placement, secrets and rolling updates. No CircleCI support, no autoscaling, no node creation, and containers share the host kernel |
+| Docker hosts or Windows containers, no Kubernetes, a clean container for every job | Machine runner swarm: replicas, placement, secrets and rolling updates. No CircleCI support, no autoscaling, no node creation, and containers share the host kernel |
 
 The stack files use only core Swarm features. To move to the orchestrator or a plain machine runner later, keep the resource class names, and jobs with `machine: true` stay as they are. Container runner needs jobs that use a `docker:` executor.
 
@@ -69,7 +69,7 @@ The project can state what it checks, and cannot promise the future of Swarm.
 - **What it uses.** Core Swarm features only: services, secrets, configs, overlay networks, placement constraints, rolling updates.
 - **Docker versions.** CI runs Docker 29.4.2 on Linux and 29.4.0 on Windows. The documented minimum is 24 on Linux and 28.0 on Windows ([Linux](install-linux.md#prerequisites), [Windows](install-windows.md#prerequisites)).
 - **The way out.** Resource class names are CircleCI objects, so jobs with `machine: true` keep their class when you move it ([alternatives](#why-swarm-and-not-container-runner-or-another-runner)).
-- **Support.** CircleCI Labs, `0.x`, best effort, no commitment on how long it is maintained.
+- **Support.** Best effort, with no commitment on how long it is maintained ([Support](../README.md#support)).
 
 ## Does it support macOS?
 
@@ -100,7 +100,7 @@ Self-hosted runners need at least one credit on your account, although runner co
 Swarm has no autoscaling, so you choose the number of replicas.
 
 - **Permanent.** Edit `deploy.replicas` in your stack file and deploy again with the same files ([Choose replica counts](resource-classes.md#choose-replica-counts)). To go beyond one node, add nodes ([Multi-node clusters](multi-node.md)).
-- **Quick.** `docker service scale runners_linux-default=4`. The next `docker stack deploy` resets it. A scale-down stops containers: on Linux a running job finishes first, and on Windows it is killed ([why](operations.md#stop-a-busy-windows-container)).
+- **Quick.** `docker service scale runners_linux-default=4`. The next `docker stack deploy` resets it. A scale-down stops containers: on Linux a running job finishes first. On Windows, scale down only while the class is idle ([why](operations.md#stop-a-busy-windows-container)).
 - **Queue depth.** Ask the runner API with a personal API token, not a resource class token:
 
   ```bash
@@ -145,7 +145,7 @@ Yes, with a persistent class. It gives up the clean environment, so use it only 
 
 ## Can it run Docker executor jobs?
 
-As a prototype, yes. The classes of this repository run jobs with `machine: true`. [Container mode](container-mode.md) adds a Swarm service on each opted-in Linux node that runs jobs with a `docker:` list and its service containers, as container runner does on Kubernetes. It has no SSH reruns and no Docker layer caching, and it has not yet run against the real CircleCI API. A resource class serves one mode, so give container mode its own classes and tokens. For production Docker executor jobs today, use container runner.
+As a prototype, yes. The classes of machine runner swarm run jobs with `machine: true`. [Container mode](container-mode.md) adds a Swarm service on each opted-in Linux node that runs jobs with a `docker:` list and its service containers, as container runner does on Kubernetes. It has no SSH reruns and no Docker layer caching, and it has not yet run against the real CircleCI API. A resource class serves one mode, so give container mode its own classes and tokens. For production Docker executor jobs today, use container runner.
 
 ## Can I use Rerun job with SSH?
 
@@ -153,7 +153,14 @@ Yes, with the add-on file `ssh-rerun.yaml`, which defines `linux-default-ssh` (`
 
 ## Can a job read the runner token?
 
-Not in a single-task class, with or without sudo: the runner container holds only a placeholder, and the [token proxy](security.md#the-token-proxy) holds the class token. On Windows no test asserts this, and a hostile job on the same host as the proxy can reach the token, because process isolation is not a security boundary ([Windows](security.md#windows)). In a persistent class the container holds the token: on Linux a job that uses sudo can read it (the shipped class disables sudo), and on Windows every job can. Use BitLocker and one token for each class and host. A holder of a token can run a rogue runner on that class, so rotate tokens ([how](operations.md#rotate-a-runner-token)). Refer to [Token model on each OS](security.md#token-model-on-each-os).
+| Class | Can a job read the class token? |
+|---|---|
+| Linux, single-task | No, with or without sudo. The runner holds a placeholder and the [token proxy](security.md#the-token-proxy) holds the token |
+| Windows, single-task | No test asserts it. A hostile job on the proxy's host can reach it ([Windows](security.md#windows)) |
+| Linux, persistent | No by default (no sudo). With `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"`, yes |
+| Windows, persistent | Yes, every job |
+
+A job that escapes onto the proxy's node reads every token. Use BitLocker, one token for each class and host, and [rotate tokens](operations.md#rotate-a-runner-token). A holder of a token can run a rogue runner on that class. See [Token model on each OS](security.md#token-model-on-each-os).
 
 ## What is the token proxy, and what happens when it is down?
 
@@ -167,15 +174,11 @@ When it is down, no runner can claim and jobs wait in CircleCI. Idle runners fai
 
 ## Why does a Windows job end when I update or stop a service?
 
-Stopping a busy stock Server Core container from outside kills its job after about 5 seconds, whatever `stop_grace_period` says. Change services while the class is idle, or rerun the interrupted jobs. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
+Stopping a busy Windows container kills its job after about 5 seconds, whatever `stop_grace_period` says. Change a class only while it is idle, or rerun the interrupted jobs ([why](operations.md#stop-a-busy-windows-container)).
 
 ## Which runner version do the nodes run?
 
 The `runner-distributor` service decides. The default is an exact pin, with the tarball SHA-256 values in the stack file: the newest runner version that CI tests, bumped by each release. Nodes keep it until you change it. To float, set `MACHINE_RUNNER_SWARM_RUNNER_VERSION` to `3.1`, `3` or `current`. Floating is weaker: the distributor trusts the manifest hash, and a newer runner can change the protocol that the proxy depends on, so the proxy fails closed and jobs wait. Pin an exact version in production. `runner-distributor-windows` works the same way. Refer to [The version policy](operations.md#the-version-policy) and [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
-
-## How does the runner version policy compare with machine runner 3, container runner and the orchestrator?
-
-It follows them: machine runner 3 on a host has no auto-update, container runner and the orchestrator take the image tag from Helm values, and here it is a setting of the distributor, an exact pin by default. Refer to [How this compares](operations.md#how-this-compares-with-machine-runner-3-container-runner-and-the-orchestrator).
 
 ## How do I verify a release?
 
@@ -199,7 +202,7 @@ Jobs run in unprivileged containers on a shared kernel, so some belong on anothe
 
 ## Do proxies and custom certificate authorities work?
 
-The stack sets nothing for them, and this repository does not test them.
+The stack sets nothing for them, and nothing tests them.
 
 - **Proxy.** Set `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` under `environment` of the service. Jobs inherit them. On Linux, also set `HTTPS_PROXY` on `token-proxy`, which calls `runner.circleci.com` for the runners, and add `NO_PROXY: token-proxy` to the runners. Test a checkout through the proxy before you roll out a class ([Egress hosts](security.md#egress-hosts)).
 - **Certificate authority.** Add your CA to a custom image and run `update-ca-certificates`, or mount a CA bundle read-only and point `SSL_CERT_FILE` at it. Windows images need the CA in the image. On Linux, the token proxy needs the CA too when a proxy or your CircleCI server uses it: mount the bundle into `token-proxy` and set `SSL_CERT_FILE` there ([Images](images.md)).

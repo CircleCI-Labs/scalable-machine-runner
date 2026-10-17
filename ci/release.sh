@@ -91,7 +91,7 @@ install_tools() {
 # The stack files pin one exact runner version by default, the newest that CI tests (docs/releasing.md says how a release bumps it).
 # It must be the same in every stack file, and CircleCI's manifest must still list it for every platform that the stack runs on.
 check_runner_pin() {
-  local f pin first= manifest_file tmp_manifest=
+  local f pin first='' manifest_file tmp_manifest=''
   for f in linux/stack/runners.yaml linux/stack/microvm.yaml windows/stack/runners.yaml; do
     pin="$(sed -n 's/^  MACHINE_RUNNER_SWARM_RUNNER_VERSION: \${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-\([0-9][0-9.]*\)}.*/\1/p' "${f}")"
     [ -n "${pin}" ] || die "${f} has no exact default of MACHINE_RUNNER_SWARM_RUNNER_VERSION"

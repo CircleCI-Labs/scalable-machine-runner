@@ -31,16 +31,20 @@ check() {
 
 # shellcheck source=/dev/null
 . <(sed -n '34,74p;79,118p' "${repo}/ci/security-scan.sh")
-out="${tmp}/reports"
 export TRIVY_BIN="${tmp}/bin/trivy"
-infra_n=0 infra_failing=0 infra_unscannable=0 infra_high=0 report_n=0 report_crit=0 report_high=0
+# shellcheck disable=SC2034  # out is read by scan_image from the sourced script
+out="${tmp}/reports"
+# shellcheck disable=SC2034  # infra_n is updated by scan_image
+infra_n=0 infra_failing=0 infra_unscannable=0
+# shellcheck disable=SC2034  # scan_image updates the counters that scan_images uses
+infra_high=0 report_n=0 report_crit=0 report_high=0
 rc=0
 scan_image "alpine:3.24@sha256:0000000000000000000000000000000000000000000000000000000000000001" infra || rc=$?
 check "infra unscannable returns 1" 1 "${rc}"
 check "infra unscannable counted" "1" "${infra_unscannable}"
 check "infra failing (CRITICAL) unchanged" "0" "${infra_failing}"
 
-infra_n=0 infra_failing=0 infra_unscannable=0
+infra_failing=0 infra_unscannable=0
 rc=0
 scan_image "cimg/base:2026.10@sha256:0000000000000000000000000000000000000000000000000000000000000002" report || rc=$?
 check "report-only unscannable returns 0" 0 "${rc}"

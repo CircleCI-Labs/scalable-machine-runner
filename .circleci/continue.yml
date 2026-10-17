@@ -240,7 +240,7 @@ jobs:
           name: shellcheck -S warning (all *.sh files and sh/bash shebang scripts)
           command: |
             find . -path ./.git -prune -o -type f -print | while read -r f; do
-              case "$f" in
+              case "${f##*/}" in
                 *.sh|*.bash) echo "$f" ;;
                 *.*) ;;
                 *) head -n 1 "$f" 2>/dev/null | grep -Eq '^#!.*[/ ](ba)?sh( |$)' && echo "$f" ;;
@@ -248,6 +248,8 @@ jobs:
             done | sort > /tmp/shell-files
             echo "Checking $(wc -l < /tmp/shell-files) files:"; cat /tmp/shell-files
             [ -s /tmp/shell-files ] || { echo "no shell scripts found"; exit 1; }
+            grep -qxF ./linux/stack/circleci-runner-entrypoint /tmp/shell-files \
+              || { echo "linux/stack/circleci-runner-entrypoint must be shellchecked (shebang script)"; exit 1; }
             xargs shellcheck -S warning < /tmp/shell-files
 
   lint-dockerfiles:

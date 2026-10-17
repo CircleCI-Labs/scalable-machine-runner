@@ -130,17 +130,66 @@ function Get-SwarmServiceTask {
     return @(ConvertFrom-SwarmServiceTaskLine -Line $r.Output)
 }
 
+function Get-SwarmServiceSchedulingEarlyFailure {
+    <#
+    .SYNOPSIS
+        When a service never gets a runnable task, returns a short reason; otherwise $null so the caller keeps waiting.
+    #>
+    param([Parameter(Mandatory = $true)][string] $Service, [string] $DockerCommand = 'docker')
+    $tasks = @(Get-SwarmServiceTask -Service $Service -DockerCommand $DockerCommand)
+    if ($tasks.Count -eq 0) {
+        return 'Swarm scheduled no tasks for the service (placement constraints may be unmet)'
+    }
+    foreach ($t in $tasks) {
+        if ($t.CurrentState -notmatch '^(Failed|Rejected)\b') { return $null }
+    }
+    $errors = @($tasks | ForEach-Object { $_.Error.Trim() } | Where-Object { $_ })
+    $msg = 'every service task failed or was rejected'
+    if ($errors.Count -gt 0) { $msg += ": $($errors -join '; ')" }
+    return $msg
+}
+
+function Get-SwarmServiceSchedulingDetail {
+    param([Parameter(Mandatory = $true)][string] $Service, [string] $DockerCommand = 'docker')
+    $sections = @()
+    $labels = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('node', 'inspect', 'self', '--format', '{{json .Spec.Labels}}')
+    $sections += '--- docker node inspect self (labels) ---'
+    $sections += $labels.Output
+    $placement = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('service', 'inspect', '--format', '{{json .Spec.TaskTemplate.Placement}}', $Service)
+    $sections += '--- docker service inspect (placement) ---'
+    $sections += $placement.Output
+    return $sections
+}
+
 function Wait-SwarmCondition {
     <#
     .SYNOPSIS
         Polls a script block until it returns $true or the timeout passes. Returns the last result.
+        When -Service and -EarlyFailureGraceSeconds are set, stops early if Get-SwarmServiceSchedulingEarlyFailure
+        finds no tasks or only failed/rejected tasks after the grace period (slow image pulls still get the full timeout).
     #>
-    param([Parameter(Mandatory = $true)][scriptblock] $Condition, [int] $TimeoutSeconds = 120, [int] $IntervalSeconds = 2)
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    param(
+        [Parameter(Mandatory = $true)][scriptblock] $Condition,
+        [int] $TimeoutSeconds = 120,
+        [int] $IntervalSeconds = 2,
+        [string] $Service = '',
+        [int] $EarlyFailureGraceSeconds = 0,
+        [string] $DockerCommand = 'docker'
+    )
+    $script:SwarmWaitEarlyFailure = $null
+    $started = Get-Date
+    $deadline = $started.AddSeconds($TimeoutSeconds)
     $ok = $false
     while ((Get-Date) -lt $deadline) {
         $ok = [bool](& $Condition)
         if ($ok) { return $true }
+        if ($Service -and $EarlyFailureGraceSeconds -gt 0 -and ((Get-Date) - $started).TotalSeconds -ge $EarlyFailureGraceSeconds) {
+            $early = Get-SwarmServiceSchedulingEarlyFailure -Service $Service -DockerCommand $DockerCommand
+            if ($early) {
+                $script:SwarmWaitEarlyFailure = $early
+                return $false
+            }
+        }
         Start-Sleep -Seconds $IntervalSeconds
     }
     return $ok
@@ -262,6 +311,7 @@ function Install-SwarmDistributor {
         [string] $Stack = 'runners',
         [string] $StackFile = (Join-Path $PSScriptRoot '..\stack\runners.yaml'),
         [int] $TimeoutSeconds = 1500,
+        [int] $EarlyFailureGraceSeconds = 180,
         [string] $DockerCommand = 'docker',
         [string] $ExtraOverride = ''
     )
@@ -284,12 +334,17 @@ function Install-SwarmDistributor {
     if ($r.ExitCode -ne 0) { return @{ Ok = $false; Detail = "docker stack deploy failed: $($r.Output -join ' ')"; Log = '' } }
     $service = "${Stack}_runner-distributor-windows"
     $log = ''
-    $ok = Wait-SwarmCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 10 -Condition {
+    $ok = Wait-SwarmCondition -TimeoutSeconds $TimeoutSeconds -IntervalSeconds 10 -Service $service -EarlyFailureGraceSeconds $EarlyFailureGraceSeconds -DockerCommand $DockerCommand -Condition {
         $script:distLog = ((Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('service', 'logs', '--raw', $service)).Output -join "`n")
         ($script:distLog -match '\[ ok \] current -> versions') -and ($script:distLog -match '\[ ok \] git\\current -> git')
     }
     $log = $script:distLog
-    $detail = "the distributor did not install the runner and Git within ${TimeoutSeconds}s"
+    $early = $script:SwarmWaitEarlyFailure
+    if ($early) {
+        $detail = "the distributor stopped after ${EarlyFailureGraceSeconds}s: $early"
+    } else {
+        $detail = "the distributor did not install the runner and Git within ${TimeoutSeconds}s"
+    }
     if (-not $ok) {
         $stockRef = 'mcr.microsoft.com/windows/servercore'
         $sections = @()
@@ -304,6 +359,7 @@ function Install-SwarmDistributor {
         $imgs = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('image', 'ls', '--filter', "reference=$stockRef")
         $sections += "--- docker image ls (reference=$stockRef) ---"
         $sections += $imgs.Output
+        if ($early) { $sections += @(Get-SwarmServiceSchedulingDetail -Service $service -DockerCommand $DockerCommand) }
         $log = ($sections | ForEach-Object { if ($_ -is [string]) { $_ } else { "$_" } }) -join "`n"
         $detail = "$detail`n$log"
     }
@@ -354,5 +410,5 @@ function Measure-SwarmFakeJobLine {
 }
 
 Export-ModuleMember -Function Invoke-SwarmDocker, Write-SwarmCheck, Get-SwarmCheckCount, Clear-SwarmCheckCount, Get-SwarmHostBuild, Get-SwarmWindowsTag,
-Get-SwarmImageBuild, Test-SwarmProcessIsolation, ConvertFrom-SwarmServiceTaskLine, Get-SwarmServiceTask, Wait-SwarmCondition, Get-SwarmAdvertiseAddress,
+Get-SwarmImageBuild, Test-SwarmProcessIsolation, ConvertFrom-SwarmServiceTaskLine, Get-SwarmServiceTask, Get-SwarmServiceSchedulingEarlyFailure, Get-SwarmServiceSchedulingDetail, Wait-SwarmCondition, Get-SwarmAdvertiseAddress,
 Initialize-SwarmCluster, Get-SwarmNodeId, Grant-SwarmAuthenticatedUserRead, Initialize-SwarmFakeRunner, Get-SwarmStackEnvironment, ConvertTo-SwarmEnvArgument, Get-SwarmStockMountArgument, Get-SwarmEncodedCommandArgument, Install-SwarmDistributor, Measure-SwarmFakeJobLine

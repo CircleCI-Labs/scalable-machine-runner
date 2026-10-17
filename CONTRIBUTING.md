@@ -82,6 +82,8 @@ The Linux tests run a Swarm inside `docker:dind` containers, so your own Docker 
 
 Each Linux test prints `RESULT` lines and exits 0 when it passes. `run-all.sh` runs all of them against one shared pair of Docker-in-Docker containers.
 
+CI runs the groups as four parallel jobs, each with its own list of groups (`linux-swarm` in `.circleci/continue.yml`). A new test goes into `all` in `run-all.sh` and into one of those lists; `lint-circleci` fails when a group is in no list or in two. Refer to [CI/CD](docs/ci.md#linux-jobs-without-a-token) for the lists and their durations.
+
 | Test | What it checks |
 |---|---|
 | `stack-config.sh` | `docker stack config` for every combination of stack files, the settings of each service, and the names of the Swarm configs. Needs no daemon |

@@ -24,7 +24,7 @@ version: 2.1
 #
 # The jobs of the token proxy image (docs/releasing.md, "The token proxy image") build it for every platform and test it in every pipeline,
 # and on main they push it to Docker Hub (sha-<12> only) with the context scalable-machine-runner-dockerhub. The job proxy-image-edge tags edge
-# after linux-swarm and the e2e groups have passed, and the release job gives the release tags (X.Y.Z, X.Y, X and latest, the default of the stack
+# after the four linux-swarm jobs and the e2e groups have passed, and the release job gives the release tags (X.Y.Z, X.Y, X and latest, the default of the stack
 # files) to the image of its commit. No other job moves a tag. Scan reports and logs are stored as job artifacts.
 
 parameters:
@@ -432,7 +432,7 @@ jobs:
       The token proxy (proxy/): gofmt, go vet, the unit tests with the race detector, and the static builds for every platform of
       CircleCI's runner manifest (linux amd64, arm64, ppc64le and s390x, windows amd64 and arm64: ci/build-proxy.sh). The windows/amd64
       build goes on in the workspace: the Windows jobs put it into the Windows image. The Linux image is built by proxy-image-linux, and
-      the proxy in a Swarm is tested by linux-swarm (linux/tests/proxy.sh).
+      the proxy in a Swarm is tested by linux-swarm-proxy (linux/tests/proxy.sh).
     docker:
       - image: golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8
     resource_class: small
@@ -666,9 +666,10 @@ jobs:
   proxy-image-edge:
     description: >
       The last job of the pipeline of main (the parameter release: main with both e2e tokens, so every test is on). It requires
-      proxy-image-publish, linux-swarm (which runs the image in a Swarm: linux/tests/proxy.sh) and the four e2e groups, then checks the signature of
-      sha-<12> and tags it edge, unless a newer commit is on main (ci/proxy-image.sh edge). Until it runs, edge is the image of an earlier commit
-      that passed everything. It is not a requirement of the release, which does not need edge (lint-circleci lists it as optional).
+      proxy-image-publish, the four linux-swarm jobs (linux-swarm-proxy runs the image in a Swarm: linux/tests/proxy.sh) and the four e2e
+      groups, then checks the signature of sha-<12> and tags it edge, unless a newer commit is on main (ci/proxy-image.sh edge). Until it runs,
+      edge is the image of an earlier commit that passed everything. It is not a requirement of the release, which does not need edge
+      (lint-circleci lists it as optional).
     docker:
       - image: cimg/base:2026.10@sha256:64becfab2860932391d834a770033665874e287a655dbef26e38df060414a79a
     resource_class: small
@@ -694,8 +695,17 @@ jobs:
       node with no install, a joining node, an upgrade under load, a rollback, current following the
       manifest, the major-version guard, pruning, a tampered binary, a wrong SHA-256, CircleCI's real
       manifest), persistent mode, draining, network isolation and the entrypoint unit tests.
+      One job runs the groups of its parameter `groups` (the names that run-all.sh takes), and the workflow runs it four times, so that
+      the groups run in parallel on four VMs. Together the four lists are the whole suite: lint-circleci compares them with
+      `linux/tests/run-all.sh --list`.
     # The stack reserves 2 to 4 CPUs and 4 to 8 GB per replica, and the test Swarm has two nodes on this one VM:
     # on medium and large VMs the placement and network tests find no room for their replicas.
+    parameters:
+      groups:
+        type: string
+        description: >
+          The test groups to run, separated by spaces: the arguments of linux/tests/run-all.sh (stack-config, helper, ephemerality, exit80,
+          token, task, proxy, placement, persistent, drain, limits, network, distributor, bats).
     executor: linux-vm-xlarge
     steps:
       - checkout
@@ -703,11 +713,11 @@ jobs:
           name: Docker versions
           command: docker version --format 'docker client {{.Client.Version}}, server {{.Server.Version}}'
       - run:
-          name: Every Linux test, sharing one pair of docker:dind containers (linux/tests/run-all.sh)
+          name: Linux tests (<< parameters.groups >>), sharing one pair of docker:dind containers (linux/tests/run-all.sh)
           no_output_timeout: 30m
           command: |
             mkdir -p /tmp/reports
-            linux/tests/run-all.sh 2>&1 | tee /tmp/reports/run-all.txt
+            linux/tests/run-all.sh << parameters.groups >> 2>&1 | tee /tmp/reports/run-all.txt
       - store_artifacts:
           path: /tmp/reports
           destination: reports
@@ -1332,6 +1342,16 @@ jobs:
               | [$jobs[].key | select(IN($needed[]) | not) | select(IN("release", $gate) or startswith("serial-end-") or IN($optional[]) | not)] - $required
               | if length > 0 then "release does not require: " + join(", ") | halt_error(1) else empty end'
             echo "every job of the ci workflow is a requirement of the release"
+      - run:
+          name: The linux-swarm jobs run every group of linux/tests/run-all.sh, each once
+          command: |
+            # A group that no job lists never runs, and one that two jobs list runs twice.
+            yq -o=json '.workflows.ci.jobs' .circleci/continue.yml | jq -r '
+              map(select(type == "object" and has("linux-swarm")) | ."linux-swarm".groups | split(" ") | map(select(. != "")))
+              | add | sort | .[]' > /tmp/ci-groups.txt
+            linux/tests/run-all.sh --list | sort > /tmp/all-groups.txt
+            diff /tmp/all-groups.txt /tmp/ci-groups.txt || { echo "the linux-swarm jobs and run-all.sh --list differ (< run-all.sh, > the jobs)"; exit 1; }
+            echo "the linux-swarm jobs run all $(wc -l < /tmp/all-groups.txt) groups, each once"
 
   # ---------------------------------------------------------------------------
   # Security scan (docs/ci.md, "Security scan"): the workflow security-scan, weekly, never with the ci workflow
@@ -1677,9 +1697,35 @@ workflows:
       - proxy-image-edge:
           context: [scalable-machine-runner-dockerhub]
           serial-group: << pipeline.project.slug >>/proxy-image-edge
-          requires: [proxy-image-publish, linux-swarm, e2e-linux, e2e-linux-arm64, e2e-windows-2022, e2e-windows-2025]
+          requires:
+            - proxy-image-publish
+            - linux-swarm-distributor
+            - linux-swarm-proxy
+            - linux-swarm-a
+            - linux-swarm-b
+            - e2e-linux
+            - e2e-linux-arm64
+            - e2e-windows-2022
+            - e2e-windows-2025
           filters: pipeline.parameters.release
+      # The Linux suite in four jobs that run in parallel (docs/ci.md, "Linux jobs without a token"). About 8 to 9 minutes for the two
+      # long groups (distributor, proxy: 6.5 minutes each) and 6 for the others, each with about 2 minutes of image pulls and setup.
+      # A group that no job lists would not run: lint-circleci compares the lists with `linux/tests/run-all.sh --list`.
       - linux-swarm:
+          name: linux-swarm-distributor
+          groups: distributor
+          filters: not pipeline.parameters.docs-only
+      - linux-swarm:
+          name: linux-swarm-proxy
+          groups: proxy
+          filters: not pipeline.parameters.docs-only
+      - linux-swarm:
+          name: linux-swarm-a
+          groups: stack-config helper ephemerality exit80 token task
+          filters: not pipeline.parameters.docs-only
+      - linux-swarm:
+          name: linux-swarm-b
+          groups: placement persistent drain limits network container-mode bats
           filters: not pipeline.parameters.docs-only
       - linux-image-example:
           filters: not pipeline.parameters.docs-only
@@ -1746,7 +1792,10 @@ workflows:
             - proxy-image-windows-ltsc2025
             - proxy-image-publish
             - signing-rehearsal
-            - linux-swarm
+            - linux-swarm-distributor
+            - linux-swarm-proxy
+            - linux-swarm-a
+            - linux-swarm-b
             - linux-image-example
             - linux-setup
             - linux-arm64

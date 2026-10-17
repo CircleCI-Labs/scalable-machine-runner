@@ -12,7 +12,7 @@
 #      - the services linux-default and linux-hardened start a container each, and inside them the runner runs as circleci-runner and
 #        the job user is circleci; the container mounts only the placeholder config (the class tokens belong to the token proxy), and
 #        the job user cannot read it, nor other users' process environments; linux-default keeps sudo (so sudo can read
-#        the placeholder); linux-hardened has no sudo at all.
+#        the placeholder); linux-hardened runs jobs through setpriv --no-new-privs (sudo may stay configured but cannot elevate).
 #      - the token proxy runs from the image that this job builds from proxy/ (there is no registry here), natively for this architecture,
 #        non-root, read-only, healthy through the healthcheck of its image.
 #    The runner gets 401 from CircleCI for the made-up token, which does not matter here.
@@ -205,8 +205,39 @@ for svc in linux-default linux-hardened; do
     sudo_reads() { docker exec -u circleci "${cid}" sudo -n sh -c 'test -s /run/secrets/circleci_runner_config.yaml'; }
     check "${svc}-sudo-can-read-the-placeholder-config" sudo_reads
   else
-    no_sudo() { ! docker exec -u circleci "${cid}" sudo -n true > /dev/null 2>&1; }
-    check "${svc}-job-user-has-no-sudo" no_sudo
+    hardened_job_cannot_elevate() {  # run the probe the way the runner starts a job (setpriv --no-new-privs prefix)
+      local rp prefix_words probe out
+      rp=$(docker exec "${cid}" sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = circleci-runner ] && tr "\0" " " < "$p/cmdline" | grep -q "circleci-runner machine" && echo "${p#/proc/}" && break; done') ||
+        { echo "no circleci-runner pid"; return 1; }
+      prefix_words=$(docker exec "${cid}" setpriv --reuid=2000 --regid=2000 --clear-groups --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid -- \
+        sh -c "tr \"\\0\" \"\\n\" < /proc/${rp}/environ | sed -n 's/^CIRCLECI_RUNNER_COMMAND_PREFIX=//p'" |
+        sed -e 's/^\[//' -e 's/\]$//' -e 's/"//g' -e 's/,/ /g') ||
+        { echo "no step-down prefix"; return 1; }
+      case "${prefix_words}" in
+        setpriv*--no-new-privs*) ;;
+        *) echo "prefix is not setpriv --no-new-privs: ${prefix_words}"; return 1 ;;
+      esac
+      read -r -d '' probe <<'EOF' || true
+echo "uid=$(id -u)"
+echo "no_new_privs=$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' /proc/self/status)"
+if sudo -n true </dev/null 2>/dev/null; then echo "sudo=works"; else echo "sudo=unusable"; fi
+if command -v su >/dev/null 2>&1; then
+  if su -c true root </dev/null 2>/dev/null; then echo "su=works"; else echo "su=unusable"; fi
+else
+  echo "su=absent"
+fi
+EOF
+      # shellcheck disable=SC2086  # prefix_words is a word list from the runner environment
+      out=$(printf '%s\n' "$probe" | docker exec -i -u root "${cid}" setpriv --reuid=2000 --regid=2000 --clear-groups \
+        --inh-caps=+setuid,+setgid --ambient-caps=+setuid,+setgid -- ${prefix_words} sh -s) ||
+        { echo "step-down probe failed"; return 1; }
+      echo "${out}"
+      echo "${out}" | grep -q '^uid=[1-9][0-9]*$' && [ "$(echo "${out}" | sed -n 's/^uid=//p')" != 0 ] || { echo "unexpected uid"; return 1; }
+      echo "${out}" | grep -q '^no_new_privs=1$' || { echo "NoNewPrivs is not 1"; return 1; }
+      echo "${out}" | grep -q '^sudo=unusable$' || { echo "sudo worked under no-new-privs"; return 1; }
+      case "$(echo "${out}" | sed -n 's/^su=//p')" in unusable|absent) ;; *) echo "su worked under no-new-privs"; return 1 ;; esac
+    }
+    check "${svc}-job-user-cannot-elevate" hardened_job_cannot_elevate
   fi
 done
 

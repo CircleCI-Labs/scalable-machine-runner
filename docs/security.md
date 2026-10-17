@@ -11,7 +11,7 @@ This page lists what the stack protects, what it does not, and which controls yo
 > [!IMPORTANT]
 > Untrusted jobs on a self-hosted runner pose significant risks to your machines and your network. Never use self-hosted runners for public projects that build forked pull requests.
 
-**Status.** This is a CircleCI Labs project at version `0.x`. It has not been independently reviewed or penetration-tested. The documentation site follows the `main` branch, so it can describe a control that your release does not have: the copy of this page in your release bundle is the one for that release. [What is tested](../README.md#what-is-tested) says how each claim is checked, and which claims are not.
+**Status.** Version `0.x`, not independently reviewed or penetration-tested. The site follows `main`, so it can describe a control that your release does not have: use the copy of this page in your release bundle for that release. [What is tested](../README.md#what-is-tested) says how each claim is checked.
 
 ## Threat model
 
@@ -106,7 +106,7 @@ Treat each Windows resource class as a trust boundary. Use one token for each cl
 
 ## The token proxy
 
-The service `token-proxy` in `runners.yaml` keeps the class tokens of the single-task classes away from the runner containers and their jobs. One proxy serves every class of the stack, and `docker-build.yaml` and `ssh-rerun.yaml` add their classes to it. [Concepts](concepts.md#the-token-proxy) shows how the pieces fit.
+The service `token-proxy` in `runners.yaml` keeps the class tokens of the single-task classes away from the runner containers and their jobs. One proxy serves every class of the stack: `classes-extra.yaml`, `docker-build.yaml`, `ssh-rerun.yaml` and `microvm.yaml` add their classes to it. [Concepts](concepts.md#the-token-proxy) shows how the pieces fit.
 
 ### What it does
 
@@ -150,7 +150,7 @@ The runner executes your jobs, so it must be the binary that CircleCI published.
 
 ### Where the runner comes from
 
-The distributor downloads the tarball over HTTPS from the release bucket of CircleCI and compares its SHA-256 with the values that the stack file carries for the pinned version (`MACHINE_RUNNER_SWARM_RUNNER_SHA256`: `amd64`, `arm64`, `ppc64le` and `s390x`). Each release of this repository bumps the version and these values together, copied from CircleCI's manifest. This is trust on first use from the same bucket: CircleCI publishes no signature for the runner that this stack checks. A later change of the bucket cannot change what the nodes install.
+The distributor downloads the tarball over HTTPS from the release bucket of CircleCI and compares its SHA-256 with the values that the stack file carries for the pinned version (`MACHINE_RUNNER_SWARM_RUNNER_SHA256`: `amd64`, `arm64`, `ppc64le` and `s390x`). Each release bumps the version and these values together, copied from CircleCI's manifest. This is trust on first use from the same bucket: CircleCI publishes no signature for the runner that this stack checks. A later change of the bucket cannot change what the nodes install.
 
 - **Floating versions are weaker.** A floating value (`3.1`, `3`, `current`) has no list, because the version is not known in advance. The distributor ignores the default list and compares the SHA-256 with CircleCI's `manifest.json`. The manifest comes from the same bucket as the tarball, so whoever can change one can change the other: the check proves that the download is whole, not that CircleCI published it. It is the same trust as the runner's own download of the task agent.
 - **An exact version of your own** needs its own list, from the `checksums.txt` of its release (every architecture of your nodes), or the word `manifest`. The distributor then installs only a tarball that matches.
@@ -208,7 +208,7 @@ The notes of every release name the image of that release.
 
 ## Runner binary integrity on Windows
 
-The trust is the one of Linux. The service `runner-distributor-windows` downloads the tarball over HTTPS from the release bucket of CircleCI, compares its SHA-256 with the two values (`amd64` and `arm64`) that the stack file carries for the pinned version, checks that the binary reports the version, and records its SHA-256 in `versions\<VERSION>\SHA256`. A floating value ignores the list and uses CircleCI's `manifest.json` (weaker), and a mirror must be `https://` unless a usable list is set for an exact pin (or `MACHINE_RUNNER_SWARM_ALLOW_HTTP=true` when there is no list). Portable Git and `7zr.exe` are pinned by SHA-256 in the script, so a new Git version is a new release of this repository.
+The trust is the one of Linux. The service `runner-distributor-windows` downloads the tarball over HTTPS from the release bucket of CircleCI, compares its SHA-256 with the two values (`amd64` and `arm64`) that the stack file carries for the pinned version, checks that the binary reports the version, and records its SHA-256 in `versions\<VERSION>\SHA256`. A floating value ignores the list and uses CircleCI's `manifest.json` (weaker), and a mirror must be `https://` unless a usable list is set for an exact pin (or `MACHINE_RUNNER_SWARM_ALLOW_HTTP=true` when there is no list). Portable Git and `7zr.exe` are pinned by SHA-256 in the script, so a new Git version is a new release.
 
 Two things differ from Linux:
 
@@ -219,7 +219,7 @@ Two things differ from Linux:
 
 The first three columns are our reading of the public CircleCI documentation as of 17 October 2026. They are not statements by CircleCI, the pages change, and the sources below are the reference. The last two columns come from the tests of this repository. Where the public documentation says nothing, the cell says so.
 
-| | Machine runner 3 package | Container runner | Machine runner orchestrator | This repository, default class | This repository, hardened class |
+| | Machine runner 3 package | Container runner | Machine runner orchestrator | Machine runner swarm, default class | Machine runner swarm, hardened class |
 |---|---|---|---|---|---|
 | Can a job read the class token? | A job gains the privileges of the task agent, and the runner runs as the same user (`circleci`) | Not stated. The agent holds the tokens in a Kubernetes secret | No: a sidecar keeps the token out of the VM | No, even with sudo: the token proxy holds it. A job that escapes onto the node of the proxy could read it | No, for the same reason. The persistent class is the exception ([The persistent class](#the-persistent-class)) |
 | Can jobs use sudo? | Whatever you grant the `circleci` user | Set by the job image and the pod `securityContext` | No by default (`grantSudo: false`) | Yes, passwordless, as in the Docker executor | No: the step-down uses `setpriv --no-new-privs` |
@@ -245,7 +245,7 @@ Settings in `linux/stack/runners.yaml`. Tokens, the proxy and the runner volume 
 | Capabilities | Default classes drop `NET_RAW` and `MKNOD`. The hardened class drops all and adds back `CHOWN` and `FOWNER` (the entrypoint sets the owner of directories), `SETUID` and `SETGID` (the step-down), `KILL` (the init process signals the runner, which has another uid), and `AUDIT_WRITE` (sudo audit messages) |
 | Limits | `pids: 4096`, `nofile` 65536, no core dumps, and reservations that equal the limits |
 | Network | One overlay network for each class, no published ports, so SSH rerun is off unless you deploy the SSH add-on stack file |
-| Runner version | 3.1.12 or later. The default pin is the newest version that this repository's CI tests |
+| Runner version | 3.1.12 or later. The default pin is the newest version that CI tests |
 
 Swarm ignores `security_opt`, `privileged`, `userns_mode`, and the short `tmpfs` form, and its tmpfs mounts are not executable. The stack therefore sets no `no-new-privileges` and no `read_only` filesystem for the runners. The default seccomp and AppArmor profiles of Docker apply.
 
@@ -266,7 +266,7 @@ Settings in `windows\stack\runners.yaml`:
 
 - The runner and Git are read-only mounts of the volume `runner-bin` (`current` at `C:\machine-runner-swarm`, `git\current` at `C:\Program Files\Git`), and the secret is readable by administrators and `SYSTEM` only.
 - `CIRCLECI_RUNNER_CLEANUP_WORK_DIR: "true"`. Logs use the `json-file` driver with rotation.
-- `stop_grace_period: 5h5m`, but a stop from outside kills a busy container after about 5 seconds, so change a service while its class is idle ([Stop a busy Windows container](operations.md#stop-a-busy-windows-container)).
+- `stop_grace_period: 5h5m`. On Windows, change a class only while it is idle ([why](operations.md#stop-a-busy-windows-container)).
 - CPU and memory limits. The Windows engine rejects `pids` and `ulimits`. `init`, `cap_drop`, `read_only`, and `tmpfs` have no effect.
 - No published ports, so SSH rerun is off unless you deploy the SSH add-on stack file.
 
@@ -288,7 +288,7 @@ To reduce the exposure:
 
 Nothing in this stack or in Docker stops a job from reaching the instance-metadata service that cloud providers serve at `169.254.169.254`. On a cloud VM, it can hand out the credentials of the role attached to the node and, on some clouds, the user data of the instance. A job that reads them acts as the node. This is true of every self-hosted runner on a cloud VM.
 
-These recipes are the usual ones, and they are not tested in this repository's CI. Check them on your own nodes with a job that runs `curl -m 3 http://169.254.169.254/`, which must fail.
+These recipes are the usual ones, and CI does not test them. Check them on your own nodes with a job that runs `curl -m 3 http://169.254.169.254/`, which must fail.
 
 1. **Give the node role the fewest permissions that the node needs, often none.** Do not leave the Swarm join token readable in the user data or startup script of an instance: a job that reaches the metadata service reads it, and with it joins a node to your Swarm.
 2. **Block the address for containers on Linux.** Add a rule to the `DOCKER-USER` chain, which Docker evaluates before its own rules for container traffic:
@@ -413,7 +413,7 @@ Mirrors replace the downloads of this stack, and do not replace the task agent: 
 
 ### CircleCI server
 
-CircleCI documents machine runner 3 for server 4.4 and later, and says that an install on server sets the API URL of the runner (`CIRCLECI_RUNNER_API_URL`, or `api.url` in the config file). This repository is tested against CircleCI cloud only. Here the runners call the token proxy, so the URL of your server goes to the `-upstream` argument of the `token-proxy` service (its `command` in the stack file), and the runners keep `CIRCLECI_RUNNER_API_URL: http://token-proxy:8080`. Whether the proxy and the runner download work against your server version is not known, and no job of this project has run against one. Config policies need the Scale plan on cloud or server 4.2 or later.
+CircleCI documents machine runner 3 for server 4.4 and later, and says that an install on server sets the API URL of the runner (`CIRCLECI_RUNNER_API_URL`, or `api.url` in the config file). Machine runner swarm is tested against CircleCI cloud only. Here the runners call the token proxy, so the URL of your server goes to the `-upstream` argument of the `token-proxy` service (its `command` in the stack file), and the runners keep `CIRCLECI_RUNNER_API_URL: http://token-proxy:8080`. Whether the proxy and the runner download work against your server version is not known, and no job of this project has run against one. Config policies need the Scale plan on cloud or server 4.2 or later.
 
 ## BitLocker on Windows hosts
 

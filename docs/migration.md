@@ -7,7 +7,7 @@ page-description: Move from the old docker-compose.yml setup to the Docker Swarm
 # Migrate from Docker Compose
 
 > [!WARNING]
-> This repository no longer ships the Docker Compose setup. The files `docker-compose.yml`, `base-image/`, `convenience-image/`, and `machine-image/` were removed in the Swarm rewrite, and the change is marked `[BREAKING]` in the [changelog](../CHANGELOG.md). Find the old files with `git log -- docker-compose.yml`.
+> Machine runner swarm no longer ships the Docker Compose setup. The files `docker-compose.yml`, `base-image/`, `convenience-image/`, and `machine-image/` were removed in the Swarm rewrite, and the change is marked `[BREAKING]` in the [changelog](../CHANGELOG.md). Find the old files with `git log -- docker-compose.yml`.
 
 The old setup restarted the same container after each job, so jobs did not get a clean environment. The Swarm stack creates a new container for every job ([Why not plain Docker Compose?](faq.md#why-not-plain-docker-compose)). This page covers Linux hosts, which the old setup supported. Your job configs, resource classes and tokens can stay.
 
@@ -40,7 +40,7 @@ The old setup restarted the same container after each job, so jobs did not get a
 
 ## Behavior to expect
 
-- **Runner updates.** The runner is an exact pin by default: the newest version this repository's CI tests, bumped by each release of this repository. Set `3.1`, `3` or `current` to follow CircleCI's manifest ([Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux)).
+- **Runner updates.** The runner is an exact pin by default: the newest version that CI tests, bumped by each release. Set `3.1`, `3` or `current` to follow CircleCI's manifest ([Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux)).
 - **Sudo.** The default classes keep passwordless sudo, as the old images did. The hardened class removes it ([Concepts](concepts.md#users-and-the-runner-token-on-linux)).
 - **Fixed replicas.** The stack does not scale by itself, and a node that dies is not replaced ([Capacity and concurrency](operations.md#capacity-and-concurrency)).
 - **Startup time.** A new container starts for every job, so a job waits about 10 seconds longer for the next claim, plus the task agent download. Add replicas for busy classes.

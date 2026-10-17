@@ -90,7 +90,7 @@ Jobs can build Windows images only, because the engine runs in Windows-container
 
 ## Pattern B: rootless BuildKit on the host
 
-Run a rootless BuildKit daemon on the host under a dedicated unprivileged account, and mount only its socket into a runner service. Jobs send builds to it with a BuildKit client. The daemon exposes the build API, not the Docker API, so a job cannot start arbitrary containers or mount host paths. The risk shrinks but stays: the daemon shares the host kernel, and every job shares its build cache. This repository has no stack file, helper, or test for it.
+Run a rootless BuildKit daemon on the host under a dedicated unprivileged account, and mount only its socket into a runner service. Jobs send builds to it with a BuildKit client. The daemon exposes the build API, not the Docker API, so a job cannot start arbitrary containers or mount host paths. The risk shrinks but stays: the daemon shares the host kernel, and every job shares its build cache. Machine runner swarm has no stack file, helper, or test for it.
 
 ## Pattern C: a daemonless builder in the job
 

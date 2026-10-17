@@ -6,7 +6,7 @@ page-description: Run CircleCI Docker-executor jobs (docker - image and service 
 
 # Container mode (prototype)
 
-Container mode runs jobs that use the Docker executor, `docker: [{image: ...}, {image: ...}]`, on the nodes of a Swarm, with no Kubernetes. With the machine classes of this repository, one Swarm serves both kinds of jobs.
+Container mode runs jobs that use the Docker executor, `docker: [{image: ...}, {image: ...}]`, on the nodes of a Swarm, with no Kubernetes. With the machine classes of machine runner swarm, one Swarm serves both kinds of jobs.
 
 > [!WARNING]
 > This is a prototype, and CircleCI does not support it. The unit tests and a Swarm test against a fake runner API and a fake init image pass. A run against the real CircleCI API is still to be done. Do not use it for production jobs yet. Refer to [Status](#status).

@@ -1,4 +1,4 @@
-# Example CircleCI config for jobs that run on Windows runner containers from this repo
+# Example CircleCI config for jobs that run on Windows runner containers from machine runner swarm
 # (windows/stack/runners.yaml, service "windows-default", resource class <NAMESPACE>/windows-default).
 #
 # Every job gets a brand-new Windows Server Core container: Swarm replaces the container after each

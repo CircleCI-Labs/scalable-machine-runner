@@ -242,7 +242,7 @@ cut155() {
 }
 
 group_description() {
-  local g=$1 lead firstdest d
+  local lead firstdest d
   lead=$(awk -F'|' -v g="$1" '$1 == "G" && $2 == g { print $6; exit }' "${tmp}/nav.tsv")
   if [ -n "${lead}" ]; then cut155 "${lead}"; return; fi
   firstdest=$(awk -F'|' -v g="$1" '$1 == "P" && $6 == g { print $4; exit }' "${tmp}/nav.tsv")

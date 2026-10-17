@@ -33,7 +33,7 @@ The table is the short answer. [CI/CD](docs/ci.md#what-is-tested) lists every te
 |---|---|---|
 | Linux, Ubuntu amd64, one node: install, token proxy, clean container for every job, default and hardened class | Tested | Stack tests without Swarm, a fresh VM for the install and the Swarm tests, and real CircleCI jobs in the end-to-end group |
 | Windows Server 2022 and 2025, one host, amd64 | Tested | The same, on real Windows hosts |
-| Linux arm64 | Partly tested | CI checks that the stack installs the runner and starts. Refer to [CI/CD](docs/ci.md#what-is-tested) for what else runs on Arm |
+| Linux arm64 | Partly tested | Every pipeline checks that the stack installs the runner and starts. On `main` and `smr-swarm/*` branches, three probe jobs also run on a real arm64 runner. Refer to [CI/CD](docs/ci.md#what-is-tested) |
 | A mixed cluster of a Linux manager and a Windows worker | Verified by hand | Real jobs ran on both operating systems. CI cannot run it, because its Linux and Windows VMs do not reach each other |
 | Multi-host clusters, and day-two operations: a drain with a busy job, a rolling update during a job, token rotation, manager loss and restore | Documented, not tested | CI runs two Swarm nodes as containers on one VM, and every Windows test runs on one host |
 | RHEL 8 or later | Documented, not tested | The steps follow Docker's documentation |
@@ -87,7 +87,7 @@ You need the [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cl
 - [Quickstart on Linux](docs/quickstart-linux.md): one node as a trial, or the start of a cluster. Start Swarm, create the secrets, and deploy. Nothing is installed on a node by hand.
 - [Quickstart on Windows Server](docs/quickstart-windows.md): Server 2022 or 2025, in six steps.
 
-Linux runs on Ubuntu LTS. Tested in CI: Ubuntu 26.04 on amd64, and the start of the stack on arm64. Documented, not tested: RHEL 8 or later. Emulated start only: ppc64le and s390x. Refer to the [FAQ](docs/faq.md#which-operating-systems-does-it-support) for what CI tests on each, and to [Security](docs/security.md) before you give a class to a team.
+Linux runs on Ubuntu LTS. Tested in CI: Ubuntu 26.04 on amd64, and the start of the stack on arm64, with probe jobs on a real arm64 runner on `main`. Documented, not tested: RHEL 8 or later. Emulated start only: ppc64le and s390x. Refer to the [FAQ](docs/faq.md#which-operating-systems-does-it-support) for what CI tests on each, and to [Security](docs/security.md) before you give a class to a team.
 
 ## Documentation
 

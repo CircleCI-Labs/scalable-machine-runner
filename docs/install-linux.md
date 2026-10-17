@@ -23,7 +23,7 @@ The manual steps come first and use ordinary `docker` commands. Nothing is insta
 
   | Operating system | Architecture | Status in this repository |
   |---|---|---|
-  | Ubuntu LTS | amd64, arm64 | Tested in CI on Ubuntu 26.04. On arm64, CI checks that the stack installs the runner and starts, and the end-to-end jobs run on amd64 |
+  | Ubuntu LTS | amd64, arm64 | Tested in CI on Ubuntu 26.04. On arm64, every pipeline checks that the stack installs the runner and starts, and probe jobs run on a real arm64 runner on `main` and `smr-swarm/*` branches |
   | RHEL 8 and later, and compatible distributions | amd64, arm64 | Steps documented, not tested in CI |
   | Any of the above | ppc64le, s390x | CircleCI lists these architectures. CI only starts the distributor and the token proxy image under emulation: no job has run on them |
 

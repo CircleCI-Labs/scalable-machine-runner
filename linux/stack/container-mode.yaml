@@ -95,7 +95,7 @@ secrets:
 
 configs:   # named after the SHA-256 of the file: ci/config-names.sh --write renames them after a change, and CI checks it
   agent-entrypoint: {name: machine-runner-swarm-container-agent-entrypoint-89b8049d9846, file: container-agent/entrypoint.sh}
-  agent-gomod: {name: machine-runner-swarm-container-agent-gomod-3b67745ae025, file: container-agent/go.mod}
+  agent-gomod: {name: machine-runner-swarm-container-agent-gomod-321bbb362c60, file: container-agent/go.mod}
   agent-main: {name: machine-runner-swarm-container-agent-main-ceadfb340a06, file: container-agent/main.go}
   agent-api: {name: machine-runner-swarm-container-agent-api-ad93f2c55b40, file: container-agent/api.go}
   agent-docker: {name: machine-runner-swarm-container-agent-docker-8b40f21fd001, file: container-agent/docker.go}

@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Renovate for scalable-machine-runner (docs/ci.md, 'Pinned versions'). The Renovate GitHub App of the organization runs it. Every pin of the repository has a manager below: image digests, tool versions, PortableGit, Kata, Node.js and the Go modules.",
+  "description": "Renovate for machine-runner-swarm (docs/ci.md, 'Pinned versions'). The Renovate GitHub App of the organization runs it. Every pin of the repository has a manager below: image digests, tool versions, PortableGit, Kata, Node.js and the Go modules.",
   "extends": ["config:best-practices"],
   "ignorePresets": [":ignoreModulesAndTests"],
   "ignorePaths": ["site/content/**", "site/public/**", "site/public-preview/**", "site/resources/**"],

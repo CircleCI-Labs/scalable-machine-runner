@@ -145,7 +145,7 @@ expect "main: --releasable not given counts as true" main       true   false  "$
 GATE_ARGS=()
 
 # a pull request: the address that CircleCI puts in CIRCLE_PULL_REQUEST (docs-site-comment runs). Nothing else counts
-PULL=https://github.com/CircleCI-Labs/scalable-machine-runner/pull/2
+PULL=https://github.com/CircleCI-Labs/machine-runner-swarm/pull/2
 expect "a pull request on a feature branch"       feature/x            false  false  ""     ""       "false false false false"
 expect "a pull request on main (a merge queue?)"  main                 true   false  "$T"   "$T"     "true true true true"
 PULL=https://example.com/o/r/pull/2

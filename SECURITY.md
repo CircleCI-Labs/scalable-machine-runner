@@ -16,7 +16,7 @@ This repository is at version `0.x`. Fixes land on `main` and ship in the next r
 
 ## Support status of this repository
 
-This repository is part of CircleCI Labs. CircleCI support does not cover it. Field engineering handles bugs and feature requests on a best-effort basis, without an SLA. Use [GitHub issues](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) for problems that are not security vulnerabilities.
+This repository is part of CircleCI Labs. CircleCI support does not cover it. Field engineering handles bugs and feature requests on a best-effort basis, without an SLA. Use [GitHub issues](https://github.com/CircleCI-Labs/machine-runner-swarm/issues) for problems that are not security vulnerabilities.
 
 ## What this stack does with your credentials
 

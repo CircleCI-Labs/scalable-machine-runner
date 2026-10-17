@@ -45,11 +45,11 @@ If you install self-hosted runners through the web app, an organization admin mu
 Use a release, or clone the repository at a release tag. The paths on this page are relative to the root of the repository or of the extracted release bundle.
 
 ```bash
-git clone --branch <release-tag> https://github.com/CircleCI-Labs/scalable-machine-runner.git
-cd scalable-machine-runner
+git clone --branch <release-tag> https://github.com/CircleCI-Labs/machine-runner-swarm.git
+cd machine-runner-swarm
 ```
 
-Each [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) carries these files, where `<version>` is the release number without the `v`:
+Each [GitHub release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) carries these files, where `<version>` is the release number without the `v`:
 
 | File | Content |
 |---|---|
@@ -88,7 +88,7 @@ The image must be on the node that runs the proxy (a manager by default, or the 
 
 CircleCI signs `SHA256SUMS` with the OIDC token of the CircleCI job that makes the release. No signing key is stored anywhere. The signature proves that a job of this CircleCI project made the file, and the checksums prove that your download is the file the job made. You need [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 3.1.3 or a later 3.x (CI signs and verifies with 3.1.3, and earlier versions are not tested), `curl`, `jq`, and GNU coreutils, in a bash shell. On Windows, refer to [Verify a release](install-windows.md#verify-a-release).
 
-The release is the `latest` release of the [releases page](https://github.com/CircleCI-Labs/scalable-machine-runner/releases/latest): set `version` once to its number without the `v`, and read its notes. The first line is a placeholder, and the download fails while it is unchanged.
+The release is the `latest` release of the [releases page](https://github.com/CircleCI-Labs/machine-runner-swarm/releases/latest): set `version` once to its number without the `v`, and read its notes. The first line is a placeholder, and the download fails while it is unchanged.
 
 ```bash
 version=X.Y.Z
@@ -99,7 +99,7 @@ Then paste this block. It runs in a subshell and stops at the first failing chec
 ```bash
 (
   set -euo pipefail
-  base="https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download/v${version}"
+  base="https://github.com/CircleCI-Labs/machine-runner-swarm/releases/download/v${version}"
   curl -fsSLO "${base}/machine-runner-swarm-${version}.tar.gz" \
        -O "${base}/SHA256SUMS" \
        -O "${base}/SHA256SUMS.sigstore.json"
@@ -133,7 +133,7 @@ Then change into the bundle:
 cd "machine-runner-swarm-${version}"
 ```
 
-What the three checks establish is limited. A valid signature and `refs/heads/main` mean that a job of this CircleCI project ran for the `main` branch of the repository and made these files. Whether anyone can change `main` without a review is a setting of the organization that owns the repository, and this page cannot check it. [A ruleset for main](https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/docs/ci.md#a-ruleset-for-main) describes what the project asks for.
+What the three checks establish is limited. A valid signature and `refs/heads/main` mean that a job of this CircleCI project ran for the `main` branch of the repository and made these files. Whether anyone can change `main` without a review is a setting of the organization that owns the repository, and this page cannot check it. [A ruleset for main](https://github.com/CircleCI-Labs/machine-runner-swarm/blob/main/docs/ci.md#a-ruleset-for-main) describes what the project asks for.
 
 - The identity is the CircleCI project (`7bbdbb66-...`) and the pipeline definition (`8b2a66db-...`) that run this repository's pipeline. The issuer `https://oidc.circleci.com` is the CircleCI OIDC issuer. Sigstore records every signature in a public transparency log.
 - To see the ref of a certificate, print it. The last line of the output ends with the ref, and a release comes from `refs/heads/main`.

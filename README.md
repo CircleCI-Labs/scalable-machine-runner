@@ -2,8 +2,8 @@
 
 Run CircleCI self-hosted runners (machine runner 3) as Docker Swarm services. Each service is one resource class, `deploy.replicas` sets how many runners it has, and every job runs in a new container, on Linux and on Windows Server. The project is for platform teams that run Docker hosts or Windows Server and want a clean container for every job on self-hosted runners, without Kubernetes.
 
-[![CircleCI](https://dl.circleci.com/status-badge/img/gh/CircleCI-Labs/scalable-machine-runner/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/CircleCI-Labs/scalable-machine-runner/tree/main)
-[![Release](https://img.shields.io/github/v/release/CircleCI-Labs/scalable-machine-runner?include_prereleases&label=release)](https://github.com/CircleCI-Labs/scalable-machine-runner/releases)
+[![CircleCI](https://dl.circleci.com/status-badge/img/gh/CircleCI-Labs/machine-runner-swarm/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/CircleCI-Labs/machine-runner-swarm/tree/main)
+[![Release](https://img.shields.io/github/v/release/CircleCI-Labs/machine-runner-swarm?include_prereleases&label=release)](https://github.com/CircleCI-Labs/machine-runner-swarm/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![CircleCI Community](https://img.shields.io/badge/community-CircleCI%20Discuss-343434.svg)](https://discuss.circleci.com/)
 
@@ -13,7 +13,7 @@ Run CircleCI self-hosted runners (machine runner 3) as Docker Swarm services. Ea
 - Pre-release `0.x`: interfaces and stack files can change in any minor release. The Swarm design is new, and this repository has no history of production use to point to.
 - **Not** officially supported by CircleCI support.
 
-The repository is named `scalable-machine-runner`, and its bundles and image are named `machine-runner-swarm`. The maintainers plan to rename the repository to `machine-runner-swarm` after the first release. GitHub redirects the old address, so the links on these pages keep working. The documentation site, [circleci-labs.github.io/scalable-machine-runner](https://circleci-labs.github.io/scalable-machine-runner/), follows `main`, and the `docs/` folder of a release bundle is the documentation of that release.
+The documentation site, [circleci-labs.github.io/machine-runner-swarm](https://circleci-labs.github.io/machine-runner-swarm/), follows `main`, and the `docs/` folder of a release bundle is the documentation of that release.
 
 ## When to use it
 
@@ -112,11 +112,11 @@ Linux runs on Ubuntu LTS. Tested in CI: Ubuntu 26.04 on amd64, and the start of 
 | [Examples](examples) | Job configs for every class, starting with [`linux-hello.yml`](examples/linux-hello.yml) |
 | [CI/CD](docs/ci.md), [Releasing](docs/releasing.md), [Contributing](CONTRIBUTING.md) | What the pipeline tests, how a release is made, and how to contribute |
 
-Each [release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) carries a bundle with the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, with a keyless signature. The bundle is the way to install: both quickstarts download it, verify it and unpack it. Refer to [Verify a release](docs/install-linux.md#verify-a-release). The project uses [Semantic Versioning](https://semver.org/) and starts at `0.x`, so read the [release notes on GitHub](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) before you upgrade ([CHANGELOG.md](CHANGELOG.md) points there).
+Each [release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) carries a bundle with the stack files, the entrypoint, the runner-distributor script, the setup scripts, the documentation, and the examples, with a keyless signature. The bundle is the way to install: both quickstarts download it, verify it and unpack it. Refer to [Verify a release](docs/install-linux.md#verify-a-release). The project uses [Semantic Versioning](https://semver.org/) and starts at `0.x`, so read the [release notes on GitHub](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) before you upgrade ([CHANGELOG.md](CHANGELOG.md) points there).
 
 ## Support
 
-CircleCI support does not cover this repository. Field engineering handles issues on a best-effort basis, without an SLA. Before you open an issue, search [Troubleshooting](docs/troubleshooting.md) and the existing issues, and include the output of the commands in [Collect information for a bug report](docs/troubleshooting.md#collect-information-for-a-bug-report). Open a [GitHub issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) for a bug or a feature request, or ask the community on [CircleCI Discuss](https://discuss.circleci.com/). Problems with the CircleCI platform or the runner agent itself go to [CircleCI support](https://support.circleci.com/hc/en-us). To report a security vulnerability, read [SECURITY.md](SECURITY.md).
+CircleCI support does not cover this repository. Field engineering handles issues on a best-effort basis, without an SLA. Before you open an issue, search [Troubleshooting](docs/troubleshooting.md) and the existing issues, and include the output of the commands in [Collect information for a bug report](docs/troubleshooting.md#collect-information-for-a-bug-report). Open a [GitHub issue](https://github.com/CircleCI-Labs/machine-runner-swarm/issues) for a bug or a feature request, or ask the community on [CircleCI Discuss](https://discuss.circleci.com/). Problems with the CircleCI platform or the runner agent itself go to [CircleCI support](https://support.circleci.com/hc/en-us). To report a security vulnerability, read [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -4,7 +4,7 @@ Thank you for helping to improve the machine runner swarm. This repository is pa
 
 ## Reporting a bug
 
-Search the [existing issues](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) first, and check that you use the latest release. Then open a new issue with the bug template. Include:
+Search the [existing issues](https://github.com/CircleCI-Labs/machine-runner-swarm/issues) first, and check that you use the latest release. Then open a new issue with the bug template. Include:
 
 - The release or commit of this repository, and the runner version. On Linux, run `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node. On Windows, run `docker service logs --tail 100 runners_runner-distributor-windows`.
 - The operating system of the node and the Docker Engine version.

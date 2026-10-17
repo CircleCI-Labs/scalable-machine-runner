@@ -1,6 +1,6 @@
 version: 2.1
 
-# Continuation config for CircleCI-Labs/scalable-machine-runner (see docs/ci.md).
+# Continuation config for CircleCI-Labs/machine-runner-swarm (see docs/ci.md).
 # .circleci/config.yml (the setup phase) sets the parameters below.
 #
 # One workflow, `ci`. Expression filters on the parameters switch jobs in and out:

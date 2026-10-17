@@ -243,4 +243,4 @@ The job is lost. CircleCI reports it as failed because of an infrastructure prob
 
 ## How do I report a bug or a vulnerability?
 
-Open a [GitHub issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) for a bug. For a vulnerability, email [security@circleci.com](mailto:security@circleci.com). Refer to [SECURITY.md](../SECURITY.md).
+Open a [GitHub issue](https://github.com/CircleCI-Labs/machine-runner-swarm/issues) for a bug. For a vulnerability, email [security@circleci.com](mailto:security@circleci.com). Refer to [SECURITY.md](../SECURITY.md).

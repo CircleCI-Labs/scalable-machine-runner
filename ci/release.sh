@@ -203,7 +203,7 @@ build() {
   # that is dead in the repository too). The rewritten pages are added in place of the originals.
   local -a relinked=() links_add=() links_excl=()
   local p dir
-  mapfile -t relinked < <(python3 "${ci_dir}/bundle-links.py" --repo "${CIRCLE_PROJECT_USERNAME:-CircleCI-Labs}/${CIRCLE_PROJECT_REPONAME:-scalable-machine-runner}" \
+  mapfile -t relinked < <(python3 "${ci_dir}/bundle-links.py" --repo "${CIRCLE_PROJECT_USERNAME:-CircleCI-Labs}/${CIRCLE_PROJECT_REPONAME:-machine-runner-swarm}" \
     --tag "${version}" --out "${out}/links" --extra VERSION --extra CHANGELOG.md -- "${paths[@]}")
   for p in "${relinked[@]}"; do
     dir=$(dirname "${p}")

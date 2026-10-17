@@ -1,3 +1,3 @@
-module github.com/CircleCI-Labs/scalable-machine-runner/linux/stack/container-agent
+module github.com/CircleCI-Labs/machine-runner-swarm/linux/stack/container-agent
 
 go 1.24

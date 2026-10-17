@@ -136,6 +136,8 @@ DEPLOY_ENV=()
 deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml docker-build.yaml
 wait_for "$TIMEOUT" proxy_on "$SWARM_TEST_MGR" || fail "without the pin the token proxy did not return to the manager: '$(proxy_node)'"
 echo "RESULT test=placement step=proxy_back_on_manager node=$SWARM_TEST_MGR"
+# the label keeps runners off the node (step 7): take it off the worker again
+idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.proxy "$SWARM_TEST_WRK" >/dev/null
 
 # 7. no runner on the node of the proxy: the label machine-runner-swarm.proxy=true keeps every runner service off the node (a constraint,
 # not a preference), so a job never shares a host with the class tokens. Without the label on any node nothing changes (steps 4 and 5c).

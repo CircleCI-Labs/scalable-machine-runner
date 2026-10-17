@@ -11,8 +11,7 @@ This page describes how to deploy CircleCI machine runner 3 as a Docker Swarm st
 > [!NOTE]
 > If you can run Kubernetes, CircleCI recommends [container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/) for containerized jobs. This page is for teams that run Docker Swarm and need a clean Windows container for every job.
 
-> [!NOTE]
-> This is a CircleCI Labs project, `0.x`, and CircleCI support does not cover it. It is tested against CircleCI cloud only, and [What is tested](../README.md#what-is-tested) says how. Replicas are fixed: the stack does not add or remove nodes, and it does not scale to the queue.
+**Status.** This is a CircleCI Labs project, `0.x`, and CircleCI support does not cover it. It is tested against CircleCI cloud only, and [What is tested](../README.md#what-is-tested) says how. Replicas are fixed: the stack does not add or remove nodes, and it does not scale to the queue.
 
 The manual steps are short: start or join a swarm, label the node, create the secrets, deploy. The optional [setup helper](#optional-use-the-setup-helper) runs most of them. For a first run, [Quickstart on Windows Server](quickstart-windows.md) is shorter.
 

@@ -11,6 +11,8 @@ This page describes what the stack protects, what it does not protect, and which
 > [!IMPORTANT]
 > Untrusted jobs on a self-hosted runner pose significant risks to your machines and your network. Never use self-hosted runners for public projects that build forked pull requests.
 
+**Status.** This is a CircleCI Labs project at version `0.x`. It has not been independently reviewed or penetration-tested. The documentation site follows the `main` branch, so it can describe a control that your release does not have: the copy of this page in your release bundle is the one for that release. [What is tested](../README.md#what-is-tested) says how each claim is checked, and which claims are not.
+
 ## Threat model
 
 ### What the stack protects
@@ -34,10 +36,11 @@ This page describes what the stack protects, what it does not protect, and which
 | Threat | Control | What remains |
 |---|---|---|
 | A job leaves state for the next job | Single-task mode and a new container for every job | Anything on mounted volumes or on a mounted Docker engine. Refer to [What a clean environment covers](concepts.md#what-a-clean-environment-covers) |
-| A job reads the runner token | Single-task classes: only the token proxy holds the token, and runners and jobs hold a made-up placeholder. Linux persistent class: the token is a file that only the runner user and root can read, and is not in the environment. Windows persistent class: the token is a file that every job can read | Linux persistent class: a job that uses sudo reads it, which the shipped file does not allow (the opt-in `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"` does). Windows persistent class: a job reads it. A job that escapes its container onto the node of the proxy. Refer to [The token proxy](#the-token-proxy) and [The persistent class](#the-persistent-class) |
+| A job reads the runner token | Single-task classes: only the token proxy holds the token, and runners and jobs hold a made-up placeholder (on Windows, no test asserts that a job cannot read the token, and a hostile job on the same host as the proxy can reach it: refer to [Windows](#windows)). Linux persistent class: the token is a file that only the runner user and root can read, and is not in the environment. Windows persistent class: the token is a file that every job can read | Linux persistent class: a job that uses sudo reads it, which the shipped file does not allow (the opt-in `MACHINE_RUNNER_SWARM_JOB_SUDO: "true"` does). Windows persistent class: a job reads it. A job that escapes its container onto the node of the proxy. Refer to [The token proxy](#the-token-proxy) and [The persistent class](#the-persistent-class) |
 | A job replaces the runner or entrypoint | On Linux, the runner is in a per-node volume that the container mounts read-only and that only root owns, the entrypoint is a Swarm config, and the entrypoint checks the runner against its SHA-256 record at every container start. On Windows, the volume with the runner and Git is mounted read-only, and the distributor compares the runner with its record at every check | On Linux, a privileged sibling container can still change the volume. Refer to [Runner binary integrity on Linux](#runner-binary-integrity-on-linux) |
 | A job reaches other tenants through the network | One overlay network for each Linux class | Replicas of one class reach each other. Refer to [Isolation between runners](#isolation-between-runners) |
 | A job breaks out of the container | Default seccomp and AppArmor profiles, dropped capabilities, no privileged mode | Containers share the host kernel. A kernel or runtime vulnerability bypasses every control on this page. The opt-in [microVM classes](microvm.md) give each job its own kernel |
+| A job reaches the instance-metadata service of a cloud node | Nothing, by default | The credentials of the node role, and on some clouds the user data of the node. Refer to [Cloud nodes: block the metadata address](#cloud-nodes-block-the-metadata-address) |
 | A job takes over the node through Docker | The Docker engine is not mounted by default | The opt-in docker-build classes are root-equivalent, and administrator-equivalent on Windows. Refer to [Docker Builds](docker-builds.md) |
 
 The stack does not harden the host operating system, the Docker daemon, or your network. It does not defend against a kernel exploit.
@@ -98,6 +101,7 @@ The test `linux/tests/token.sh` measures the probes below against the real runne
 - **Storage.** A class secret is the same minimal runner config file. Swarm places it at `C:\ProgramData\Docker\secrets\<target>` (in the proxy container `<service>-token`, in the runner container of the persistent class `circleci_runner_config.yaml`). Windows does not support `uid`, `gid`, or `mode` for secrets, and only administrators and `SYSTEM` can read the file.
 - **No step-down.** The runner and the jobs run as `ContainerAdministrator`, because the runner needs its symbolic link privilege. A job can read the config file of its runner, which holds the placeholder (in a persistent class: the token). The token is not in the job environment. An administrator in a container has no dropped `NET_RAW`, so the guarantee of the proxy that a job cannot forge a source address does not hold on Windows the way it does on Linux. What a forged address gets the job is limited: the answer to a claim goes to the owner of the address, not to the sender, and a container that has claimed cannot claim again. Windows is not tested for this, so treat each class as a trust boundary all the same.
 - **Clear text on disk.** The token is stored as plain text on the disk of the container of the proxy (and of the runner, in a persistent class). Swarm writes the secret to the root disk of the container, and keeps it there until the container stops. This is a limitation of Swarm on Windows. On Linux, the secret is a mount in memory (tmpfs) and never reaches the disk of the container. Anyone who can read the Docker root directory of the host can read a Windows token, so enable BitLocker on the volume that holds it. Refer to [BitLocker on Windows hosts](#bitlocker-on-windows-hosts).
+- **What the proxy gives on Windows.** The proxy keeps the class token out of the job environment and out of the file system that the job sees. It is not a boundary against a hostile job on the same host: a job runs as an administrator, with process isolation, next to the proxy when both run on one node. It becomes a boundary only when the proxy runs on a node that runs no jobs (in a cluster, label that node `machine-runner-swarm.proxy=true`: runner services never run on a node with that label), and untrusted classes run with Hyper-V isolation, which is not tested here. The end-to-end jobs on Windows run real jobs through the proxy, but they only record whether a job can read the token and assert nothing about it, and no test forges a source address, so treat these protections as untested.
 - **Process isolation.** Microsoft does not treat process isolation as a security boundary. Use one trust group of classes for each host. Hyper-V isolation adds a kernel boundary, needs nested virtualization on a virtual machine, and is not tested here.
 
 Treat each Windows resource class as a trust boundary. Use one token for each class and host, restrict who can use the class, and rotate tokens.
@@ -118,17 +122,19 @@ What it does:
 - **The claim is the only call that gets the class token.** The runners send every API call to the proxy and hold a made-up token. The proxy replaces the `Authorization` header of the task-claim call (`POST /api/v3/runner/claim`) with the class token and passes every other call on unchanged. The runner and its task agent use the task token from the claim response for the rest, and the token is scoped to one task.
 - **The class is decided by the network, not by the caller.** The proxy finds its classes in its own secrets directory: every secret `<service>-token` is the class `<service>`, whose runners are `tasks.<service>`. The made-up secret `runner-placeholder-token` is never a class, and no runner token is mounted into the proxy. A claim is allowed only from an IP address that Swarm DNS lists now for `tasks.<service>` of a class, and it gets the token of that class. Any other address, such as a container that you started on the class network, gets 403 and nothing reaches CircleCI. An address that two classes list is refused too. The 403 says only `claim refused`: the reason, with what DNS lists, is in the log of the proxy and nowhere a job can read it.
 - **One claim per container.** After a claim that returns a task, that address cannot claim again until DNS has not listed it for 30 seconds in a row, which means the container is gone. One missing answer, even a `no such host` for the whole class, is one poll of the 30 and never a release. A job that runs in a container cannot use the proxy to claim again for itself or to start more tasks of its class.
-- **The source address cannot be forged by a job.** The proxy attaches to each class overlay network with `endpoint_mode: dnsrr`, so it sees the address of the container that connects, not an address that the Swarm load balancer rewrote. The runner services drop `NET_RAW`, so even root in a container cannot send packets with another address. Keep `cap_drop: [NET_RAW, MKNOD]` or `ALL` on every class that uses the proxy. The one exception is `linux-microvm-docker`, which cannot drop it (BuildKit needs it): it runs in a VM with no `NET_ADMIN`, stays at one replica, and has an overlay of its own, so there is no other runner of its class to impersonate ([MicroVM jobs](microvm.md#security)).
-- **It knows who has claimed, also after a restart.** The proxy writes the addresses that have claimed to the small volume `proxy-state` before the runner gets its task. If it cannot write them, the claim fails and the runner does not get the task, and the proxy removes the state file (and keeps its marker), so that its next start takes the fail-safe path below instead of reading a state that is behind. A restart with a state refuses every address in it, whether Swarm DNS lists that address yet or not, and only those, so a runner that started before the proxy, or waited through a restart, is never locked out. A start with no state (an empty `proxy-state`, a state that was lost, or a class that is new) does not guess: for each class the proxy asks CircleCI (`GET /api/v3/runner/scale`, with the token of that class) how many tasks run. With none running, no runner present can hold a job, and they may claim. With some running, or when the call fails, the proxy refuses every runner of that class present until Swarm replaces it, so a runner that holds a job cannot claim another after a failover. The state stays on the node, so if the proxy moves to another node, it starts empty there: refer to [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves) for what to do. The service is pinned to the node that keeps the volume (the label `machine-runner-swarm.proxy=true`).
+- **The source address cannot be forged by a job.** The proxy attaches to each class overlay network with `endpoint_mode: dnsrr`, so it sees the address of the container that connects, not an address that the Swarm load balancer rewrote. The runner services drop `NET_RAW`, so even root in a container cannot send packets with another address. The encrypted class networks need Docker Engine 23.0.3 or later (or 20.10.24): earlier engines accepted unauthenticated VXLAN traffic on encrypted overlay networks ([CVE-2023-28840](https://github.com/advisories/GHSA-232p-vwff-86mp)), which would let a host on the node network inject packets into a class overlay. The setup helper requires Docker 24 or later. Keep `cap_drop: [NET_RAW, MKNOD]` or `ALL` on every class that uses the proxy. The one exception is `linux-microvm-docker`, which cannot drop it (BuildKit needs it): it runs in a VM with no `NET_ADMIN`, stays at one replica, and has an overlay of its own, so there is no other runner of its class to impersonate ([MicroVM jobs](microvm.md#security)).
+- **It knows who has claimed, also after a restart.** The proxy writes the addresses that have claimed to the small volume `proxy-state` before the runner gets its task. If it cannot write them, the claim fails and the runner does not get the task, and the proxy removes the state file (and keeps its marker), so that its next start takes the fail-safe path below instead of reading a state that is behind. A restart with a state refuses every address in it, whether Swarm DNS lists that address yet or not, and only those, so a runner that started before the proxy, or waited through a restart, is never locked out. A start with no state (an empty `proxy-state`, a state that was lost, or a class that is new) does not guess: for each class the proxy asks CircleCI (`GET /api/v3/runner/scale`, with the token of that class) how many tasks run. With none running, no runner present can hold a job, and they may claim. With some running, or when the call fails, the proxy refuses every runner of that class present until Swarm replaces it, so a runner that holds a job cannot claim another after a failover. The state stays on the node, so if the proxy moves to another node, it starts empty there: refer to [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves) for what to do. The service runs on a manager by default, and you can pin it to the node that keeps the volume with the label `machine-runner-swarm.proxy=true` and the placement variable.
+- **A claim with an unknown outcome counts as a claim.** When the request reached CircleCI but the answer was lost (a timeout, a broken connection), the proxy cannot know whether CircleCI handed the runner a task. It latches the runner as if the claim had succeeded, so that runner is refused until Swarm replaces it. This costs a runner, never a second task for one container. The proxy waits at most 60 seconds for the response headers of the upstream.
 - **It fails closed otherwise.** The proxy does not start without a usable token file for every class, nor when it cannot write its state. It answers 503 when DNS fails, when a token file disappears or when it cannot write its state. A count of running tasks that CircleCI does not give as a whole number of 0 or more (`data.attributes.running_task_count` and `unclaimed_task_count`, exactly these names), or does not give in 25 seconds for all classes together, counts as running tasks. It logs addresses, class names, and status codes, never a token.
-- **It limits what a job can send it.** A claim is accepted from one address at most twice a second, with bursts of 10 (a runner claims about every 5 seconds), and its body is at most 64 KiB. The server has timeouts for the request header, the whole request and an idle connection, and caps the size of the headers. A runner that has claimed, or has a claim in flight, is refused from memory with no DNS lookup, and the lookups of all other claims share one answer for a second, so a job that floods the proxy with claims cannot make claims of other classes fail.
+- **It limits what a job can send it.** A claim is accepted from one address at most twice a second, with bursts of 10 (a runner claims about every 5 seconds), and its body is at most 64 KiB. The server has timeouts for the request header, the whole request and an idle connection, and caps the size of the headers. A runner that has claimed, or has a claim in flight, is refused from memory with no DNS lookup, and the lookups of all other claims share one answer for a second, so a job that floods the proxy with claims cannot make claims of other classes fail. Besides the claim limit, every client address is limited to 50 requests a second, with bursts of 200, on all paths, and the proxy serves at most 512 requests at the same time: more get a 503 with a `Retry-After` header. The proxy logs one summary line a minute: the claims it forwarded, the claims it latched, and the claims it refused, by reason. These limits keep one runner from starving the rest, and they do not make the proxy proof against a hostile job: the 512 shared slots and the one replica can still be used up by a job that sends enough requests from the containers of its class, and the claims of every class then wait. Watch the log line and [Monitor the token proxy](operations.md#monitor-the-token-proxy).
 - **It is small and locked down.** One static Go binary, in a published image on a minimal base (distroless static: CA certificates, no shell, no package manager), runs as uid 65534 with no capabilities, a read-only root filesystem and no published port. The image is signed, and a release pins it by digest: refer to [The token proxy image](#the-token-proxy-image). Its secrets are the class tokens and nothing else.
 
 What it does not do:
 
 - **It sees the runner traffic of its classes.** The runner and the task agent send their API calls through it, over plain HTTP on the overlay network: claims, task configuration, and step output. The class token is never on that path, but the task token is. Between nodes, the Linux class networks are encrypted by default (`driver_opts: {encrypted: "true"}`, IPsec between the nodes, which needs IP protocol 50 (ESP) open between them: refer to [Encrypted class networks](multi-node.md#encrypted-class-networks)), so the task tokens and the step output do not cross the network of the nodes in clear text, and a host on that network cannot inject packets into a class overlay. Docker does not support encrypted overlay networks for Windows containers, so the Windows class traffic is plain between nodes: keep the Windows nodes on a network that you trust.
 - **It is one point of failure.** One replica serves all classes, because a second replica would not share the record of who has claimed. While it is down, no runner can claim. A job that is running keeps its container and its calls wait for the proxy. Refer to [Monitor the token proxy](operations.md#monitor-the-token-proxy).
-- **The node of the proxy holds every class token.** A job that escapes its container onto that node reads them. The proxy never runs on a Docker-build node. It runs on a manager by default; choose a manager that runs no jobs when you can, and with several managers pin the proxy to one with the label `machine-runner-swarm.proxy=true`.
+- **The node of the proxy holds every class token.** A job that escapes its container onto that node reads them. The proxy never runs on a Docker-build node. It runs on a manager by default. In a cluster, label the node that runs it with `machine-runner-swarm.proxy=true`: runner services never run on a node with that label, so a job never shares a node with the proxy. On a single node there is no such label, nothing changes, and the jobs run next to the proxy. With several managers, pin the proxy to one with the label and `MACHINE_RUNNER_SWARM_PROXY_PLACEMENT`.
+- **It depends on the runner API.** The proxy knows two runner API calls: `POST /api/v3/runner/claim`, and `GET /api/v3/runner/scale` with the fields `running_task_count` and `unclaimed_task_count`. They are tested against the runner version that this release pins. If CircleCI changes them, the proxy fails closed and jobs wait until a release of this project follows the change. Pin the runner version in production. This page makes no claim about how the Runner Terms apply to a proxy between your runners and CircleCI: that is for your own review.
 - **It does not cover the persistent classes.** Refer to [The persistent class](#the-persistent-class).
 - **Windows has its own proxy.** The Windows stack runs `token-proxy-windows` (the `windows/amd64` image of the same tag) for the Windows classes, because a Windows node does not share its network with a Linux proxy. It works as described here, with the differences in [Windows](#windows). There is no `windows/arm64` image ([Windows](install-windows.md#the-token-proxy-image)).
 - **It does not replace CircleCI-side controls.** A stolen class token still lets its holder run a runner on that class. Rotate tokens and restrict classes to projects, as in [CircleCI-side controls](#circleci-side-controls).
@@ -148,7 +154,7 @@ The runner executes the jobs of your classes, so it must be the binary that Circ
 
 ### Where the runner comes from
 
-The distributor downloads the tarball over HTTPS from the release bucket of CircleCI. By default it compares the SHA-256 of the tarball with the values that the stack file carries for the pinned version (`MACHINE_RUNNER_SWARM_RUNNER_SHA256`: `amd64`, `arm64`, `ppc64le` and `s390x`, taken from CircleCI's manifest when the version was bumped, and reviewed with the release of this repository). The manifest is not asked, so a change of the bucket after the bump cannot change what the nodes install. Each release of this repository bumps the version and its values together.
+The distributor downloads the tarball over HTTPS from the release bucket of CircleCI. By default it compares the SHA-256 of the tarball with the values that the stack file carries for the pinned version (`MACHINE_RUNNER_SWARM_RUNNER_SHA256`: `amd64`, `arm64`, `ppc64le` and `s390x`, taken from CircleCI's manifest when the version was bumped, and reviewed with the release of this repository). The manifest is not asked, so a change of the bucket after the bump cannot change what the nodes install. Each release of this repository bumps the version and its values together. The values are copied from CircleCI's manifest when the version is bumped, so this is trust on first use from the same bucket: CircleCI publishes no signature for the runner that this stack checks.
 
 A floating value (`3.1`, `3`, `current`) cannot have such a list, because the version is not known in advance. The distributor ignores the default list of the pin and compares the SHA-256 with the value in the `manifest.json` of CircleCI, which it also gets over HTTPS. **This is weaker**: the manifest comes from the same bucket as the tarball, so whoever can change one can change the other, and the check proves that the download is whole, not that CircleCI published it. It is the same trust as the runner's own download of the task agent, which every container fetches from the same bucket. An exact version of your own needs its own list, from the `checksums.txt` of its release (the tarballs of every architecture of your nodes), or the word `manifest`. The distributor then installs only a tarball that matches.
 
@@ -166,13 +172,13 @@ A floating value (`3.1`, `3`, `current`) cannot have such a list, because the ve
 
 ### The token proxy image
 
-The token proxy is not installed by the distributor: it is the image `ccilabs/machine-runner-swarm-proxy` of Docker Hub, which Swarm pulls. Its integrity rests on the image digest, not on a volume. A release bundle names the image by tag and digest (`ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`), so Docker pulls exactly the image that the release pipeline pushed, whatever happens to the tag later. A checkout names the tag `latest`, which only a release moves and which is not a digest: pin a digest for anything that matters ([Upgrade the token proxy](operations.md#upgrade-the-token-proxy)).
+The token proxy is not installed by the distributor: it is the image `ccilabs/machine-runner-swarm-proxy` of Docker Hub, which Swarm pulls. Its integrity rests on the image digest, not on a volume. A release bundle names the image by tag and digest (`ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`), so Docker pulls exactly the image that the release pipeline pushed, whatever happens to the tag later. A checkout names the tag `latest`, which only a release moves and which is not a digest: pin a digest for anything that matters ([Upgrade the token proxy](operations.md#upgrade-the-token-proxy)). `linux/setup.sh --deploy` prints a warning when `MACHINE_RUNNER_SWARM_PROXY_IMAGE` is not pinned by digest. `ccilabs` is the Docker Hub organization of CircleCI Labs. The name is not what you trust: the signature below is, and an image of that name that does not verify is not this project's.
 
 Every digest that the pipeline pushes is signed, and the pipeline checks the signature of the image again before it gives the image its release tags. The Linux index (four platforms), each Windows image (Server 2022 and 2025) and the manifest list that joins them are signed separately, so you can verify the list that you name or the image of one platform. The image runs as the user 65534 (Windows: `ContainerAdministrator`, because a Windows volume has no user mapping), and the state of the proxy is the only thing it writes.
 
 #### Verify the token proxy image
 
-The signature is a keyless [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) signature, made with the OIDC token of the CircleCI job that pushed the image, like the signature of a release ([Verify a release](install-linux.md#verify-a-release)). It proves that a job of this CircleCI project pushed that digest. Verify the digest that you run, before you run it. You need cosign 2.4 or later. A digest of the manifest list covers every platform; pass the tag, and cosign resolves it to the digest and prints it.
+The signature is a keyless [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) signature, made with the OIDC token of the CircleCI job that pushed the image, like the signature of a release ([Verify a release](install-linux.md#verify-a-release)). It proves that a job of this CircleCI project pushed that digest. Verify the digest that you run, before you run it. You need cosign 3.1.3 or a later 3.x (CI signs and verifies with 3.1.3, and earlier versions are not tested). A digest of the manifest list covers every platform; pass the tag, and cosign resolves it to the digest and prints it.
 
 ```bash
 cosign verify ccilabs/machine-runner-swarm-proxy:<version> \
@@ -180,7 +186,7 @@ cosign verify ccilabs/machine-runner-swarm-proxy:<version> \
   --certificate-oidc-issuer "https://oidc.circleci.com"
 ```
 
-The command prints the verified claims as JSON when the project and the pipeline definition above signed the image. Compare the digest in its output with the one in your stack file. A tag from a commit that is not a release (`edge`, `sha-<12 characters>`) verifies the same way. The identity does not name a branch, and a job of any branch can sign with it, so also check the ref in the certificates: the extension `1.3.6.1.4.1.57264.1.14` must be `refs/heads/main`, for every signature of the digest. `cosign` has no flag for that extension, so the command reads it, with the same pattern as [Verify a release](install-linux.md#verify-a-release) (the OID, then the value `refs/heads/main`, from a byte boundary):
+The command prints the verified claims as JSON when the project and the pipeline definition above signed the image. This is only the signature check. It does not look at the ref, so a reader who stops here accepts an image that a job of any branch signed: the ref check below is a second, separate step. Compare the digest in its output with the one in your stack file. A tag from a commit that is not a release (`edge`, `sha-<12 characters>`) verifies the same way. The identity does not name a branch, and a job of any branch can sign with it, so also check the ref in the certificates: the extension `1.3.6.1.4.1.57264.1.14` must be `refs/heads/main`, for every signature of the digest. `cosign` has no flag for that extension, so the command reads it, with the same pattern as [Verify a release](install-linux.md#verify-a-release) (the OID, then the value `refs/heads/main`, from a byte boundary):
 
 ```bash
 cosign download signature ccilabs/machine-runner-swarm-proxy:<version> \
@@ -193,6 +199,14 @@ cosign download signature ccilabs/machine-runner-swarm-proxy:<version> \
 The notes of every release name the image of that release.
 
 ### What remains
+
+Not verified by this stack:
+
+- The task agent, which every container downloads from the same bucket at start, with no pin and no check. It runs as the job user and holds the task token.
+- The source of the pinned SHA-256 values: CircleCI's manifest at the time of the bump.
+- The gap between the hash check and the `exec` of one container start (the next point).
+
+Also:
 
 - A privileged sibling container with `SYS_ADMIN` on the same node could mount the volume read-write and change both the binary and its record. The microVM classes do not mount the volume for this reason: each VM downloads and verifies its own runner. Refer to [MicroVM jobs](microvm.md#the-runner-in-a-vm).
 - The check at the start of a container narrows the window and does not close it: a sibling that rewrites the file between the hash and the `exec` of one start is not detected.
@@ -207,11 +221,11 @@ Two things differ. The runner is the main process of the container and there is 
 
 ## Compared with the official runner installs
 
-This table puts the Linux classes of this repository next to the installs that CircleCI documents. The first three columns come from the public CircleCI documentation only, and the last two from the tests of this repository. Where the public documentation says nothing, the cell says so.
+This table puts the Linux classes of this repository next to the installs that CircleCI documents. The first three columns are our reading of the public CircleCI documentation as of 17 October 2026: they are not statements by CircleCI, the pages change, and the sources below are the reference. The last two columns come from the tests of this repository. Where the public documentation says nothing, the cell says so.
 
 | | Machine runner 3 package | Container runner | Machine runner orchestrator | This repository, default class | This repository, hardened class |
 |---|---|---|---|---|---|
-| Can a job read the resource class token? | Yes in effect. The job gains the privileges of the task agent, and the runner runs as the same user (`circleci`) | Not stated in the public documentation. The agent holds the tokens in a Kubernetes secret | No. A sidecar keeps the token out of the VM, and `grantSudo` is refused without it | No, even with sudo: the token is in the token proxy, and the container holds a placeholder. A job on the node of the proxy could read it, after a container escape | No, for the same reason. The persistent class is the exception, refer to [The persistent class](#the-persistent-class) |
+| Can a job read the resource class token? | According to the documentation, a job gains the privileges of the task agent, and with the packages the runner runs as the same user (`circleci`) | Not stated in the public documentation. The agent holds the tokens in a Kubernetes secret | Documented as no: a sidecar keeps the token out of the VM, and the documentation ties `grantSudo` to it | No, even with sudo: the token is in the token proxy, and the container holds a placeholder. A job on the node of the proxy could read it, after a container escape | No, for the same reason. The persistent class is the exception, refer to [The persistent class](#the-persistent-class) |
 | Can jobs use sudo? | Whatever you grant the `circleci` user | Set by the job image and the pod `securityContext` that you configure | No by default (`grantSudo: false`), and jobs run as the unprivileged `circleci` user. Optional with `grantSudo: true` | Yes, passwordless, as in the Docker executor | No. A setuid binary cannot lift a job to root, because the step-down uses `setpriv --no-new-privs` |
 | The boundary between jobs | None: each job runs on the machine where the runner is installed | An ephemeral pod, which Kubernetes tears down after the job. Pods share the node kernel | A virtual machine for each job, provisioned on demand and shut down after the job | A new container for each job, on a kernel that all containers on the node share | The same: a new container for each job, with a shared kernel |
 
@@ -220,9 +234,9 @@ Sources: [Self-hosted runner concepts](https://circleci.com/docs/guides/executio
 Read the table this way:
 
 - **A clean container is not a virtual machine.** The orchestrator is the only column with a hardware-level boundary between jobs. If jobs must not share a kernel, use the orchestrator, or dedicate nodes to one trust group. Refer to [Why Swarm and not container runner or another runner?](faq.md#why-swarm-and-not-container-runner-or-another-runner)
-- **The token.** In the orchestrator the token never reaches the VM, so even a root job cannot read it. The single-task classes of this repository work the same way: the token proxy adds the token to the claim, as the sidecar does, and the container holds a placeholder, so even a root job cannot read it. What differs is that a job that escapes its container onto the node of the proxy reaches the tokens, where in the orchestrator the sidecar is next to a virtual machine. The persistent class and Windows are weaker: there the token is a file in the container, readable by a job that uses sudo (persistent) or by every job (Windows).
+- **The token.** According to its documentation, in the orchestrator the token never reaches the VM, so even a root job cannot read it. The single-task classes of this repository work the same way: the token proxy adds the token to the claim, as the sidecar does, and the container holds a placeholder, so even a root job cannot read it. What differs is that a job that escapes its container onto the node of the proxy reaches the tokens, where in the orchestrator the sidecar is next to a virtual machine. The persistent class and Windows are weaker: there the token is a file in the container, readable by a job that uses sudo (persistent) or by every job (Windows).
 - **The runner binary.** The table does not compare how the installs verify the runner. In this repository the distributor installs it with a SHA-256 check, and the entrypoint checks it at every container start. Refer to [Runner binary integrity on Linux](#runner-binary-integrity-on-linux).
-- **Windows.** A single-task class works as on Linux: the job runs as an administrator, the same account as the runner, but the container holds only the placeholder, and the proxy holds the token. The persistent class is at parity with the official Windows runner: the job can read the token. The Windows classes have no hardened variant. Treat each Windows class as a trust boundary, and refer to [Windows](#windows).
+- **Windows.** A single-task class holds only the placeholder, and the proxy holds the token, so the job cannot read the token from its own container. No test asserts that on Windows, and it is not a boundary against a hostile job on the same host as the proxy (refer to [Windows](#windows)). The persistent class is at parity with the official Windows runner: the job can read the token. The Windows classes have no hardened variant. Treat each Windows class as a trust boundary.
 
 ## Hardening defaults
 
@@ -277,14 +291,75 @@ Do not set the variable to `true` on Linux. Refer to [Error: failed to remove wo
 
 ## Isolation between runners
 
-Replicas of one class share an overlay network and can reach each other. Swarm cannot prevent this: `enable_icc=false` is ignored on swarm-scoped networks, overlay networks have no such option, and a stack cannot use a node-local bridge network. On Windows, the overlay is the only network option for services, and Windows has no equivalent control for it.
+Replicas of one class share an overlay network and can reach each other. Swarm cannot prevent this: `enable_icc=false` is ignored on swarm-scoped networks, overlay networks have no such option, and a stack cannot use a node-local bridge network. On Windows, the overlay is the only network option for services, and Windows has no equivalent control for it. All Windows classes share one overlay network of the stack, and it is not encrypted, so Windows classes can reach each other, and their traffic is in clear text between nodes ([Encrypted class networks](multi-node.md#encrypted-class-networks)).
 
 On Linux, each class gets its own overlay network, so classes cannot reach each other. Containers can still reach the host network and the internet through default egress. To reduce the exposure:
 
 - Run sensitive classes on dedicated nodes. Refer to [Multi-Node Clusters](multi-node.md).
 - Treat the proxy as part of every class network: any container on a class network can reach it, and the proxy answers only claims from the runners of the class.
-- Filter egress on the host, for example in the `DOCKER-USER` chain on Linux.
+- Filter egress on the host, for example in the `DOCKER-USER` chain on Linux. Docker bypasses `ufw` and `firewalld` rules for published ports and for container traffic, so a rule in either of those does not filter it.
 - Rely on single-use containers. A compromised replica disappears with its job.
+
+## Cloud nodes: block the metadata address
+
+A job runs in a container on your node, and nothing in this stack or in Docker stops it from sending traffic to the instance-metadata service that cloud providers serve at the link-local address `169.254.169.254`. On a cloud virtual machine, that service can hand out the credentials of the role that is attached to the node and, on some clouds, the user data of the instance. A job that reads them acts as the node. This is true of every self-hosted runner on a cloud VM, and it is not specific to Swarm. The recipes below are the usual ones. They are not tested in this repository's CI: check them on your own nodes with a job that runs `curl -m 3 http://169.254.169.254/` and must fail.
+
+1. **Give the node role the fewest permissions that the node needs, which is often none.** Do not leave the Swarm join token readable in the user data or the startup script of an instance, because any job that reaches the metadata service reads it, and with it joins a node to your Swarm.
+2. **Block the address for containers on Linux.** Add a rule to the `DOCKER-USER` chain, which Docker evaluates before its own rules for container traffic:
+
+   ```bash
+   sudo iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+   ```
+
+   Docker creates the chain when it starts, so the rule must be added after Docker is up, and again after a reboot: put it in a systemd unit that starts after `docker.service`. The unit adds the rule only when it is missing.
+
+   ```ini
+   [Unit]
+   Description=Block the instance metadata address for containers
+   After=docker.service
+   Requires=docker.service
+
+   [Service]
+   Type=oneshot
+   RemainAfterExit=yes
+   ExecStart=/bin/sh -c 'iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254 -j DROP'
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   The rule does not cover a container on the host network, which the docker-build class can use, and it does not cover the host itself. Check it with `sudo iptables -S DOCKER-USER` after a reboot and after a restart of Docker. If your Docker uses another firewall backend, use its equivalent of the rule.
+3. **On AWS, require IMDSv2 and a hop limit of 1.** This disables IMDSv1 and stops the session-token response from reaching a container behind Docker's bridge or NAT, because the extra hop exceeds the limit:
+
+   ```bash
+   aws ec2 modify-instance-metadata-options --instance-id <id> --http-tokens required --http-put-response-hop-limit 1 --http-endpoint enabled
+   ```
+
+   It does not cover containers on the host network. It also breaks every job that uses the node role through the metadata service: give such jobs their credentials another way, for example through a context or OIDC.
+4. **On other clouds, apply the same two ideas.** Allow the metadata service from the host only (the rule above), use the provider's session or header requirement for it if it has one, and attach a role with minimal permissions. Refer to the documentation of your provider for the setting, because this page does not cover each cloud.
+
+On Windows, this page has no rule that is tested. The role, user data and cloud-side settings above apply to a Windows node too, but have not been tried with Windows containers.
+
+## Listening ports on a node
+
+Docker and the stack open these ports on a node. The stack publishes nothing else: the token proxy publishes no port.
+
+| Port | Protocol | Nodes | Used for | Who may reach it |
+|---|---|---|---|---|
+| 2377 | TCP | Managers | Cluster management | The nodes of the cluster only |
+| 7946 | TCP and UDP | All | Node discovery | The nodes of the cluster only |
+| 4789 | UDP | All | Overlay network (VXLAN) | The nodes of the cluster only, even though the Linux class networks are encrypted: an unfiltered port lets a host on the network send packets to the overlay |
+| IP protocol 50 (ESP) | | All | IPsec of the encrypted Linux class networks ([Encrypted class networks](multi-node.md#encrypted-class-networks)) | The nodes of the cluster only |
+| 53 | TCP and UDP | Every node, with the routing mesh | The DNS forwarder `microvm-dns` of the [microVM classes](microvm.md#dns). It is an open resolver for anyone who can reach the node | The nodes of the cluster only |
+| 54782 | TCP | The node that runs a task of the SSH class | Rerun job with SSH ([Rerun job with SSH](resource-classes.md#rerun-job-with-ssh)) | The networks where your users connect, such as a VPN |
+
+Docker publishes the last two ports with NAT rules that run before `ufw` and `firewalld` rules, so a rule in either does not restrict them. Filter published ports in the `DOCKER-USER` chain, or with a cloud security group. As an example, which is not tested here, this drops port 54782 from sources outside a VPN range:
+
+```bash
+sudo iptables -I DOCKER-USER ! -s <VPN range> -p tcp --dport 54782 -j DROP
+```
+
+[Inter-node ports](multi-node.md#inter-node-ports) has the rules for the cluster ports.
 
 ## CircleCI-side controls
 
@@ -316,7 +391,7 @@ The stack cannot decide which projects may use a class. Apply these controls in 
 
 3. **Context restrictions.** Project restrictions, security groups, and expression restrictions combine with logical AND. Restrict every context that jobs on a runner class use. For deploy contexts, add an expression such as `pipeline.git.branch == "main" and not job.ssh.enabled`.
 4. **No fork builds on public projects.** CircleCI does not make self-hosted runners available to public projects that have **Build forked pull requests** enabled.
-5. **SSH rerun stays off unless a class needs it.** The shipped classes leave `CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR` unset and publish no ports, so they cannot serve SSH. If you deploy the SSH add-on stack file, keep its class for named projects and restrict inbound port 54782. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh).
+5. **SSH rerun stays off unless a class needs it.** The shipped classes leave `CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR` unset and publish no ports, so they cannot serve SSH. If you deploy the SSH add-on stack file, keep its class for named projects and restrict inbound port 54782 with the `DOCKER-USER` chain or a cloud security group, not with `ufw` or `firewalld`, which a published port bypasses. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh).
 6. **Monitoring.** Watch the runner inventory for names you do not know, and the logs for `401` and for exit code 80. In the log of the token proxy, a claim that is `refused` comes from a container that is not a runner of a class, or from a runner that tries to claim twice. Refer to [Monitor the token proxy](operations.md#monitor-the-token-proxy).
 
 Runner classes are usable only by jobs of the organization that owns them.
@@ -328,14 +403,34 @@ Runners need outbound HTTPS only, and no inbound access. Allow these hosts by na
 | Host | Port | Used for |
 |---|---|---|
 | `runner.circleci.com` | 443 | The runner API: claiming tasks. With the token proxy, only the node of the proxy calls it for the single-task Linux classes, because the runners and their task agents reach the API through the proxy |
-| `circleci-binary-releases.s3.amazonaws.com` | 443 | The task agent, which every new container downloads, and the runner download: on Linux by the `runner-distributor` service (the manifest and the tarball), or by each container of a microVM class, on Windows during setup |
+| `circleci-binary-releases.s3.amazonaws.com` | 443 | The task agent, which every new container downloads, and the runner download: on Linux by the `runner-distributor` service (the manifest and the tarball), or by each container of a microVM class, and on Windows by the `runner-distributor-windows` service |
 | `circleci-tasks-prod.s3.us-east-1.amazonaws.com` | 443 | Caches, workspaces, artifacts, and test results |
-| `internal.circleci.com` | 443 | CircleCI endpoint used during checkout |
-| Your VCS host, for example `github.com` | 443, and 22 for SSH checkouts | Checkout |
+| `internal.circleci.com` | 443 | Named in earlier versions of this page for checkout. It is not on CircleCI's list of hosts for self-hosted runners (the two hosts above, the cache host, and your VCS host), so allow it only if a job log shows that a step needs it |
+| Your VCS host, for example `github.com` | 443, and 22 for SSH checkouts | Checkout. For Bitbucket Cloud over SSH, CircleCI's changelog says the agent uses `ssh.bitbucket.org` from 12 November 2026 |
 | Your image registries, for example Docker Hub and `mcr.microsoft.com` | 443 | Pulling the service images, on Linux also the `alpine` image of the `runner-distributor` service. The token proxy image comes from Docker Hub (`registry-1.docker.io`, `auth.docker.io` and its content delivery network), from a mirror of it that you name with `MACHINE_RUNNER_SWARM_PROXY_IMAGE` |
 | `github.com` and `release-assets.githubusercontent.com` | 443 | On Windows, Git for Windows and 7-Zip, which the `runner-distributor-windows` service downloads (not in an air-gapped setup with a mirror). The first host redirects the downloads to the second |
 
 If your VCS organization uses an IP allow list, add the egress addresses of your nodes. The list applies to every checkout method. If you use an explicit proxy, test a checkout through it before you roll out a class. Jobs inherit `HTTPS_PROXY` and `NO_PROXY` from the service environment in the stack file.
+
+## What needs internet
+
+The stack accepts no inbound connection. This table lists what each part of an install fetches from the internet, and what it means for CircleCI cloud and for CircleCI server. Only CircleCI cloud with internet access is tested. A host without internet access, and CircleCI server, are not tested in this release.
+
+| Part | Fetches | Cloud | Server |
+|---|---|---|---|
+| The release (once, on any host) | The bundle, `SHA256SUMS` and the signature from `github.com` and its release hosts. `cosign` also needs the Sigstore trust root, which it downloads on first use (from `tuf-repo-cdn.sigstore.dev`). Not tested offline | Needed | Needed |
+| The stack images | `alpine` (the Linux distributor) and the token proxy image from Docker Hub (`registry-1.docker.io`, `auth.docker.io` and its content delivery network), `servercore` from `mcr.microsoft.com`. Your registry or mirror can replace each: `MACHINE_RUNNER_SWARM_PROXY_IMAGE` for the proxy | Needed, or a mirror | Needed, or a mirror |
+| The runner download | `circleci-binary-releases.s3.amazonaws.com`, by the distributor on every node (and by each container of a microVM class) | Needed, or a mirror | Not tested: the distributor downloads the runner of CircleCI cloud |
+| The task agent | `circleci-binary-releases.s3.amazonaws.com`, by every new container at start (CircleCI's runner downloads it) | Needed | Not tested |
+| Git and 7-Zip on Windows | `github.com` and `release-assets.githubusercontent.com`, by `runner-distributor-windows` | Needed, or a mirror | Needed, or a mirror |
+| The runner API | `runner.circleci.com`, called by the token proxy for claims (the runners call the proxy) | Needed | Your server host: set `-upstream` of the proxy |
+| Jobs | Your VCS host for checkout. `circleci-tasks-prod.s3.us-east-1.amazonaws.com` for caches, workspaces, artifacts and test results. Whatever the job itself fetches | Needed | The storage of your server, not tested |
+
+The three hosts that CircleCI lists for machine runners (`runner.circleci.com`, `circleci-binary-releases.s3.amazonaws.com`, `circleci-tasks-prod.s3.us-east-1.amazonaws.com`) are in its [runner FAQ](https://circleci.com/docs/guides/execution-runner/runner-faqs/#what-connectivity-is-required). The other hosts come from this stack. [Egress hosts](#egress-hosts) has the same list by host. Mirrors are described in [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror) and [Upgrade the token proxy](operations.md#upgrade-the-token-proxy). They replace the downloads of this stack, and they do not replace the task agent that every container fetches from CircleCI.
+
+### CircleCI server
+
+CircleCI documents machine runner 3 for server 4.4 and later, and says that an install on server sets the API URL of the runner (`CIRCLECI_RUNNER_API_URL`, or `api.url` in the config file). This repository is tested against CircleCI cloud only. In this stack the runners send their calls to the token proxy, so the URL of your server goes to the `-upstream` argument of the `token-proxy` service (its `command` in the stack file), and the runners keep `CIRCLECI_RUNNER_API_URL: http://token-proxy:8080`. Whether the proxy and the runner download work against your server version is not known, and no job of this project has run against one. Config policies, which the CircleCI-side controls above use, need the Scale plan on cloud or server 4.2 or later.
 
 ## BitLocker on Windows hosts
 

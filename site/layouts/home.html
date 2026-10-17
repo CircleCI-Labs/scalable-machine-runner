@@ -1,18 +1,23 @@
 {{- /*
-  Landing page: hero, feature cards, "When to use it" from README.md, a short first-job path, and a support notice.
+  Landing page: hero, feature cards (why), "Who it is for" and "What is tested" from README.md, a short first-job path, and a support notice.
 */ -}}
 {{ define "main" }}
   {{- $home := site.Params.home -}}
   {{- $repo := partial "repo-url.html" . -}}
 
+  {{- /* Two sections of README.md, each from its h2 (by search id) up to the h2 that follows it there. */ -}}
   {{- $content := .Content -}}
-  {{- $whenToUse := "" -}}
-  {{- $head := split $content "<h2 data-hextra-search-id=\"when-to-use-it\"" -}}
+  {{- $who := "" -}}
+  {{- $head := split $content "<h2 data-hextra-search-id=\"who-it-is-for\"" -}}
   {{- if eq (len $head) 2 -}}
-    {{- $tail := split (index $head 1) "<h2 data-hextra-search-id=\"how-it-works\"" -}}
-    {{- if ge (len $tail) 1 -}}
-      {{- $whenToUse = printf "<h2 data-hextra-search-id=\"when-to-use-it\"%s" (index $tail 0) -}}
-    {{- end -}}
+    {{- $tail := split (index $head 1) "<h2 data-hextra-search-id=\"quickstart\"" -}}
+    {{- $who = printf "<h2 data-hextra-search-id=\"who-it-is-for\"%s" (index $tail 0) -}}
+  {{- end -}}
+  {{- $tested := "" -}}
+  {{- $head = split $content "<h2 data-hextra-search-id=\"what-is-tested\"" -}}
+  {{- if eq (len $head) 2 -}}
+    {{- $tail := split (index $head 1) "<h2 data-hextra-search-id=\"support\"" -}}
+    {{- $tested = printf "<h2 data-hextra-search-id=\"what-is-tested\"%s" (index $tail 0) -}}
   {{- end -}}
 
   {{ partial "sidebar.html" (dict "context" . "disableSidebar" true) }}
@@ -48,7 +53,7 @@ runners_runner-distributor   global       <span class="cci-t-ok">1/1</span></cod
 
     <section class="cci-features" aria-labelledby="cci-features-title">
       <div class="cci-wrap">
-        <h2 id="cci-features-title" class="cci-section-title">Machine runners for the Docker hosts you already run</h2>
+        <h2 id="cci-features-title" class="cci-section-title">Why machine runner swarm</h2>
         <ul class="cci-cards">
           {{- range $home.features }}
             <li class="cci-card">
@@ -65,19 +70,23 @@ runners_runner-distributor   global       <span class="cci-t-ok">1/1</span></cod
     <section class="cci-readme">
       <div class="cci-wrap cci-readme-wrap">
         <div class="content cci-prose">
-          {{- if $whenToUse -}}
-            {{ $whenToUse | safeHTML }}
+          {{- if $who -}}
+            {{ $who | safeHTML }}
           {{- end -}}
 
           <section class="cci-first-job" aria-labelledby="cci-first-job-title">
             <h2 id="cci-first-job-title" data-hextra-search-id="your-first-job">Your first job</h2>
             <ol>
-              <li>Create a resource class and token with the CircleCI CLI (<a href="https://circleci.com/docs/guides/toolkit/circleci-cli/">install the CLI</a>, then <code>circleci auth login</code>).</li>
-              <li>Follow <a href="{{ "docs/get-started/quickstart-linux/" | relURL }}">Quickstart on Linux</a> or <a href="{{ "docs/get-started/quickstart-windows/" | relURL }}">Quickstart on Windows Server</a>: download a release, verify it, deploy the stack, and run a sample workflow.</li>
-              <li>Point a real workflow at your class. Start from <a href="{{ $repo }}/blob/main/examples/linux-hello.yml">examples/linux-hello.yml</a> on GitHub.</li>
+              <li>Create a resource class and a token with the <a href="https://circleci.com/docs/guides/toolkit/circleci-cli/">CircleCI CLI</a>.</li>
+              <li>Download the release, start Swarm, create the secrets, and deploy the stack. Follow <a href="{{ "docs/get-started/quickstart-linux/" | relURL }}">Quickstart on Linux</a> or <a href="{{ "docs/get-started/quickstart-windows/" | relURL }}">Quickstart on Windows Server</a>.</li>
+              <li>Run a sample job twice, and see a new container each time. Then point a real workflow at your class, starting from <a href="{{ $repo }}/blob/main/examples/linux-hello.yml">examples/linux-hello.yml</a>.</li>
             </ol>
             <p class="cci-first-job-more">Install paths, operations, and security are in the <a href="{{ "docs/" | relURL }}">documentation</a>.</p>
           </section>
+
+          {{- if $tested -}}
+            {{ $tested | safeHTML }}
+          {{- end -}}
 
           <section id="support" aria-labelledby="cci-support-title">
             <h2 id="cci-support-title" data-hextra-search-id="support">Support</h2>

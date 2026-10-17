@@ -5,16 +5,15 @@ version: 2.1
 #
 # One workflow, `ci`. Expression filters on the parameters switch jobs in and out:
 #   lint and docs   the lint jobs and the docs site build: every pipeline, docs-only changes included
-#   not docs-only   the builds and tests: Linux Swarm tests, arm64 smoke test, setup.sh preflight. A change of
-#                   documentation only skips them
-#   windows         the Windows Server 2022 Swarm tests. proxy-image: the token proxy image jobs. microvm: linux-microvm.
-#                   The heavy suites: always on main and with `full: true`, and on another branch only when a changed file
-#                   is one that the suite reads (ci/setup-gate.sh, docs/ci.md)
-#   full-suite      main and `full: true` only: the Windows Server 2025 Swarm tests and linux-mixed-arch
+#   suites          every other job has a parameter of its own (windows, proxy-image, microvm, linux-swarm, linux-swarm-proxy,
+#                   linux-smoke, linux-image, container-agent, e2e-sim, proxy-test, signing). It is on when a changed file is one
+#                   that the suite reads, and always on main when a commit of the push would make a release and with `full: true`
+#                   (ci/setup-gate.sh, docs/ci.md)
+#   full-suite      main with a release to make, and `full: true`: the Windows Server 2025 Swarm tests and linux-mixed-arch
 #   e2e-linux       job A hosts a Swarm service, probes B1, B2, B3 run on it
 #   e2e-windows     the same on Windows (2022, then 2025)
-#   publish         main only, not for a change of documentation: the jobs that push the token proxy image
-#   release         the release job, which requires every job above
+#   publish         main only, when the proxy image is built: the jobs that push the token proxy image
+#   release         the release job, which requires every job above. Its parameter is on only when every suite is
 #
 # A second workflow, `docs-site`, publishes the docs site to GitHub Pages on main only. It is not a job
 # of `ci`, so that the release never waits for the publication (docs/ci.md, "Docs site").
@@ -32,12 +31,14 @@ parameters:
     type: boolean
     default: false
     description: >
-      main, or `full: true` (a manual run, or a schedule that sets it): the Windows Server 2025 jobs and linux-mixed-arch, the two most
-      expensive suites. It also switches the three heavy suites below on.
+      main when a commit of the push would make a release, or `full: true` (a manual run, or a schedule that sets it): the Windows Server
+      2025 jobs and linux-mixed-arch, the two most expensive suites. It also switches every suite below on.
   windows:
     type: boolean
     default: false
-    description: The Windows Server 2022 jobs. Always on main and with full, and on another branch for the changed files that they read.
+    description: >
+      The Windows Server 2022 jobs. Every suite parameter is on when the push is a release or full is true, and otherwise when a changed
+      file is one that the suite reads (ci/setup-gate.sh).
   proxy-image:
     type: boolean
     default: false
@@ -46,6 +47,40 @@ parameters:
     type: boolean
     default: false
     description: linux-microvm, the one job on the Android machine image. Same rule as windows.
+  linux-swarm:
+    type: boolean
+    default: false
+    description: The linux-swarm jobs distributor, a and b (linux/tests/run-all.sh). Same rule as windows.
+  linux-swarm-proxy:
+    type: boolean
+    default: false
+    description: The linux-swarm job proxy, which builds the token proxy image from proxy/. Same rule as windows.
+  linux-smoke:
+    type: boolean
+    default: false
+    description: linux-setup and linux-arm64 (ci/linux-smoke.sh). Same rule as windows.
+  linux-image:
+    type: boolean
+    default: false
+    description: linux-image-example (linux/images/example). Same rule as windows.
+  container-agent:
+    type: boolean
+    default: false
+    description: test-container-mode (the Go unit tests of linux/stack/container-agent). Same rule as windows.
+  e2e-sim:
+    type: boolean
+    default: false
+    description: e2e-simulation (ci/tests/e2e-sim.sh). Same rule as windows.
+  proxy-test:
+    type: boolean
+    default: false
+    description: >
+      proxy-test (the Go tests and builds of proxy/). Same rule as windows, and also on when proxy-image or e2e-windows is on: the Windows
+      jobs need its windows/amd64 build.
+  signing:
+    type: boolean
+    default: false
+    description: signing-rehearsal (ci/proxy-image.sh rehearse). Same rule as windows.
   pull-request:
     type: boolean
     default: false
@@ -75,7 +110,7 @@ parameters:
     type: boolean
     default: false
     description: >
-      main only, and not for a change of documentation only (the setup phase decides). The jobs that push the token proxy image to
+      main only, and only when proxy-image is on (the setup phase decides). The jobs that push the token proxy image to
       Docker Hub run instead of the jobs that only build and test it, and they have the context scalable-machine-runner-dockerhub. Without
       DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the context they build, test, say that nothing was pushed, and pass, unless the parameter
       strict is true (a production main), where they fail.
@@ -83,10 +118,9 @@ parameters:
     type: boolean
     default: false
     description: >
-      The push changes documentation only (docs/, site/, *.md). It switches the builds and tests off: the lint
-      jobs and the docs site build still run. The setup phase turns full-suite, e2e-linux, e2e-windows and
-      release off with it, so the release never waits for a job that was skipped. A docs commit makes no
-      release anyway (cliff.toml), and the gate runs everything when one would.
+      The push changes documentation only (docs/, site/, *.md). The setup phase turns every suite and release off with it, so the
+      lint jobs and the docs site build are all that runs. No job reads this parameter: the suite parameters carry the decision. A docs
+      commit makes no release anyway (cliff.toml), and the gate runs everything when one would.
   security-scan:
     type: boolean
     default: false
@@ -642,8 +676,9 @@ jobs:
 
   signing-rehearsal:
     description: >
-      The keyless signing of main, rehearsed in every pipeline that is not docs-only, on a throwaway image in a registry:2 container of the job
-      (ci/proxy-image.sh rehearse). The job gets its OIDC token with `circleci run oidc get`, which needs no context, signs the image with cosign
+      The keyless signing of main, rehearsed on a throwaway image in a registry:2 container of the job (ci/proxy-image.sh rehearse), in
+      every pipeline whose changed files the signing reads (ci/proxy-image.sh, ci/tools.sh). The job gets its OIDC token with
+      `circleci run oidc get`, which needs no context, signs the image with cosign
       against the real Fulcio and Rekor, and verifies it with the function that main uses: the certificate identity (this project and pipeline
       definition), the issuer, and the ref in the certificate, here refs/heads/<this branch>. It then checks that the same signature is refused for
       another ref. It pushes nothing to Docker Hub and holds no secret. A change in CircleCI's token claims, in Sigstore or in the scripts fails a
@@ -665,7 +700,7 @@ jobs:
 
   proxy-image-edge:
     description: >
-      The last job of the pipeline of main (the parameter release: main with both e2e tokens, so every test is on). It requires
+      The last job of the pipeline of main (the parameter release: main with both e2e tokens and a release to make, so every test is on). It requires
       proxy-image-publish, the four linux-swarm jobs (linux-swarm-proxy runs the image in a Swarm: linux/tests/proxy.sh) and the four e2e
       groups, then checks the signature of sha-<12> and tags it edge, unless a newer commit is on main (ci/proxy-image.sh edge). Until it runs,
       edge is the image of an earlier commit that passed everything. It is not a requirement of the release, which does not need edge
@@ -1276,36 +1311,35 @@ jobs:
             /tmp/cli/circleci config validate .circleci/config.yml
             /tmp/cli/circleci config validate .circleci/continue.yml
             # validate compiles only what the default parameters enable; compile the gated
-            # jobs (full-suite, e2e-linux, e2e-windows, release) too.
-            /tmp/cli/circleci config process .circleci/continue.yml \
-              --pipeline-parameters '{full-suite: true, windows: true, proxy-image: true, microvm: true, e2e-linux: true,
-                e2e-windows: true, release: true}' > /tmp/compiled.yml
+            # jobs (every suite, full-suite, e2e-linux, e2e-windows, release) too.
+            # The parameters go in a file: the CLI reads a value longer than 255 characters as a file name.
+            printf '%s: true\n' full-suite windows proxy-image microvm linux-swarm linux-swarm-proxy linux-smoke linux-image container-agent \
+              e2e-sim proxy-test signing e2e-linux e2e-windows release > /tmp/parameters.yml
+            /tmp/cli/circleci config process .circleci/continue.yml --pipeline-parameters /tmp/parameters.yml > /tmp/compiled.yml
             # A backslash right before a parameter tag escapes it (a Windows path such as
             # C:\dir\ followed by the tag), leaving the tag literal in the compiled config.
             if grep -nE '\<< *(parameters|pipeline)\.' /tmp/compiled.yml; then
               echo "literal parameter tags in the compiled config (escaped by a preceding backslash?)"
               exit 1
             fi
-            # A change of documentation only runs the lint jobs and the docs site build. `process` leaves the expression filters
+            # A change that no suite reads runs the lint jobs and the docs site build only. `process` leaves the expression filters
             # in the compiled config, so read them from the source: a job of ci with no filter must be a lint job or the docs
             # site build (and docs-site-comment, which a docs pull request needs most: its filter is the parameter pull-request),
-            # and every other filter is `not pipeline.parameters.docs-only` or a parameter that the setup gate
-            # turns off for a docs-only change (full-suite, windows, proxy-image, microvm, e2e-linux, e2e-windows, release, publish),
-            # alone or with `and not pipeline.parameters.publish` (the jobs that the publish variants replace on main). A new job
-            # without a filter would otherwise run on every docs pull request.
+            # and every other filter is the parameter of its suite, which the setup gate turns off for a change that the suite does
+            # not read, alone or with `and not pipeline.parameters.publish` (the jobs that the publish variants replace on main).
+            # A new job without a filter would otherwise run on every pull request.
             yq -o=json '.workflows.ci.jobs' .circleci/continue.yml | jq -r '
-              ["not pipeline.parameters.docs-only", "pipeline.parameters.full-suite", "pipeline.parameters.windows",
-               "pipeline.parameters.proxy-image", "pipeline.parameters.microvm", "pipeline.parameters.e2e-linux",
-               "pipeline.parameters.e2e-windows", "pipeline.parameters.release", "pipeline.parameters.publish",
-               "not pipeline.parameters.docs-only and not pipeline.parameters.publish",
-               "pipeline.parameters.proxy-image and not pipeline.parameters.publish",
-               "pipeline.parameters.full-suite and not pipeline.parameters.publish"] as $gated
+              (["full-suite", "windows", "proxy-image", "microvm", "linux-swarm", "linux-swarm-proxy", "linux-smoke", "linux-image",
+                "container-agent", "e2e-sim", "proxy-test", "signing", "e2e-linux", "e2e-windows", "release", "publish"]
+               | map("pipeline.parameters." + .)) as $on
+              | ($on + ["pipeline.parameters.proxy-image and not pipeline.parameters.publish",
+                        "pipeline.parameters.full-suite and not pipeline.parameters.publish"]) as $gated
               | map(if type == "string" then {key: ., value: {}} else to_entries[0] end)
               | map(select(.key | startswith("lint-") or . == "docs-site-build" or . == "docs-site-comment" | not))
               | map(select((.value.filters // "") | IN($gated[]) | not))
               | map(.key)
               | if length > 0
-                then "a docs-only change would run: " + join(", ") + " (add filters: not pipeline.parameters.docs-only)" | halt_error(1)
+                then "a change that no suite reads would run: " + join(", ") + " (add filters: pipeline.parameters.<suite>)" | halt_error(1)
                 else empty end'
             # The weekly scan sets security-scan: it runs the workflow security-scan and not ci or docs-site, and only then.
             /tmp/cli/circleci config process .circleci/continue.yml --pipeline-parameters '{security-scan: true}' > /tmp/scan.yml
@@ -1631,7 +1665,7 @@ workflows:
       - lint-yaml
       - lint-stack
       - test-container-mode:
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.container-agent
       - lint-powershell
       - lint-markdown
       - lint-docs-links
@@ -1646,9 +1680,9 @@ workflows:
           requires: [docs-site-build]
           filters: pipeline.parameters.pull-request
       - e2e-simulation:
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.e2e-sim
       - proxy-test:
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.proxy-test
       # The token proxy image: built and tested everywhere; on main the publish variants run instead and push (docs/ci.md, "The token
       # proxy image"). The Windows jobs need the windows/amd64 build of proxy-test.
       - proxy-image-linux:
@@ -1691,9 +1725,10 @@ workflows:
           serial-group: << pipeline.project.slug >>/proxy-image-publish
           requires: [proxy-image-linux-publish, proxy-image-windows-ltsc2022-publish, proxy-image-windows-ltsc2025-publish]
           filters: pipeline.parameters.publish
-      # The signing of main, on a throwaway image: no context, no secret, in every pipeline that is not docs-only (docs/releasing.md, "The signing rehearsal").
+      # The signing of main, on a throwaway image: no context, no secret, in every pipeline whose changes the signing reads (docs/releasing.md,
+      # "The signing rehearsal").
       - signing-rehearsal:
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.signing
       - proxy-image-edge:
           context: [scalable-machine-runner-dockerhub]
           serial-group: << pipeline.project.slug >>/proxy-image-edge
@@ -1714,27 +1749,27 @@ workflows:
       - linux-swarm:
           name: linux-swarm-distributor
           groups: distributor
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.linux-swarm
       - linux-swarm:
           name: linux-swarm-proxy
           groups: proxy
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.linux-swarm-proxy
       - linux-swarm:
           name: linux-swarm-a
           groups: stack-config helper ephemerality exit80 token task
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.linux-swarm
       - linux-swarm:
           name: linux-swarm-b
           groups: placement persistent drain limits network container-mode bats
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.linux-swarm
       - linux-image-example:
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.linux-image
       - linux-setup:
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.linux-smoke
       - linux-arm64:
-          filters: not pipeline.parameters.docs-only
+          filters: pipeline.parameters.linux-smoke
       # Required by the release: KVM on the Android image has passed in CI in every pipeline since the first one that could run it
-      # (microvm, which a release pipeline switches on, as every heavy suite).
+      # (microvm, which a release pipeline switches on, as every suite).
       - linux-microvm:
           filters: pipeline.parameters.microvm
       # Optional: it is NOT in the `requires` of the release (the release check of lint-circleci lists it as optional). main and full only.

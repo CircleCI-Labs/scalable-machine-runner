@@ -83,6 +83,11 @@ the signed releases (&lt;a href="https://circleci-labs.github.io/scalable-machin
 &lt;td&gt;&lt;code&gt;persistent.sh&lt;/code&gt; and &lt;code&gt;Test-Persistent.ps1&lt;/code&gt;, with a fake runner on Linux&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
+&lt;td&gt;Container mode (prototype)&lt;/td&gt;
+&lt;td&gt;The agent against a fake runner API and a fake Docker engine: the layout, limits, environment, failure and retry paths, cleanup, the cap, and no token in a log. The wrapper against a fake driver and the Docker driver against the fake engine, each through the driver interface only. In a Swarm: no agent on a proxy or microVM node, a job with a service on &lt;code&gt;localhost&lt;/code&gt;, a failing job, no socket or token in the job, the cap, and the cleanup of containers, networks and volumes and of orphans&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;test-container-mode&lt;/code&gt; (&lt;code&gt;go test -race&lt;/code&gt;) and &lt;code&gt;container-mode.sh&lt;/code&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
 &lt;td&gt;Limits and network&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;pids&lt;/code&gt;, &lt;code&gt;ulimits&lt;/code&gt;, capabilities, and reservations that leave replicas pending. Classes cannot reach each other, and replicas of one class can&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;limits.sh&lt;/code&gt; and &lt;code&gt;network.sh&lt;/code&gt;&lt;/td&gt;
@@ -335,6 +340,12 @@ release[&amp;#34;release: main with both e2e tokens, after every job above&amp;#
 &lt;td&gt;&lt;code&gt;lint-stack&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;docker:29.9.0-cli&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;docker stack config -c&lt;/code&gt; on every file in &lt;code&gt;linux/stack&lt;/code&gt; and &lt;code&gt;windows/stack&lt;/code&gt; alone, on all files of each OS together (the optional files are add-on stack files), and on &lt;code&gt;windows/tests/stack.e2e.yaml&lt;/code&gt;: the stack files must parse, merge and interpolate. &lt;code&gt;ci/config-names.sh&lt;/code&gt; checks that every Swarm config is named after the content of its file: a Swarm config cannot change, so a changed file needs a new name, and &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; renames it. No daemon or Swarm needed&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;not docs-only&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;test-container-mode&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;cimg/go:1.27&lt;/code&gt;, small&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;gofmt&lt;/code&gt;, &lt;code&gt;go vet&lt;/code&gt; and &lt;code&gt;go test -race&lt;/code&gt; in &lt;code&gt;linux/stack/container-agent&lt;/code&gt;, the prototype agent of &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/"&gt;container mode&lt;/a&gt;. Its Swarm test, &lt;code&gt;container-mode.sh&lt;/code&gt;, is part of &lt;code&gt;linux-swarm&lt;/code&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;every pipeline&lt;/td&gt;
@@ -719,9 +730,9 @@ release[&amp;#34;release: main with both e2e tokens, after every job above&amp;#
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;linux-swarm-b&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;placement&lt;/code&gt;, &lt;code&gt;persistent&lt;/code&gt;, &lt;code&gt;drain&lt;/code&gt;, &lt;code&gt;limits&lt;/code&gt;, &lt;code&gt;network&lt;/code&gt;, &lt;code&gt;bats&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;4.3 min (1 min, 18 s, 1 min, 21 s, 25 s, 75 s)&lt;/td&gt;
-&lt;td&gt;6.3 min&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;placement&lt;/code&gt;, &lt;code&gt;persistent&lt;/code&gt;, &lt;code&gt;drain&lt;/code&gt;, &lt;code&gt;limits&lt;/code&gt;, &lt;code&gt;network&lt;/code&gt;, &lt;code&gt;container-mode&lt;/code&gt;, &lt;code&gt;bats&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;5.3 min (1 min, 18 s, 1 min, 21 s, 25 s, 1 min, 75 s)&lt;/td&gt;
+&lt;td&gt;7.3 min&lt;/td&gt;
 &lt;/tr&gt;
 &lt;/tbody&gt;
 &lt;/table&gt;
@@ -1089,7 +1100,7 @@ data-copied-label="Copied!"
 &lt;a href="#the-e2e-simulation" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;&lt;code&gt;ci/tests/e2e-sim.sh&lt;/code&gt; runs &lt;code&gt;ci/e2e-host.sh&lt;/code&gt; and &lt;code&gt;ci/e2e-probe.sh&lt;/code&gt; in a privileged &lt;code&gt;docker:dind&lt;/code&gt; container with a fake runner that runs the next queued probe as an unprivileged user and exits 0, as a single-task runner does. Swarm, the stack deploy, the restart policy, &lt;code&gt;docker events&lt;/code&gt;, the secrets and the evidence handling are real. Three scenarios: pass, no job queued (the host must fail with &amp;ldquo;exited without evidence&amp;rdquo;), and a probe failure (the host must fail). It also checks that the token never reaches the output. The &lt;code&gt;e2e-simulation&lt;/code&gt; job runs it in about 2 minutes; run it before changing the e2e scripts, so that a real e2e run is not spent on a typo.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="running-the-checks-locally"&gt;Running the checks locally&lt;span class="hx:absolute hx:-mt-20" id="running-the-checks-locally"&gt;&lt;/span&gt;
 &lt;a href="#running-the-checks-locally" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
-&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;shellcheck -S warning ci/*.sh ci/tests/*.sh linux/setup.sh linux/stack/runner-distributor.sh linux/stack/circleci-runner-entrypoint
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;shellcheck -S warning ci/*.sh ci/tests/*.sh linux/setup.sh linux/stack/runner-distributor.sh linux/stack/circleci-runner-entrypoint linux/stack/container-agent/entrypoint.sh
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;hadolint --config .hadolint.yaml linux/images/example/Dockerfile windows/images/servercore/Dockerfile
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;yamllint --strict .
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker stack config -c linux/stack/runners.yaml &amp;gt; /dev/null
@@ -1461,8 +1472,8 @@ data-copied-label="Copied!"
 &lt;li&gt;
 &lt;p&gt;&lt;strong&gt;Two lists of images.&lt;/strong&gt; &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/ci/security-scan-images.txt" target="_blank" rel="noopener"&gt;&lt;code&gt;ci/security-scan-images.txt&lt;/code&gt;&lt;/a&gt; is the one place that says how an image is treated, by repository name:&lt;/p&gt;
 &lt;ul&gt;
-&lt;li&gt;&lt;code&gt;infra&lt;/code&gt;: what a stack runs as infrastructure on a user&amp;rsquo;s cluster, today &lt;code&gt;alpine&lt;/code&gt; (the distributor), &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt; (the token proxy, the tag &lt;code&gt;edge&lt;/code&gt; that the stack files name: until the first publication the scan reports that it cannot pull it) and &lt;code&gt;coredns/coredns&lt;/code&gt; (the microVM DNS forwarder). A CRITICAL finding with a fix fails &lt;code&gt;security-scan-images&lt;/code&gt;, and so does an infra image that Trivy cannot scan.&lt;/li&gt;
-&lt;li&gt;&lt;code&gt;report&lt;/code&gt;: the job images that users choose (&lt;code&gt;cimg/*&lt;/code&gt;, which the CircleCI image team maintains) and the images that only CI or a test uses (the linters, Hugo&amp;rsquo;s &lt;code&gt;cimg/go&lt;/code&gt;, lychee, Trivy, Docker-in-Docker, &lt;code&gt;busybox&lt;/code&gt;, &lt;code&gt;binfmt&lt;/code&gt;). Their HIGH and CRITICAL findings are listed and never fail the run.&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;infra&lt;/code&gt;: what a stack runs as infrastructure on a user&amp;rsquo;s cluster, today &lt;code&gt;alpine&lt;/code&gt; (the distributor), &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt; (the token proxy, the tag &lt;code&gt;edge&lt;/code&gt; that the stack files name: until the first publication the scan reports that it cannot pull it), &lt;code&gt;coredns/coredns&lt;/code&gt; (the microVM DNS forwarder) and &lt;code&gt;registry.k8s.io/pause&lt;/code&gt; (the pause container of the container agent). A CRITICAL finding with a fix fails &lt;code&gt;security-scan-images&lt;/code&gt;, and so does an infra image that Trivy cannot scan.&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;report&lt;/code&gt;: the job images that users choose (&lt;code&gt;cimg/*&lt;/code&gt;, which the CircleCI image team maintains) and the images that only CI or a test uses (the linters, Hugo&amp;rsquo;s &lt;code&gt;cimg/go&lt;/code&gt;, lychee, Trivy, Docker-in-Docker, &lt;code&gt;busybox&lt;/code&gt;, &lt;code&gt;binfmt&lt;/code&gt;, and the &lt;code&gt;golang&lt;/code&gt; and &lt;code&gt;circleci/runner-init&lt;/code&gt; images of the container agent). Their HIGH and CRITICAL findings are listed and never fail the run.&lt;/li&gt;
 &lt;li&gt;&lt;code&gt;skip&lt;/code&gt;: listed, not scanned (the Windows images).&lt;/li&gt;
 &lt;/ul&gt;
 &lt;p&gt;The images themselves still come from the files that pin them. &lt;strong&gt;To add an image, choose its list&lt;/strong&gt;: add a line to &lt;code&gt;ci/security-scan-images.txt&lt;/code&gt;. An image on no list fails the scan, and &lt;code&gt;lint-circleci&lt;/code&gt; runs &lt;code&gt;ci/security-scan.sh lists&lt;/code&gt; and fails the pull request that adds it, so the choice is made when the image is added.&lt;/p&gt;
@@ -1860,6 +1871,11 @@ data-copied-label="Copied!"
 &lt;td&gt;&lt;code&gt;linux/stack/runners.yaml&lt;/code&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
+&lt;td&gt;Images of the &lt;code&gt;container-agent&lt;/code&gt; service (prototype)&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;golang:1.27-alpine&lt;/code&gt;, the &lt;code&gt;circleci/runner-init&lt;/code&gt; image and the pause image, by digest&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;linux/stack/container-mode.yaml&lt;/code&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
 &lt;td&gt;Docker-in-Docker for the simulation&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;docker:29.9.0-dind&lt;/code&gt; by digest&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;ci/tests/e2e-sim.sh&lt;/code&gt;&lt;/td&gt;
@@ -2029,7 +2045,7 @@ data-copied-label="Copied!"
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;lint-stack&lt;/code&gt;, a &lt;code&gt;linux-swarm&lt;/code&gt; job or the release job fails with &lt;code&gt;config machine-runner-swarm-... is stale&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;A file that a Swarm config carries (the entrypoint or a distributor script) changed, and the name in the stack files did not. Run &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; and commit the new names. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/contribute/contributing/#swarm-config-names"&gt;Swarm config names&lt;/a&gt;&lt;/td&gt;
+&lt;td&gt;A file that a Swarm config carries (the entrypoint, a distributor script, or a source file of the container agent) changed, and the name in the stack files did not. Run &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; and commit the new names. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/contribute/contributing/#swarm-config-names"&gt;Swarm config names&lt;/a&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;lint-shell&lt;/code&gt; fails with SC2154 on an uppercase variable&lt;/td&gt;
@@ -2722,6 +2738,10 @@ data-copied-label="Copied!"
 &lt;td&gt;Network isolation between classes, and between the replicas of a class&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
+&lt;td&gt;&lt;code&gt;container-mode.sh&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The prototype container agent in a Swarm, against a fake API: no agent on a proxy or microVM node, a Docker-executor job with a service on &lt;code&gt;localhost&lt;/code&gt;, the limits, no socket or token in the job, the cap, the cleanup, and the orphans. Needs the Go and pause images&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
 &lt;td&gt;&lt;code&gt;bats/run.sh&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;The unit tests of the entrypoint on &lt;code&gt;cimg/base&lt;/code&gt;, Alpine, and UBI minimal&lt;/td&gt;
 &lt;/tr&gt;
@@ -2773,7 +2793,7 @@ data-copied-label="Copied!"
 &lt;/tbody&gt;
 &lt;/table&gt;
 &lt;h3 data-hextra-search-id="swarm-config-names"&gt;Swarm config names&lt;span class="hx:absolute hx:-mt-20" id="swarm-config-names"&gt;&lt;/span&gt;
-&lt;a href="#swarm-config-names" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change &lt;code&gt;linux/stack/circleci-runner-entrypoint&lt;/code&gt;, &lt;code&gt;linux/stack/runner-distributor.sh&lt;/code&gt;, or &lt;code&gt;windows/runner-distributor.ps1&lt;/code&gt;, run &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; and commit the new names with the change. &lt;code&gt;lint-stack&lt;/code&gt;, &lt;code&gt;linux/tests/stack-config.sh&lt;/code&gt;, and the release job run &lt;code&gt;ci/config-names.sh&lt;/code&gt; and fail on a stale name. Nobody decides when to bump a number.&lt;/p&gt;
+&lt;a href="#swarm-config-names" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change &lt;code&gt;linux/stack/circleci-runner-entrypoint&lt;/code&gt;, &lt;code&gt;linux/stack/runner-distributor.sh&lt;/code&gt;, &lt;code&gt;windows/runner-distributor.ps1&lt;/code&gt;, or a file of &lt;code&gt;linux/stack/container-agent&lt;/code&gt; (the sources of the prototype container agent, which &lt;code&gt;container-mode.yaml&lt;/code&gt; carries as configs), run &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; and commit the new names with the change. &lt;code&gt;lint-stack&lt;/code&gt;, &lt;code&gt;linux/tests/stack-config.sh&lt;/code&gt;, and the release job run &lt;code&gt;ci/config-names.sh&lt;/code&gt; and fail on a stale name. Nobody decides when to bump a number.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="documentation-checks"&gt;Documentation checks&lt;span class="hx:absolute hx:-mt-20" id="documentation-checks"&gt;&lt;/span&gt;
 &lt;a href="#documentation-checks" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Documentation follows the &lt;a href="https://circleci.com/docs/contributors/docs-style/style-and-voice/" target="_blank" rel="noopener"&gt;CircleCI docs style&lt;/a&gt;: sentence-case headings, active voice, no contractions, and short sentences. Every &lt;code&gt;docs/*.md&lt;/code&gt; page has front matter with &lt;code&gt;page-title&lt;/code&gt;, &lt;code&gt;page-audience&lt;/code&gt;, and &lt;code&gt;page-description&lt;/code&gt;.&lt;/p&gt;
 &lt;p&gt;CI checks the relative links and the Mermaid diagrams. To run the same checks locally:&lt;/p&gt;

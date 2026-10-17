@@ -85,6 +85,11 @@ the signed releases (&lt;a href="https://circleci-labs.github.io/scalable-machin
 &lt;td&gt;&lt;code&gt;persistent.sh&lt;/code&gt; and &lt;code&gt;Test-Persistent.ps1&lt;/code&gt;, with a fake runner on Linux&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
+&lt;td&gt;Container mode (prototype)&lt;/td&gt;
+&lt;td&gt;The agent against a fake runner API and a fake Docker engine: the layout, limits, environment, failure and retry paths, cleanup, the cap, and no token in a log. The wrapper against a fake driver and the Docker driver against the fake engine, each through the driver interface only. In a Swarm: no agent on a proxy or microVM node, a job with a service on &lt;code&gt;localhost&lt;/code&gt;, a failing job, no socket or token in the job, the cap, and the cleanup of containers, networks and volumes and of orphans&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;test-container-mode&lt;/code&gt; (&lt;code&gt;go test -race&lt;/code&gt;) and &lt;code&gt;container-mode.sh&lt;/code&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
 &lt;td&gt;Limits and network&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;pids&lt;/code&gt;, &lt;code&gt;ulimits&lt;/code&gt;, capabilities, and reservations that leave replicas pending. Classes cannot reach each other, and replicas of one class can&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;limits.sh&lt;/code&gt; and &lt;code&gt;network.sh&lt;/code&gt;&lt;/td&gt;
@@ -337,6 +342,12 @@ release[&amp;#34;release: main with both e2e tokens, after every job above&amp;#
 &lt;td&gt;&lt;code&gt;lint-stack&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;docker:29.9.0-cli&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;docker stack config -c&lt;/code&gt; on every file in &lt;code&gt;linux/stack&lt;/code&gt; and &lt;code&gt;windows/stack&lt;/code&gt; alone, on all files of each OS together (the optional files are add-on stack files), and on &lt;code&gt;windows/tests/stack.e2e.yaml&lt;/code&gt;: the stack files must parse, merge and interpolate. &lt;code&gt;ci/config-names.sh&lt;/code&gt; checks that every Swarm config is named after the content of its file: a Swarm config cannot change, so a changed file needs a new name, and &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; renames it. No daemon or Swarm needed&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;not docs-only&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;test-container-mode&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;cimg/go:1.27&lt;/code&gt;, small&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;gofmt&lt;/code&gt;, &lt;code&gt;go vet&lt;/code&gt; and &lt;code&gt;go test -race&lt;/code&gt; in &lt;code&gt;linux/stack/container-agent&lt;/code&gt;, the prototype agent of &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/"&gt;container mode&lt;/a&gt;. Its Swarm test, &lt;code&gt;container-mode.sh&lt;/code&gt;, is part of &lt;code&gt;linux-swarm&lt;/code&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;every pipeline&lt;/td&gt;
@@ -721,9 +732,9 @@ release[&amp;#34;release: main with both e2e tokens, after every job above&amp;#
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;linux-swarm-b&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;placement&lt;/code&gt;, &lt;code&gt;persistent&lt;/code&gt;, &lt;code&gt;drain&lt;/code&gt;, &lt;code&gt;limits&lt;/code&gt;, &lt;code&gt;network&lt;/code&gt;, &lt;code&gt;bats&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;4.3 min (1 min, 18 s, 1 min, 21 s, 25 s, 75 s)&lt;/td&gt;
-&lt;td&gt;6.3 min&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;placement&lt;/code&gt;, &lt;code&gt;persistent&lt;/code&gt;, &lt;code&gt;drain&lt;/code&gt;, &lt;code&gt;limits&lt;/code&gt;, &lt;code&gt;network&lt;/code&gt;, &lt;code&gt;container-mode&lt;/code&gt;, &lt;code&gt;bats&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;5.3 min (1 min, 18 s, 1 min, 21 s, 25 s, 1 min, 75 s)&lt;/td&gt;
+&lt;td&gt;7.3 min&lt;/td&gt;
 &lt;/tr&gt;
 &lt;/tbody&gt;
 &lt;/table&gt;
@@ -1091,7 +1102,7 @@ data-copied-label="Copied!"
 &lt;a href="#the-e2e-simulation" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;&lt;code&gt;ci/tests/e2e-sim.sh&lt;/code&gt; runs &lt;code&gt;ci/e2e-host.sh&lt;/code&gt; and &lt;code&gt;ci/e2e-probe.sh&lt;/code&gt; in a privileged &lt;code&gt;docker:dind&lt;/code&gt; container with a fake runner that runs the next queued probe as an unprivileged user and exits 0, as a single-task runner does. Swarm, the stack deploy, the restart policy, &lt;code&gt;docker events&lt;/code&gt;, the secrets and the evidence handling are real. Three scenarios: pass, no job queued (the host must fail with &amp;ldquo;exited without evidence&amp;rdquo;), and a probe failure (the host must fail). It also checks that the token never reaches the output. The &lt;code&gt;e2e-simulation&lt;/code&gt; job runs it in about 2 minutes; run it before changing the e2e scripts, so that a real e2e run is not spent on a typo.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="running-the-checks-locally"&gt;Running the checks locally&lt;span class="hx:absolute hx:-mt-20" id="running-the-checks-locally"&gt;&lt;/span&gt;
 &lt;a href="#running-the-checks-locally" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
-&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;shellcheck -S warning ci/*.sh ci/tests/*.sh linux/setup.sh linux/stack/runner-distributor.sh linux/stack/circleci-runner-entrypoint
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;shellcheck -S warning ci/*.sh ci/tests/*.sh linux/setup.sh linux/stack/runner-distributor.sh linux/stack/circleci-runner-entrypoint linux/stack/container-agent/entrypoint.sh
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;hadolint --config .hadolint.yaml linux/images/example/Dockerfile windows/images/servercore/Dockerfile
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;yamllint --strict .
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker stack config -c linux/stack/runners.yaml &amp;gt; /dev/null
@@ -1463,8 +1474,8 @@ data-copied-label="Copied!"
 &lt;li&gt;
 &lt;p&gt;&lt;strong&gt;Two lists of images.&lt;/strong&gt; &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/ci/security-scan-images.txt" target="_blank" rel="noopener"&gt;&lt;code&gt;ci/security-scan-images.txt&lt;/code&gt;&lt;/a&gt; is the one place that says how an image is treated, by repository name:&lt;/p&gt;
 &lt;ul&gt;
-&lt;li&gt;&lt;code&gt;infra&lt;/code&gt;: what a stack runs as infrastructure on a user&amp;rsquo;s cluster, today &lt;code&gt;alpine&lt;/code&gt; (the distributor), &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt; (the token proxy, the tag &lt;code&gt;edge&lt;/code&gt; that the stack files name: until the first publication the scan reports that it cannot pull it) and &lt;code&gt;coredns/coredns&lt;/code&gt; (the microVM DNS forwarder). A CRITICAL finding with a fix fails &lt;code&gt;security-scan-images&lt;/code&gt;, and so does an infra image that Trivy cannot scan.&lt;/li&gt;
-&lt;li&gt;&lt;code&gt;report&lt;/code&gt;: the job images that users choose (&lt;code&gt;cimg/*&lt;/code&gt;, which the CircleCI image team maintains) and the images that only CI or a test uses (the linters, Hugo&amp;rsquo;s &lt;code&gt;cimg/go&lt;/code&gt;, lychee, Trivy, Docker-in-Docker, &lt;code&gt;busybox&lt;/code&gt;, &lt;code&gt;binfmt&lt;/code&gt;). Their HIGH and CRITICAL findings are listed and never fail the run.&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;infra&lt;/code&gt;: what a stack runs as infrastructure on a user&amp;rsquo;s cluster, today &lt;code&gt;alpine&lt;/code&gt; (the distributor), &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt; (the token proxy, the tag &lt;code&gt;edge&lt;/code&gt; that the stack files name: until the first publication the scan reports that it cannot pull it), &lt;code&gt;coredns/coredns&lt;/code&gt; (the microVM DNS forwarder) and &lt;code&gt;registry.k8s.io/pause&lt;/code&gt; (the pause container of the container agent). A CRITICAL finding with a fix fails &lt;code&gt;security-scan-images&lt;/code&gt;, and so does an infra image that Trivy cannot scan.&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;report&lt;/code&gt;: the job images that users choose (&lt;code&gt;cimg/*&lt;/code&gt;, which the CircleCI image team maintains) and the images that only CI or a test uses (the linters, Hugo&amp;rsquo;s &lt;code&gt;cimg/go&lt;/code&gt;, lychee, Trivy, Docker-in-Docker, &lt;code&gt;busybox&lt;/code&gt;, &lt;code&gt;binfmt&lt;/code&gt;, and the &lt;code&gt;golang&lt;/code&gt; and &lt;code&gt;circleci/runner-init&lt;/code&gt; images of the container agent). Their HIGH and CRITICAL findings are listed and never fail the run.&lt;/li&gt;
 &lt;li&gt;&lt;code&gt;skip&lt;/code&gt;: listed, not scanned (the Windows images).&lt;/li&gt;
 &lt;/ul&gt;
 &lt;p&gt;The images themselves still come from the files that pin them. &lt;strong&gt;To add an image, choose its list&lt;/strong&gt;: add a line to &lt;code&gt;ci/security-scan-images.txt&lt;/code&gt;. An image on no list fails the scan, and &lt;code&gt;lint-circleci&lt;/code&gt; runs &lt;code&gt;ci/security-scan.sh lists&lt;/code&gt; and fails the pull request that adds it, so the choice is made when the image is added.&lt;/p&gt;
@@ -1862,6 +1873,11 @@ data-copied-label="Copied!"
 &lt;td&gt;&lt;code&gt;linux/stack/runners.yaml&lt;/code&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
+&lt;td&gt;Images of the &lt;code&gt;container-agent&lt;/code&gt; service (prototype)&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;golang:1.27-alpine&lt;/code&gt;, the &lt;code&gt;circleci/runner-init&lt;/code&gt; image and the pause image, by digest&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;linux/stack/container-mode.yaml&lt;/code&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
 &lt;td&gt;Docker-in-Docker for the simulation&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;docker:29.9.0-dind&lt;/code&gt; by digest&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;ci/tests/e2e-sim.sh&lt;/code&gt;&lt;/td&gt;
@@ -2031,7 +2047,7 @@ data-copied-label="Copied!"
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;lint-stack&lt;/code&gt;, a &lt;code&gt;linux-swarm&lt;/code&gt; job or the release job fails with &lt;code&gt;config machine-runner-swarm-... is stale&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;A file that a Swarm config carries (the entrypoint or a distributor script) changed, and the name in the stack files did not. Run &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; and commit the new names. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/contribute/contributing/#swarm-config-names"&gt;Swarm config names&lt;/a&gt;&lt;/td&gt;
+&lt;td&gt;A file that a Swarm config carries (the entrypoint, a distributor script, or a source file of the container agent) changed, and the name in the stack files did not. Run &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; and commit the new names. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/contribute/contributing/#swarm-config-names"&gt;Swarm config names&lt;/a&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;lint-shell&lt;/code&gt; fails with SC2154 on an uppercase variable&lt;/td&gt;
@@ -8032,7 +8048,7 @@ p -- &amp;#34;HTTPS: the class token on the claim only&amp;#34; --&amp;gt; api&l
 &lt;li&gt;&lt;strong&gt;The state.&lt;/strong&gt; The proxy keeps the addresses of the runners that have claimed in the small volume &lt;code&gt;proxy-state&lt;/code&gt;, on the node that it runs on: a manager by default. A restart on that node refuses only the runners that claimed, and a runner that started before the proxy is never locked out. If the proxy moves to another node, the state stays behind: refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#where-the-proxy-runs-and-when-it-moves"&gt;Where the proxy runs, and when it moves&lt;/a&gt;. In a cluster, label the node that runs the proxy &lt;code&gt;machine-runner-swarm.proxy=true&lt;/code&gt;: runner services never run on a node with that label, so jobs do not share a node with the proxy. On a single node, set no label. With several managers, the label and a placement variable pin the proxy to one.&lt;/li&gt;
 &lt;/ul&gt;
 &lt;h2 data-hextra-search-id="add-on-stack-files-and-how-they-merge"&gt;Add-on stack files and how they merge&lt;span class="hx:absolute hx:-mt-20" id="add-on-stack-files-and-how-they-merge"&gt;&lt;/span&gt;
-&lt;a href="#add-on-stack-files-and-how-they-merge" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Each operating system has one main stack file, &lt;code&gt;runners.yaml&lt;/code&gt;, that defines the default classes and deploys on its own. The optional classes live in add-on stack files next to it: &lt;code&gt;persistent.yaml&lt;/code&gt;, &lt;code&gt;docker-build.yaml&lt;/code&gt;, and &lt;code&gt;ssh-rerun.yaml&lt;/code&gt; on both systems, &lt;code&gt;custom-image.yaml&lt;/code&gt; on Windows, and &lt;code&gt;microvm.yaml&lt;/code&gt; on Linux (&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/microvm/"&gt;MicroVM jobs&lt;/a&gt;). An add-on stack file is not a patch of the main file. It defines services of its own, and each service needs its own resource class and its own &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt; secret. The one exception on Linux is the &lt;code&gt;token-proxy&lt;/code&gt; service: &lt;code&gt;docker-build.yaml&lt;/code&gt;, &lt;code&gt;ssh-rerun.yaml&lt;/code&gt;, and &lt;code&gt;microvm.yaml&lt;/code&gt; also add their classes to it (a network, a secret, and a variable), so deploy them together with &lt;code&gt;runners.yaml&lt;/code&gt;. &lt;code&gt;persistent.yaml&lt;/code&gt; does not touch the proxy.&lt;/p&gt;
+&lt;a href="#add-on-stack-files-and-how-they-merge" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Each operating system has one main stack file, &lt;code&gt;runners.yaml&lt;/code&gt;, that defines the default classes and deploys on its own. The optional classes live in add-on stack files next to it: &lt;code&gt;persistent.yaml&lt;/code&gt;, &lt;code&gt;docker-build.yaml&lt;/code&gt;, and &lt;code&gt;ssh-rerun.yaml&lt;/code&gt; on both systems, &lt;code&gt;custom-image.yaml&lt;/code&gt; on Windows, and &lt;code&gt;microvm.yaml&lt;/code&gt; and the prototype &lt;code&gt;container-mode.yaml&lt;/code&gt; on Linux (&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/microvm/"&gt;MicroVM jobs&lt;/a&gt;, &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/"&gt;Container mode&lt;/a&gt;). &lt;code&gt;container-mode.yaml&lt;/code&gt; adds one service, the container agent, that runs Docker-executor jobs for the classes in its settings, with a secret for each. An add-on stack file is not a patch of the main file. It defines services of its own, and each service needs its own resource class and its own &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt; secret. The one exception on Linux is the &lt;code&gt;token-proxy&lt;/code&gt; service: &lt;code&gt;docker-build.yaml&lt;/code&gt;, &lt;code&gt;ssh-rerun.yaml&lt;/code&gt;, and &lt;code&gt;microvm.yaml&lt;/code&gt; also add their classes to it (a network, a secret, and a variable), so deploy them together with &lt;code&gt;runners.yaml&lt;/code&gt;. &lt;code&gt;persistent.yaml&lt;/code&gt; and &lt;code&gt;container-mode.yaml&lt;/code&gt; do not touch the proxy: they keep their own tokens.&lt;/p&gt;
 &lt;p&gt;&lt;code&gt;docker stack deploy -c runners.yaml -c persistent.yaml runners&lt;/code&gt; reads the files in the order given and merges them into one stack, as Docker Compose does for several &lt;code&gt;-f&lt;/code&gt; files. A service, network, secret, or volume that only one file defines is added, and a key that several files set takes the value of the later file. The shipped add-on stack files only add services. YAML anchors work inside one file only, so each add-on stack file repeats the common service settings, and a change to one of them goes into every file that you use.&lt;/p&gt;
 &lt;p&gt;Pass the same list of files, in the same order, on every deploy. Swarm updates the services of the files you name. The services of a file you leave out stay as they are and stop following your edits, and &lt;code&gt;--prune&lt;/code&gt; removes them. Check a merge without a Swarm with &lt;code&gt;docker stack config -c runners.yaml -c persistent.yaml&lt;/code&gt;.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="replicas-set-the-concurrency"&gt;Replicas set the concurrency&lt;span class="hx:absolute hx:-mt-20" id="replicas-set-the-concurrency"&gt;&lt;/span&gt;
@@ -8500,6 +8516,10 @@ data-copied-label="Copied!"
 &lt;td&gt;Network isolation between classes, and between the replicas of a class&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
+&lt;td&gt;&lt;code&gt;container-mode.sh&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The prototype container agent in a Swarm, against a fake API: no agent on a proxy or microVM node, a Docker-executor job with a service on &lt;code&gt;localhost&lt;/code&gt;, the limits, no socket or token in the job, the cap, the cleanup, and the orphans. Needs the Go and pause images&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
 &lt;td&gt;&lt;code&gt;bats/run.sh&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;The unit tests of the entrypoint on &lt;code&gt;cimg/base&lt;/code&gt;, Alpine, and UBI minimal&lt;/td&gt;
 &lt;/tr&gt;
@@ -8551,7 +8571,7 @@ data-copied-label="Copied!"
 &lt;/tbody&gt;
 &lt;/table&gt;
 &lt;h3 data-hextra-search-id="swarm-config-names"&gt;Swarm config names&lt;span class="hx:absolute hx:-mt-20" id="swarm-config-names"&gt;&lt;/span&gt;
-&lt;a href="#swarm-config-names" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change &lt;code&gt;linux/stack/circleci-runner-entrypoint&lt;/code&gt;, &lt;code&gt;linux/stack/runner-distributor.sh&lt;/code&gt;, or &lt;code&gt;windows/runner-distributor.ps1&lt;/code&gt;, run &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; and commit the new names with the change. &lt;code&gt;lint-stack&lt;/code&gt;, &lt;code&gt;linux/tests/stack-config.sh&lt;/code&gt;, and the release job run &lt;code&gt;ci/config-names.sh&lt;/code&gt; and fail on a stale name. Nobody decides when to bump a number.&lt;/p&gt;
+&lt;a href="#swarm-config-names" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change &lt;code&gt;linux/stack/circleci-runner-entrypoint&lt;/code&gt;, &lt;code&gt;linux/stack/runner-distributor.sh&lt;/code&gt;, &lt;code&gt;windows/runner-distributor.ps1&lt;/code&gt;, or a file of &lt;code&gt;linux/stack/container-agent&lt;/code&gt; (the sources of the prototype container agent, which &lt;code&gt;container-mode.yaml&lt;/code&gt; carries as configs), run &lt;code&gt;ci/config-names.sh --write&lt;/code&gt; and commit the new names with the change. &lt;code&gt;lint-stack&lt;/code&gt;, &lt;code&gt;linux/tests/stack-config.sh&lt;/code&gt;, and the release job run &lt;code&gt;ci/config-names.sh&lt;/code&gt; and fail on a stale name. Nobody decides when to bump a number.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="documentation-checks"&gt;Documentation checks&lt;span class="hx:absolute hx:-mt-20" id="documentation-checks"&gt;&lt;/span&gt;
 &lt;a href="#documentation-checks" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Documentation follows the &lt;a href="https://circleci.com/docs/contributors/docs-style/style-and-voice/" target="_blank" rel="noopener"&gt;CircleCI docs style&lt;/a&gt;: sentence-case headings, active voice, no contractions, and short sentences. Every &lt;code&gt;docs/*.md&lt;/code&gt; page has front matter with &lt;code&gt;page-title&lt;/code&gt;, &lt;code&gt;page-audience&lt;/code&gt;, and &lt;code&gt;page-description&lt;/code&gt;.&lt;/p&gt;
 &lt;p&gt;CI checks the relative links and the Mermaid diagrams. To run the same checks locally:&lt;/p&gt;
@@ -9026,6 +9046,11 @@ data-copied-label="Copied!"
 &lt;td&gt;&lt;code&gt;machine-runner-swarm.docker-build&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;true&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;The docker-build services (pattern A). Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/docker-builds/"&gt;Docker Builds&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;machine-runner-swarm.container-mode&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;true&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The container agent of &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/"&gt;container mode&lt;/a&gt; (experimental), on workers only. It stays off microVM, Docker-build and proxy nodes, and the token proxy stays off container-mode nodes&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;machine-runner-swarm.proxy&lt;/code&gt;&lt;/td&gt;
@@ -9723,7 +9748,416 @@ data-copied-label="Copied!"
 &lt;td&gt;&lt;a href="#run-docker-inside-the-vm"&gt;Run Docker inside the VM&lt;/a&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;/tbody&gt;
-&lt;/table&gt;</description></item><item><title>Security</title><link>https://circleci-labs.github.io/scalable-machine-runner/docs/security/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://circleci-labs.github.io/scalable-machine-runner/docs/security/</guid><description>
+&lt;/table&gt;</description></item><item><title>Container mode (prototype)</title><link>https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/</guid><description>
+&lt;p&gt;Container mode runs jobs that use the Docker executor, &lt;code&gt;docker: [{image: ...}, {image: ...}]&lt;/code&gt;, on the nodes of a Swarm. It needs no Kubernetes. Together with the machine classes of the rest of this repository, one Swarm then serves both kinds of jobs.&lt;/p&gt;
+&lt;div
+data-alert="warning" class="hextra-alert"
+&gt;
+&lt;p class="hextra-alert-title"&gt;&lt;svg height=20px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"&gt;&lt;path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/&gt;&lt;path d="M12 9v4"/&gt;&lt;path d="M12 17h.01"/&gt;&lt;/svg&gt;
+&lt;span class="hextra-alert-title-text"&gt;Warning&lt;/span&gt;
+&lt;/p&gt;
+&lt;div class="hextra-alert-content"&gt;&lt;p&gt;This is a prototype, and CircleCI does not support it. The unit tests, a Swarm test against a fake runner API, and the init step with GOAT of the public &lt;code&gt;circleci/runner-init&lt;/code&gt; image pass. A run against the real CircleCI API is still to be done. Do not use it for production jobs yet. Refer to &lt;a href="#status"&gt;Status&lt;/a&gt;.&lt;/p&gt;&lt;/div&gt;
+&lt;/div&gt;
+&lt;h2 data-hextra-search-id="what-it-is"&gt;What it is&lt;span class="hx:absolute hx:-mt-20" id="what-it-is"&gt;&lt;/span&gt;
+&lt;a href="#what-it-is" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Machine runner 3 runs a job that has &lt;code&gt;machine: true&lt;/code&gt;. A job with a &lt;code&gt;docker:&lt;/code&gt; list belongs to a different kind of runner, &lt;a href="https://circleci.com/docs/guides/execution-runner/container-runner-installation/" target="_blank" rel="noopener"&gt;container runner&lt;/a&gt;, which starts one pod for each job. Container mode copies that design onto the Docker engine of a Swarm node:&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Container runner on Kubernetes&lt;/th&gt;
+&lt;th&gt;Container mode on Swarm&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;The container agent, with Kubernetes RBAC to create pods and secrets&lt;/td&gt;
+&lt;td&gt;The swarm container agent, with the Docker socket of its node&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;One pod for each job&lt;/td&gt;
+&lt;td&gt;One group of containers for each job: a pause container, an init container, the primary container, and one container for each service&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;The pod network: containers reach each other on &lt;code&gt;localhost&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The same: the containers join the network namespace of the pause container&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;An init container copies the orchestrator (GOAT) and the task agent into an &lt;code&gt;emptyDir&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The same init image copies them into a volume of the task&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;A Kubernetes secret holds the task token and the settings of GOAT&lt;/td&gt;
+&lt;td&gt;The environment of the primary container holds them. Nothing else gets them&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Pod &lt;code&gt;resources&lt;/code&gt; limits&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;--cpus&lt;/code&gt; and &lt;code&gt;--memory&lt;/code&gt; on every container, from the class settings&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Kubernetes places pods on nodes with free resources&lt;/td&gt;
+&lt;td&gt;A global agent on each opted-in node, and a cap on the jobs of the node&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;A class serves one mode. A resource class that a machine runner and a container agent both claim from would send jobs to the wrong one, which fails them at once. Use separate classes and separate tokens for machine mode and for container mode.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="architecture"&gt;Architecture&lt;span class="hx:absolute hx:-mt-20" id="architecture"&gt;&lt;/span&gt;
+&lt;a href="#architecture" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;div class="cci-diagram"&gt;&lt;pre class="mermaid hx:mt-6"&gt;flowchart TB
+api[&amp;#34;runner.circleci.com&amp;lt;br/&amp;gt;HTTPS 443, outbound only&amp;#34;]
+subgraph node[&amp;#34;A worker node with the label container-mode=true&amp;#34;]
+direction TB
+agent[&amp;#34;container-agent&amp;lt;br/&amp;gt;global Swarm service&amp;lt;br/&amp;gt;the only holder of the Docker socket&amp;#34;]
+sock[&amp;#34;Docker engine of the node&amp;#34;]
+subgraph task[&amp;#34;One job: containers, a network and a volume, all removed at the end&amp;#34;]
+direction LR
+pause[&amp;#34;pause&amp;lt;br/&amp;gt;holds the network namespace&amp;#34;]
+init[&amp;#34;init&amp;lt;br/&amp;gt;copies GOAT and the task agent&amp;lt;br/&amp;gt;into the volume, then exits&amp;#34;]
+primary[&amp;#34;primary&amp;lt;br/&amp;gt;GOAT, then the task agent&amp;#34;]
+svc[&amp;#34;service containers&amp;lt;br/&amp;gt;for example a database&amp;#34;]
+end
+end
+agent --&amp;gt;|claims, reports| api
+agent --&amp;gt;|create, start, wait, remove| sock
+sock -.-&amp;gt;|creates and removes| pause
+pause --- primary
+pause --- svc
+init --&amp;gt;|volume| primary
+primary --&amp;gt;|task agent: steps and output| api&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;The agent runs as a global Swarm service. It starts on every worker that carries the node label &lt;code&gt;machine-runner-swarm.container-mode=true&lt;/code&gt;, and on no manager, no microVM node (&lt;code&gt;machine-runner-swarm.microvm=true&lt;/code&gt;), no Docker-build node (&lt;code&gt;machine-runner-swarm.docker-build=true&lt;/code&gt;), and no node that carries the token proxy label (&lt;code&gt;machine-runner-swarm.proxy=true&lt;/code&gt;). The token proxy keeps off container-mode nodes in turn, so the two never share a node, whatever placement you give the proxy. The agent is the only container that mounts &lt;code&gt;/var/run/docker.sock&lt;/code&gt;. It reads its class tokens from Swarm secrets that no other container mounts, and it does not use the &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/concepts/#the-token-proxy"&gt;token proxy&lt;/a&gt;: the proxy keeps class tokens out of the runner containers that run jobs, and here no job container ever holds one. The agent that holds the tokens also holds the socket, which is root-equivalent on its node, so a proxy would add a service and protect nothing.&lt;/p&gt;
+&lt;p&gt;Nothing is built or published. The service runs a stock Go image, pinned by digest. The Go sources of the agent, in &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/tree/main/linux/stack/container-agent" target="_blank" rel="noopener"&gt;&lt;code&gt;linux/stack/container-agent&lt;/code&gt;&lt;/a&gt;, are Swarm configs that are named after their content, as for the entrypoint of the runner classes. The entrypoint of the service compiles them into a volume of the container, which takes a few seconds, and runs the result. A changed source file gets a new config name, which updates the service, so &lt;code&gt;docker stack deploy&lt;/code&gt; is the whole upgrade.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="the-driver-interface"&gt;The driver interface&lt;span class="hx:absolute hx:-mt-20" id="the-driver-interface"&gt;&lt;/span&gt;
+&lt;a href="#the-driver-interface" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The agent has two sides, so that the part that runs a job on a container engine can later be offered upstream as a driver, and so that nothing else in the agent depends on Docker. Both sides are in &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/tree/main/linux/stack/container-agent" target="_blank" rel="noopener"&gt;&lt;code&gt;linux/stack/container-agent&lt;/code&gt;&lt;/a&gt;. They are one Go package, because each file of the agent is mounted as a separate Swarm config, and each side is in files of its own:&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Side&lt;/th&gt;
+&lt;th&gt;Files&lt;/th&gt;
+&lt;th&gt;What it does&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;The interface&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;driver.go&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;Driver&lt;/code&gt;, &lt;code&gt;Task&lt;/code&gt;, &lt;code&gt;TaskSpec&lt;/code&gt;, &lt;code&gt;ClassSettings&lt;/code&gt;, &lt;code&gt;State&lt;/code&gt;, &lt;code&gt;Result&lt;/code&gt;, &lt;code&gt;NotStartedError&lt;/code&gt;, and the optional &lt;code&gt;Recoverer&lt;/code&gt;, each with its contract in the comments. It imports nothing of either side&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;The driver&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;driver_docker.go&lt;/code&gt;, &lt;code&gt;docker.go&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The Docker implementation: the pause, init, service and primary containers, the network and the volume of a task, the pulls, and the removal. It is the only code that knows about containers, and it knows nothing of the runner API, of claims, or of class tokens&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;The wrapper&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;main.go&lt;/code&gt;, &lt;code&gt;wrapper.go&lt;/code&gt;, &lt;code&gt;api.go&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The settings, the claim loop and its slots, the runner API, the signals, and the log. It expands the variables of the job, hands each task to a &lt;code&gt;Driver&lt;/code&gt;, and tells CircleCI how it ended. It knows nothing of containers&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;The interface has two calls:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;NewTask(spec, class)&lt;/code&gt; makes a task from the claimed task and the settings of its class. It changes nothing on the host, and it refuses a spec that the driver cannot run.&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;Task.Run(ctx, report)&lt;/code&gt; runs the task to completion. It reports its state (&lt;code&gt;preparing&lt;/code&gt;, &lt;code&gt;running&lt;/code&gt;, &lt;code&gt;cleaning-up&lt;/code&gt;) through &lt;code&gt;report&lt;/code&gt;, returns the exit code of the primary container, and removes everything that it created before it returns, also when &lt;code&gt;ctx&lt;/code&gt; ends first. An error that is a &lt;code&gt;NotStartedError&lt;/code&gt; says that nothing of the job ran, which lets the wrapper return the task to the queue.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;The wrapper gives a driver the task token of one task and no class token. A driver for another engine replaces &lt;code&gt;driver_docker.go&lt;/code&gt; and &lt;code&gt;docker.go&lt;/code&gt;, and nothing else changes.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="the-life-of-a-job"&gt;The life of a job&lt;span class="hx:absolute hx:-mt-20" id="the-life-of-a-job"&gt;&lt;/span&gt;
+&lt;a href="#the-life-of-a-job" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ol&gt;
+&lt;li&gt;The agent polls CircleCI with the token of each class that it serves, but only while it has a free slot (&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_MAX_TASKS&lt;/code&gt;), because a claim assigns the job to it.&lt;/li&gt;
+&lt;li&gt;The claim returns a task token. The agent uses the task token to fetch the job configuration. A job without a &lt;code&gt;docker:&lt;/code&gt; list is a machine job: the agent reports a failure, because this class is a container class.&lt;/li&gt;
+&lt;li&gt;It pulls the images: the init image, the pause image, and the images of the job. Registry credentials from the job go to the engine for the pull and are never stored. Variables such as &lt;code&gt;$DOCKERHUB_PASSWORD&lt;/code&gt; in an image name or in the credentials are expanded from the environment of the job.&lt;/li&gt;
+&lt;li&gt;It creates a network and a volume for this job, and starts the &lt;strong&gt;init&lt;/strong&gt; container with the volume at &lt;code&gt;/opt/circleci/bin&lt;/code&gt;. The image &lt;code&gt;circleci/runner-init&lt;/code&gt; copies &lt;code&gt;orchestrator&lt;/code&gt; (GOAT) and &lt;code&gt;circleci-agent&lt;/code&gt; there and exits. The init container has no network.&lt;/li&gt;
+&lt;li&gt;It starts the &lt;strong&gt;pause&lt;/strong&gt; container on the job network. The other containers use &lt;code&gt;--network container:&amp;lt;pause&amp;gt;&lt;/code&gt;, so every container of the job shares one network namespace, and a service listens on &lt;code&gt;localhost&lt;/code&gt; for the primary container, as in the Docker executor.&lt;/li&gt;
+&lt;li&gt;It starts each &lt;strong&gt;service&lt;/strong&gt; container with its image, entrypoint, command, user, and environment from the job, and the service limits of the class.&lt;/li&gt;
+&lt;li&gt;It starts the &lt;strong&gt;primary&lt;/strong&gt; container with the volume, the entrypoint &lt;code&gt;/opt/circleci/bin/orchestrator run-task&lt;/code&gt;, the environment of the job, and the GOAT settings, which include the task token, in one environment variable. GOAT runs the entrypoint of the job in the background, starts the task agent with the token on its standard input, and removes the settings from the environment before any job step starts.&lt;/li&gt;
+&lt;li&gt;The task agent in the primary container reports steps and output to CircleCI itself. The agent waits for the primary container to stop.&lt;/li&gt;
+&lt;li&gt;It removes the containers, the network, and the volume of the job, and then tells CircleCI that the job is cleaned up. If the primary container stopped with an error, it reports the failure first. If a container could not even start, for example after a failed image pull, it returns the job to the queue, and reports a failure only when CircleCI has no retries left.&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;When the agent receives SIGTERM, it stops claiming and lets the running jobs finish. The stack sets &lt;code&gt;stop_grace_period: 5h5m&lt;/code&gt;, as for the machine classes.&lt;/p&gt;
+&lt;p&gt;When the agent starts, it removes every container, network, and volume that carries its Docker label &lt;code&gt;machine-runner-swarm.container-mode=1&lt;/code&gt;. These are the leftovers of a crash. Swarm updates the service stop-first, so two agents never run on one node, and the start-up cleanup cannot remove the job of a running agent.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="deploy"&gt;Deploy&lt;span class="hx:absolute hx:-mt-20" id="deploy"&gt;&lt;/span&gt;
+&lt;a href="#deploy" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;You need a Swarm that is set up as in the &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/quickstart-linux/"&gt;Linux quickstart&lt;/a&gt;, Docker Engine 24 or later on the nodes, a resource class for container mode, and its token. The nodes pull the Go image, the init image, and the pause image, so they need access to Docker Hub and to &lt;code&gt;registry.k8s.io&lt;/code&gt;.&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;Create the resource class and a token for container mode with the &lt;a href="https://circleci.com/docs/guides/toolkit/circleci-cli/" target="_blank" rel="noopener"&gt;circleci CLI&lt;/a&gt;, as for a machine class, and store the token in a secret. A class serves one mode, so do not reuse the token of a machine class.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;printf&lt;/span&gt; &lt;span class="s1"&gt;&amp;#39;%s&amp;#39;&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;&lt;/span&gt;&lt;span class="nv"&gt;$TOKEN&lt;/span&gt;&lt;span class="s2"&gt;&amp;#34;&lt;/span&gt; &lt;span class="p"&gt;|&lt;/span&gt; docker secret create docker-default-token -&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Label the workers that may run jobs. Never label a manager.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker node update --label-add machine-runner-swarm.container-mode&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="nb"&gt;true&lt;/span&gt; worker-1&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Edit &lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_CLASSES&lt;/code&gt; in &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/linux/stack/container-mode.yaml" target="_blank" rel="noopener"&gt;&lt;code&gt;linux/stack/container-mode.yaml&lt;/code&gt;&lt;/a&gt;: replace &lt;code&gt;CHANGE-ME&lt;/code&gt; with your namespace, and set the limits. Then deploy it with the main stack file or alone:&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker stack deploy -c linux/stack/runners.yaml -c linux/stack/container-mode.yaml runners&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Run a job. The example &lt;a href="https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/examples/container-mode.yml" target="_blank" rel="noopener"&gt;&lt;code&gt;examples/container-mode.yml&lt;/code&gt;&lt;/a&gt; has a primary container and a PostgreSQL service on &lt;code&gt;localhost:5432&lt;/code&gt;.&lt;/p&gt;
+&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
+&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service logs runners_container-agent&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
+&lt;button
+class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+title="Copy code"
+aria-label="Copy code"
+data-copied-label="Copied!"
+&gt;
+&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
+&lt;/button&gt;
+&lt;/div&gt;
+&lt;/div&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h3 data-hextra-search-id="settings"&gt;Settings&lt;span class="hx:absolute hx:-mt-20" id="settings"&gt;&lt;/span&gt;
+&lt;a href="#settings" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The agent reads the environment variables below. The stack file sets them in the &lt;code&gt;environment&lt;/code&gt; of the service.&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Variable&lt;/th&gt;
+&lt;th&gt;Default&lt;/th&gt;
+&lt;th&gt;Meaning&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_CLASSES&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;none, required&lt;/td&gt;
+&lt;td&gt;A JSON array of the classes of this agent. Each entry has &lt;code&gt;name&lt;/code&gt; (&lt;code&gt;&amp;lt;namespace&amp;gt;/&amp;lt;class&amp;gt;&lt;/code&gt;), &lt;code&gt;token_file&lt;/code&gt; (a Swarm secret: the bare token, or a runner config with an &lt;code&gt;auth_token&lt;/code&gt; line), and the limits &lt;code&gt;primary&lt;/code&gt; and &lt;code&gt;service&lt;/code&gt;, each with &lt;code&gt;cpus&lt;/code&gt;, &lt;code&gt;memory_mb&lt;/code&gt;, and &lt;code&gt;pids&lt;/code&gt; (default 4096)&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_MAX_TASKS&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;2&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;Jobs at the same time on this node. The agent claims only while it has a free slot&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_MAX_RUN_TIME&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;5h&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The longest a job may run. After it, the agent reports a failure and removes the job&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_INIT_IMAGE&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;circleci/runner-init:&amp;lt;tag of the claim&amp;gt;&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The init image. The stack file pins a digest. Unset it to follow the tag of the claim, as container runner does&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_PAUSE_IMAGE&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;registry.k8s.io/pause:3.10&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The image that holds the network namespace. The stack file pins a digest&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_PULL&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;always&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;always&lt;/code&gt; pulls a tag before each job, as container runner does. &lt;code&gt;missing&lt;/code&gt; pulls only an image that the node lacks. An image pinned by digest is always pulled once&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_RUNNER_API&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;https://runner.circleci.com&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The runner API. Set the URL of your CircleCI server for a server installation&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_POLL_INTERVAL&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;3s&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The wait between claims when no job is queued&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_NAME&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;the hostname&lt;/td&gt;
+&lt;td&gt;The name that the agent gives CircleCI&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_DOCKER_SOCKET&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;/var/run/docker.sock&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The Docker socket of the node, as seen inside the agent container&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_KEEP_FAILED&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;unset&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;true&lt;/code&gt; leaves the containers, network, and volume of a failed job on the node, so that you can read &lt;code&gt;docker logs&lt;/code&gt;. The next start of the agent removes them. Only for debugging: a kept primary container holds the task token&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;h2 data-hextra-search-id="security-model"&gt;Security model&lt;span class="hx:absolute hx:-mt-20" id="security-model"&gt;&lt;/span&gt;
+&lt;a href="#security-model" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The agent is a trusted component, like the Kubernetes service account of container runner.&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Question&lt;/th&gt;
+&lt;th&gt;Answer&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;What holds the Docker socket?&lt;/td&gt;
+&lt;td&gt;Only the agent. It runs as root with a read-only root filesystem and no capabilities, and the socket is root-equivalent on its node. The test &lt;code&gt;linux/tests/container-mode.sh&lt;/code&gt; checks that no job container mounts it. The Go compiler is in this container too, because it builds the agent at start-up. It gives an attacker nothing that the socket does not give, but you can compile the sources into an image of your own (&lt;code&gt;CGO_ENABLED=0 go build&lt;/code&gt;) and set &lt;code&gt;image&lt;/code&gt; and &lt;code&gt;entrypoint&lt;/code&gt; in the stack file for a smaller container&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Where are the class tokens?&lt;/td&gt;
+&lt;td&gt;In Swarm secrets that only the agent mounts, and in the memory of the agent. The agent keeps its own tokens and does not go through the token proxy of the machine classes: whoever holds the socket can read the secrets of its node, so the proxy would protect nothing here. No job container has a class token, a secret directory, or a way to claim a job. The agent never runs on the node of the token proxy, so the tokens of the machine classes are not next to the socket&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Where is the task token?&lt;/td&gt;
+&lt;td&gt;In the environment of the primary container, in one variable that GOAT removes before it starts the task agent, which reads the token from its standard input. The token is scoped to this one job. Anyone who can use the Docker API of the node can still read it with &lt;code&gt;docker inspect&lt;/code&gt;, so the node must not hand the socket to jobs. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/docker-builds/"&gt;Docker builds&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Can one job reach another?&lt;/td&gt;
+&lt;td&gt;Each job has its own bridge network, and Docker does not route between them. A job can reach the internet and the node through the gateway, as a machine class can. Services of one job listen on &lt;code&gt;localhost&lt;/code&gt;, not on a shared network&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;What stops a runaway job?&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;--cpus&lt;/code&gt; and &lt;code&gt;--memory&lt;/code&gt; (without swap) and a process limit on every container, and a maximum run time. They are enforced by the kernel of the node&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;What does a job container keep?&lt;/td&gt;
+&lt;td&gt;Default capabilities without &lt;code&gt;NET_RAW&lt;/code&gt; and &lt;code&gt;MKNOD&lt;/code&gt;, no privileged mode, no devices, no host paths. It runs as the user of its image, or the &lt;code&gt;user&lt;/code&gt; of the job. &lt;code&gt;cimg&lt;/code&gt; images give the job &lt;code&gt;sudo&lt;/code&gt;, as in the Docker executor&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Is it a virtual machine boundary?&lt;/td&gt;
+&lt;td&gt;No. All containers of a node share its kernel. Use the machine runner orchestrator for untrusted code. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/"&gt;Security&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Which images does the agent trust?&lt;/td&gt;
+&lt;td&gt;Those that the job names, as in the Docker executor. The Go, init, and pause images are pinned by digest in the stack file. Update the init pin with the task agent, or follow the tag of the claim&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Where is the audit trail?&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;docker service logs runners_container-agent&lt;/code&gt; shows each job, its containers, and what failed. Tokens are never logged&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;An attacker who can change the job configuration of a project can choose the images that run on your nodes, as with any runner. Restrict who can use the class with the same controls as for a machine class.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="sizing"&gt;Sizing&lt;span class="hx:absolute hx:-mt-20" id="sizing"&gt;&lt;/span&gt;
+&lt;a href="#sizing" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Swarm sees only the agent service, so it cannot place jobs by free memory or CPU. The agent protects the node by other means:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_MAX_TASKS&lt;/code&gt; caps the jobs of a node. Choose it so that &lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_MAX_TASKS&lt;/code&gt; times the primary limit plus the service limits of a job fits in the node. The default classes in the stack file allow 4 GiB for the primary container and 2 GiB for each service, so a job with one service needs up to 6 GiB.&lt;/li&gt;
+&lt;li&gt;Swarm spreads nothing. Each node serves its own jobs until its cap is reached, and a job that finds no free slot stays in the CircleCI queue and runs on another node.&lt;/li&gt;
+&lt;li&gt;A global service runs on every labelled node, so scaling out means labelling another worker. The agent needs up to 1 GiB while it compiles at start-up, and little afterwards.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2 data-hextra-search-id="limits"&gt;Limits&lt;span class="hx:absolute hx:-mt-20" id="limits"&gt;&lt;/span&gt;
+&lt;a href="#limits" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Limit&lt;/th&gt;
+&lt;th&gt;Detail&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;Prototype&lt;/td&gt;
+&lt;td&gt;Not run against the real CircleCI API yet. Not supported by CircleCI. Refer to &lt;a href="#status"&gt;Status&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Linux only&lt;/td&gt;
+&lt;td&gt;Linux workers on amd64 and arm64 in principle. Only amd64 is tested. Refer to &lt;a href="#windows"&gt;Windows&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;No Rerun job with SSH&lt;/td&gt;
+&lt;td&gt;The agent publishes no port and passes no SSH settings to GOAT&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;No Docker layer caching, no &lt;code&gt;setup_remote_docker&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The job has no engine. Use the &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/docker-builds/"&gt;docker-build class&lt;/a&gt; from a machine class, or a daemonless builder&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;No ECR authentication&lt;/td&gt;
+&lt;td&gt;A job that uses &lt;code&gt;aws_auth&lt;/code&gt; fails. Registry credentials with a user name and password work&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;No service logs or lifecycle output in the CircleCI UI&lt;/td&gt;
+&lt;td&gt;Container runner adds a logging container that streams the logs of service containers and the spin-up step. The prototype has none. Read the logs on the node with &lt;code&gt;docker logs&lt;/code&gt; while a job runs, or in the agent log&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;No wait for service readiness&lt;/td&gt;
+&lt;td&gt;Services start before the primary container, and nothing waits until they listen. Use &lt;code&gt;dockerize -wait&lt;/code&gt; or a retry in the job, as with the Docker executor&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;The job user&lt;/td&gt;
+&lt;td&gt;A &lt;code&gt;user:&lt;/code&gt; of a container becomes the user of the Docker container, and Docker resolves a name from the image. Container runner instead passes a name to GOAT, which switches to that user and so needs a container that starts as root. The prototype avoids that need&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;One limit pair for all services&lt;/td&gt;
+&lt;td&gt;Container runner can set limits for each service image. The prototype sets one pair for every service of a class&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Orphans after a crash&lt;/td&gt;
+&lt;td&gt;The agent removes leftover containers when it starts. CircleCI keeps the job of a crashed agent until its own timeout, because the agent has no record of the task token&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;The &lt;code&gt;agent&lt;/code&gt; tag of the init image changes&lt;/td&gt;
+&lt;td&gt;The stack file pins a digest, so the task agent of a job may be older than what CircleCI expects. Watch for new tags, or unset &lt;code&gt;MACHINE_RUNNER_SWARM_CONTAINER_INIT_IMAGE&lt;/code&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;h2 data-hextra-search-id="windows"&gt;Windows&lt;span class="hx:absolute hx:-mt-20" id="windows"&gt;&lt;/span&gt;
+&lt;a href="#windows" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Windows is not supported. A Windows version needs several things that Docker on Windows does not provide in the same form:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;A way to share one network namespace between containers, which the &lt;code&gt;localhost&lt;/code&gt; behavior depends on. Check whether the engine accepts &lt;code&gt;--network container:&amp;lt;id&amp;gt;&lt;/code&gt; for Windows containers. If it does not, services would need their own addresses on a per-job network, or the agent would have to create the network endpoint itself, as Kubernetes does with its network plugin.&lt;/li&gt;
+&lt;li&gt;Windows images for the init step, GOAT, and the pause container, and the Windows build of the task agent, which CircleCI offers as a preview in container runner.&lt;/li&gt;
+&lt;li&gt;The named pipe &lt;code&gt;\\.\pipe\docker_engine&lt;/code&gt; in place of the socket, process or Hyper-V isolation, and memory and CPU limits that match the isolation mode.&lt;/li&gt;
+&lt;li&gt;Paths such as &lt;code&gt;C:\opt\circleci\bin&lt;/code&gt; for the volume, and a different user model for jobs.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2 data-hextra-search-id="status"&gt;Status&lt;span class="hx:absolute hx:-mt-20" id="status"&gt;&lt;/span&gt;
+&lt;a href="#status" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Piece&lt;/th&gt;
+&lt;th&gt;State&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;Unit tests (&lt;code&gt;linux/stack/container-agent&lt;/code&gt;, &lt;code&gt;go test&lt;/code&gt;)&lt;/td&gt;
+&lt;td&gt;Pass: the container layout, limits, environment, GOAT settings, failure and retry paths, cleanup, the start-up sweep, the cap, and that no token reaches a log. Across the interface: the wrapper against a fake driver, and the Docker driver against a fake engine, including a job that is cut off by its context&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Swarm test (&lt;code&gt;linux/tests/container-mode.sh&lt;/code&gt;)&lt;/td&gt;
+&lt;td&gt;Passes in a Swarm in Docker-in-Docker: no agent on a node with the proxy or microVM label, one job with a service on &lt;code&gt;localhost&lt;/code&gt;, one failing job, the limits, no socket in the job, the cap, the cleanup, and the orphans&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Init image and GOAT&lt;/td&gt;
+&lt;td&gt;The public &lt;code&gt;circleci/runner-init&lt;/code&gt; image fills a volume in plain Docker, and its &lt;code&gt;orchestrator run-task&lt;/code&gt; starts a task agent with the settings that the agent writes&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;Real CircleCI job&lt;/td&gt;
+&lt;td&gt;Not yet. A first run on a test class is the next step&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;h2 data-hextra-search-id="related-pages"&gt;Related pages&lt;span class="hx:absolute hx:-mt-20" id="related-pages"&gt;&lt;/span&gt;
+&lt;a href="#related-pages" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ul&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/get-started/concepts/"&gt;Concepts&lt;/a&gt; explains classes, add-on stack files, and the model of the machine classes.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/security/"&gt;Security&lt;/a&gt; explains the token model and what a job can reach.&lt;/li&gt;
+&lt;li&gt;&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/faq/#can-it-run-docker-executor-jobs"&gt;FAQ: Can it run Docker executor jobs?&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;</description></item><item><title>Security</title><link>https://circleci-labs.github.io/scalable-machine-runner/docs/security/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://circleci-labs.github.io/scalable-machine-runner/docs/security/</guid><description>
 &lt;p&gt;This page describes what the stack protects, what it does not protect, and which controls you must apply on the CircleCI side. Read it before you give a class to a team.&lt;/p&gt;
 &lt;div
 data-alert="important" class="hextra-alert"
@@ -9933,7 +10367,7 @@ job -. &amp;#34;persistent class: Linux with the sudo opt-in, Windows always&amp
 &lt;ul&gt;
 &lt;li&gt;&lt;strong&gt;It sees the runner traffic of its classes.&lt;/strong&gt; The runner and the task agent send their API calls through it, over plain HTTP on the overlay network: claims, task configuration, and step output. The class token is never on that path, but the task token is. Between nodes, the Linux class networks are encrypted by default (&lt;code&gt;driver_opts: {encrypted: &amp;quot;true&amp;quot;}&lt;/code&gt;, IPsec between the nodes, which needs IP protocol 50 (ESP) open between them: refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/multi-node/#encrypted-class-networks"&gt;Encrypted class networks&lt;/a&gt;), so the task tokens and the step output do not cross the network of the nodes in clear text, and a host on that network cannot inject packets into a class overlay. Docker does not support encrypted overlay networks for Windows containers, so the Windows class traffic is plain between nodes: keep the Windows nodes on a network that you trust.&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;It is one point of failure.&lt;/strong&gt; One replica serves all classes, because a second replica would not share the record of who has claimed. While it is down, no runner can claim. A job that is running keeps its container and its calls wait for the proxy. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#monitor-the-token-proxy"&gt;Monitor the token proxy&lt;/a&gt;.&lt;/li&gt;
-&lt;li&gt;&lt;strong&gt;The node of the proxy holds every class token.&lt;/strong&gt; A job that escapes its container onto that node reads them. The proxy never runs on a Docker-build node. It runs on a manager by default. In a cluster, label the node that runs it with &lt;code&gt;machine-runner-swarm.proxy=true&lt;/code&gt;: runner services never run on a node with that label, so a job never shares a node with the proxy. On a single node there is no such label, nothing changes, and the jobs run next to the proxy. With several managers, pin the proxy to one with the label and &lt;code&gt;MACHINE_RUNNER_SWARM_PROXY_PLACEMENT&lt;/code&gt;.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;The node of the proxy holds every class token.&lt;/strong&gt; A job that escapes its container onto that node reads them. The proxy never runs on a Docker-build node or on a node of the &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/"&gt;container agent&lt;/a&gt;, which holds the Docker socket. It runs on a manager by default. In a cluster, label the node that runs it with &lt;code&gt;machine-runner-swarm.proxy=true&lt;/code&gt;: runner services never run on a node with that label, so a job never shares a node with the proxy. On a single node there is no such label, nothing changes, and the jobs run next to the proxy. With several managers, pin the proxy to one with the label and &lt;code&gt;MACHINE_RUNNER_SWARM_PROXY_PLACEMENT&lt;/code&gt;.&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;It depends on the runner API.&lt;/strong&gt; The proxy knows two runner API calls: &lt;code&gt;POST /api/v3/runner/claim&lt;/code&gt;, and &lt;code&gt;GET /api/v3/runner/scale&lt;/code&gt; with the fields &lt;code&gt;running_task_count&lt;/code&gt; and &lt;code&gt;unclaimed_task_count&lt;/code&gt;. They are tested against the runner version that this release pins. If CircleCI changes them, the proxy fails closed and jobs wait until a release of this project follows the change. Pin the runner version in production. This page makes no claim about how the Runner Terms apply to a proxy between your runners and CircleCI: that is for your own review.&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;It does not cover the persistent classes.&lt;/strong&gt; Refer to &lt;a href="#the-persistent-class"&gt;The persistent class&lt;/a&gt;.&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;Windows has its own proxy.&lt;/strong&gt; The Windows stack runs &lt;code&gt;token-proxy-windows&lt;/code&gt; (the &lt;code&gt;windows/amd64&lt;/code&gt; image of the same tag) for the Windows classes, because a Windows node does not share its network with a Linux proxy. It works as described here, with the differences in &lt;a href="#windows"&gt;Windows&lt;/a&gt;. There is no &lt;code&gt;windows/arm64&lt;/code&gt; image (&lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/install-windows/#the-token-proxy-image"&gt;Windows&lt;/a&gt;).&lt;/li&gt;
@@ -10109,7 +10543,7 @@ data-copied-label="Copied!"
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;Token proxy&lt;/td&gt;
-&lt;td&gt;One replica, &lt;code&gt;endpoint_mode: dnsrr&lt;/code&gt;, a read-only root filesystem, &lt;code&gt;cap_drop: [ALL]&lt;/code&gt;, uid 65534, no published port, a health check, a small volume for its state, and never on a Docker-build node&lt;/td&gt;
+&lt;td&gt;One replica, &lt;code&gt;endpoint_mode: dnsrr&lt;/code&gt;, a read-only root filesystem, &lt;code&gt;cap_drop: [ALL]&lt;/code&gt;, uid 65534, no published port, a health check, a small volume for its state, and never on a Docker-build node or a container-mode node&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;Runner&lt;/td&gt;
@@ -10807,6 +11241,8 @@ data-copied-label="Copied!"
 &lt;a href="#do-i-need-to-open-inbound-ports" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;No. Runners connect outbound over HTTPS, and the shipped classes publish no ports. Only the optional SSH add-on publishes port 54782, for &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/resource-classes/#rerun-job-with-ssh"&gt;Rerun job with SSH&lt;/a&gt;. Multi-node clusters need the Swarm ports between the nodes. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/install/multi-node/#inter-node-ports"&gt;Inter-node ports&lt;/a&gt;.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="can-i-run-a-long-lived-runner-with-warm-caches"&gt;Can I run a long-lived runner with warm caches?&lt;span class="hx:absolute hx:-mt-20" id="can-i-run-a-long-lived-runner-with-warm-caches"&gt;&lt;/span&gt;
 &lt;a href="#can-i-run-a-long-lived-runner-with-warm-caches" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Yes, with a persistent class. It gives up the clean environment, so use it only for trusted projects. The shipped Linux persistent class gives jobs no sudo by default. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/resource-classes/#persistent-mode"&gt;Persistent mode&lt;/a&gt;.&lt;/p&gt;
+&lt;h2 data-hextra-search-id="can-it-run-docker-executor-jobs"&gt;Can it run Docker executor jobs?&lt;span class="hx:absolute hx:-mt-20" id="can-it-run-docker-executor-jobs"&gt;&lt;/span&gt;
+&lt;a href="#can-it-run-docker-executor-jobs" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;As a prototype, yes. The classes of this repository run jobs with &lt;code&gt;machine: true&lt;/code&gt;. &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/"&gt;Container mode&lt;/a&gt; adds a Swarm service on each opted-in node, the swarm container agent, that runs jobs with a &lt;code&gt;docker:&lt;/code&gt; list and its service containers (&lt;code&gt;localhost&lt;/code&gt; works between them), as container runner does on Kubernetes. It needs no image of its own: the service compiles the agent from Swarm configs on a stock Go image. It is Linux only, it has no SSH reruns and no Docker layer caching, and it has not yet run against the real CircleCI API. A resource class serves one mode, so give container mode its own classes and tokens. For production jobs that need the Docker executor today, use container runner.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="can-i-use-rerun-job-with-ssh"&gt;Can I use Rerun job with SSH?&lt;span class="hx:absolute hx:-mt-20" id="can-i-use-rerun-job-with-ssh"&gt;&lt;/span&gt;
 &lt;a href="#can-i-use-rerun-job-with-ssh" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Yes, with the add-on stack file &lt;code&gt;ssh-rerun.yaml&lt;/code&gt;. It defines the class &lt;code&gt;linux-default-ssh&lt;/code&gt; (&lt;code&gt;windows-default-ssh&lt;/code&gt; on Windows), which sets &lt;code&gt;CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR&lt;/code&gt;, publishes port 54782 in host mode, and runs at most one replica on each node. A rerun uses the class of the original job, so the job that you debug must run on that class. The Swarm side was proven by hand with a real runner. No CI test logs in over SSH, and the Windows file is untested. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/resource-classes/#rerun-job-with-ssh"&gt;Rerun job with SSH&lt;/a&gt;.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="can-a-job-read-the-runner-token"&gt;Can a job read the runner token?&lt;span class="hx:absolute hx:-mt-20" id="can-a-job-read-the-runner-token"&gt;&lt;/span&gt;
@@ -10863,8 +11299,8 @@ data-copied-label="Copied!"
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;Service containers (&lt;code&gt;docker:&lt;/code&gt; secondary images)&lt;/td&gt;
-&lt;td&gt;No. Jobs use &lt;code&gt;machine: true&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;Install the service in the image, or use container runner&lt;/td&gt;
+&lt;td&gt;Only in &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/"&gt;container mode&lt;/a&gt;, a prototype. Machine classes use &lt;code&gt;machine: true&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;Container mode, install the service in the image, or use container runner&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;Desktop or UI automation on Windows&lt;/td&gt;
@@ -10873,8 +11309,8 @@ data-copied-label="Copied!"
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;A &lt;code&gt;docker:&lt;/code&gt; executor job&lt;/td&gt;
-&lt;td&gt;No. Jobs use &lt;code&gt;machine: true&lt;/code&gt;, and the image of the service is the environment of the job&lt;/td&gt;
-&lt;td&gt;Container runner&lt;/td&gt;
+&lt;td&gt;Only in &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/"&gt;container mode&lt;/a&gt;, a prototype, in classes of its own. Machine classes use &lt;code&gt;machine: true&lt;/code&gt;, and the image of the service is the environment of the job&lt;/td&gt;
+&lt;td&gt;Container mode, or container runner&lt;/td&gt;
 &lt;/tr&gt;
 &lt;/tbody&gt;
 &lt;/table&gt;

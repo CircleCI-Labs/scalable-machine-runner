@@ -1734,6 +1734,11 @@ data-copied-label="Copied!"
 &lt;td&gt;The docker-build services (pattern A). Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/docker-builds/"&gt;Docker Builds&lt;/a&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
+&lt;td&gt;&lt;code&gt;machine-runner-swarm.container-mode&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;true&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The container agent of &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/configure/container-mode/"&gt;container mode&lt;/a&gt; (experimental), on workers only. It stays off microVM, Docker-build and proxy nodes, and the token proxy stays off container-mode nodes&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
 &lt;td&gt;&lt;code&gt;machine-runner-swarm.proxy&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;&lt;code&gt;true&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;The node that runs the token proxy, in a cluster. Label it, and deploy with &lt;code&gt;MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'&lt;/code&gt;: the proxy then runs only there, and &lt;strong&gt;no runner service ever runs on a node with this label&lt;/strong&gt;, so jobs never share a node with the class tokens and the proxy state &lt;code&gt;proxy-state&lt;/code&gt;. On a single node, with no label, nothing changes. Refer to &lt;a href="https://circleci-labs.github.io/scalable-machine-runner/docs/operate/operations/#where-the-proxy-runs-and-when-it-moves"&gt;Where the proxy runs, and when it moves&lt;/a&gt;&lt;/td&gt;

@@ -6,7 +6,7 @@ page-description: Resource classes as Swarm services: default sizes and limits, 
 
 # Resource classes
 
-Each Swarm service in a stack file is one CircleCI resource class, named `<namespace>/<service>`, and `deploy.replicas` is how many jobs it runs at once. This page lists the shipped sizes, then how to add a class, choose replicas, run a persistent class, enable Rerun job with SSH, and read the stack variables.
+Each Swarm service in a stack file is one CircleCI resource class, named `<NAMESPACE>/<SERVICE>`, and `deploy.replicas` is how many jobs it runs at once. This page lists the shipped sizes, then how to add a class, choose replicas, run a persistent class, enable Rerun job with SSH, and read the stack variables.
 
 ## Size the limits
 
@@ -59,8 +59,8 @@ The shipped `linux/stack/runners.yaml` has one class, `linux-default`. Add other
    ```
 
 2. Copy the service `linux-default` in your stack file under another name, and change the name, `hostname`, `CIRCLECI_RUNNER_NAME` and `networks` as in the example below.
-3. Create the secret `<service>-token` with the token. Refer to [Create the secrets](install-linux.md#4-create-the-secrets) or [Create the secrets on Windows](install-windows.md#4-create-the-secrets).
-4. On Linux, add the class network and secret to the existing `token-proxy` service. The proxy serves a class for every secret `<service>-token` that it holds, and finds its runners as `tasks.<service>`.
+3. Create the secret `<SERVICE>-token` with the token. Refer to [Create the secrets](install-linux.md#4-create-the-secrets) or [Create the secrets on Windows](install-windows.md#4-create-the-secrets).
+4. On Linux, add the class network and secret to the existing `token-proxy` service. The proxy serves a class for every secret `<SERVICE>-token` that it holds, and finds its runners as `tasks.<SERVICE>`.
 5. Deploy again with the same `-c` files as before. Swarm creates the new service and leaves the others alone.
 
    ```bash
@@ -109,7 +109,7 @@ A deploy that adds a class secret replaces the proxy task. What the runners see 
 
 **A class in its own stack file.** Write `token-proxy` there with only the secret and network: Swarm merges files by name. Anchors do not reach into another file, so repeat what `*runner` sets (`user: "0"`, the `entrypoint` and its config, the placeholder secret `runner-placeholder-token`, `CIRCLECI_RUNNER_API_URL: http://token-proxy:8080`, and the read-only volume `runner-bin`), or copy `classes-extra.yaml`. The config name carries the first 12 hex digits of the SHA-256 of the file, because a Swarm config cannot change ([Upgrade to a new release of this repository](operations.md#upgrade-to-a-new-release-of-this-repository)).
 
-**A class on Windows.** Copy a service such as `windows-default` in your copy of `windows\stack\runners.yaml`, with its two mounts of the volume `runner-bin` (`subpath: current` and `subpath: 'git\current'`). Its `CIRCLECI_RUNNER_NAME` is `"{{.Node.Hostname}}-windows-<class>-{{.Task.Slot}}"`, and the file sets no `hostname`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks. A single-task class also adds its secret (target `<service>-token`) to `token-proxy-windows`, and reads `runner-placeholder-token`.
+**A class on Windows.** Copy a service such as `windows-default` in your copy of `windows\stack\runners.yaml`, with its two mounts of the volume `runner-bin` (`subpath: current` and `subpath: 'git\current'`). Its `CIRCLECI_RUNNER_NAME` is `"{{.Node.Hostname}}-windows-<CLASS>-{{.Task.Slot}}"`, and the file sets no `hostname`. The secret has no `uid`, `gid`, or `mode`, and the file defines no networks. A single-task class also adds its secret (target `<SERVICE>-token`) to `token-proxy-windows`, and reads `runner-placeholder-token`.
 
 ## Choose replica counts
 
@@ -182,7 +182,7 @@ The add-on files `linux/stack/ssh-rerun.yaml` and `windows\stack\ssh-rerun.yaml`
 
 - **Advertised address.** Setting `CIRCLECI_RUNNER_SSH_ADVERTISE_ADDR` turns the feature on. The task agent then starts an SSH server on the fixed port 54782, and the **Enable SSH** and **Wait for SSH** steps show the address. CircleCI only displays it, so it can be any name or IP address your users reach. The add-on files set `{{.Node.Hostname}}:54782`. If DNS does not resolve node hostnames, use one that does, for example `{{.Node.Hostname}}.example.com:54782`.
 - **Host-mode port.** The file publishes 54782 in host mode, so it opens on the node that runs the task (ingress mode would send a connection to any replica, which can be another user's job). A node has one port 54782, so the service sets `max_replicas_per_node: 1`, and replicas beyond the number of eligible nodes stay pending.
-- **Which class.** A rerun uses the class of the original job, so set the `resource_class` of the job to debug to `<namespace>/linux-default-ssh`. To give an existing class SSH, copy three settings from the add-on file into that service: the environment variable, the host-mode port, and `max_replicas_per_node: 1`. Every replica of that class then needs its own node.
+- **Which class.** A rerun uses the class of the original job, so set the `resource_class` of the job to debug to `<NAMESPACE>/linux-default-ssh`. To give an existing class SSH, copy three settings from the add-on file into that service: the environment variable, the host-mode port, and `max_replicas_per_node: 1`. Every replica of that class then needs its own node.
 
 ```bash
 printf 'api:\n  auth_token: %s\n' "$TOKEN" | docker secret create linux-default-ssh-token -
@@ -204,7 +204,7 @@ On Windows, the SSH user must name the shell: `ssh -p 54782 <HOST> -- powershell
 
 | Variable | Value in the files | Applies to | Notes |
 |---|---|---|---|
-| `CIRCLECI_RUNNER_NAME` | `"{{.Node.Hostname}}-<service>-{{.Task.Slot}}"` | Every service | Required. Unique per replica |
+| `CIRCLECI_RUNNER_NAME` | `"{{.Node.Hostname}}-<SERVICE>-{{.Task.Slot}}"` | Every service | Required. Unique per replica |
 | `CIRCLECI_RUNNER_MODE` | `single-task`, or `continuous` for persistent classes | Every service | `single-task` gives a new container for every job |
 | `CIRCLECI_RUNNER_IDLE_TIMEOUT` | `1h` | Single-task services | An idle replica exits and Swarm replaces it. Do not set it in continuous mode |
 | `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` | `"false"` on Linux, `"true"` on Windows | Every service | On Linux the runner user cannot remove files that the job user owns, so never set `true` there ([Working directory cleanup](security.md#working-directory-cleanup)) |
@@ -229,7 +229,7 @@ Refer to the [machine runner 3 configuration reference](https://circleci.com/doc
 
 The runner user is `circleci-runner` with uid 2000. It owns the secret file and has no sudo rights.
 
-The entrypoint always sets `CIRCLECI_RUNNER_COMMAND_PREFIX`: `["sudo","-niHu","<job user>","--"]`, or a `setpriv` command when the image has no sudo, and always a `setpriv --no-new-privs` command in a hardened class. It keeps a value that you set for three more: `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` (default `false`), `CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY` (default `/var/lib/circleci-runner/agent`, owned by the runner user) and `CIRCLECI_RUNNER_WORK_DIR` (default `/var/opt/circleci/workdir`, owned by the job user; keep a custom directory under `/var/opt/circleci`).
+The entrypoint always sets `CIRCLECI_RUNNER_COMMAND_PREFIX`: `["sudo","-niHu","<JOB_USER>","--"]`, or a `setpriv` command when the image has no sudo, and always a `setpriv --no-new-privs` command in a hardened class. It keeps a value that you set for three more: `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` (default `false`), `CIRCLECI_RUNNER_TASK_AGENT_DIRECTORY` (default `/var/lib/circleci-runner/agent`, owned by the runner user) and `CIRCLECI_RUNNER_WORK_DIR` (default `/var/opt/circleci/workdir`, owned by the job user; keep a custom directory under `/var/opt/circleci`).
 
 Arguments that you pass to the entrypoint replace the default command, `machine --config /run/secrets/circleci_runner_config.yaml`.
 
@@ -268,11 +268,11 @@ The log driver is `json-file` with rotation. The `local` driver also works on Wi
 
 ### The secret
 
-- **Linux, token proxy:** secret `<service>-token`, target `<service>-token`, at `/run/secrets/<service>-token` in the proxy, uid 65534, gid 65534, mode `0400`.
-- **Linux, persistent runner and placeholder:** secret `<service>-token` (a proxied class uses `runner-placeholder-token`), target `circleci_runner_config.yaml`, at `/run/secrets/circleci_runner_config.yaml`, uid 2000, gid 2000, mode `0400`.
-- **Windows:** secret `<service>-token`, target `circleci_runner_config.yaml`, at `C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`. Windows supports no owner or mode: administrators and `SYSTEM` only.
+- **Linux, token proxy:** secret `<SERVICE>-token`, target `<SERVICE>-token`, at `/run/secrets/<SERVICE>-token` in the proxy, uid 65534, gid 65534, mode `0400`.
+- **Linux, persistent runner and placeholder:** secret `<SERVICE>-token` (a proxied class uses `runner-placeholder-token`), target `circleci_runner_config.yaml`, at `/run/secrets/circleci_runner_config.yaml`, uid 2000, gid 2000, mode `0400`.
+- **Windows:** secret `<SERVICE>-token`, target `circleci_runner_config.yaml`, at `C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`. Windows supports no owner or mode: administrators and `SYSTEM` only.
 
-The content is `api:` and `auth_token: <token>` (the placeholder holds a made-up token). The proxy also accepts a bare token. The entrypoint passes `--config <path>` to the runner, and environment variables override the file.
+The content is `api:` and `auth_token: <TOKEN>` (the placeholder holds a dummy token). The proxy also accepts a bare token. The entrypoint passes `--config <PATH>` to the runner, and environment variables override the file.
 
 ### Exit codes
 

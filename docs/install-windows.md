@@ -6,7 +6,7 @@ page-description: Deploy CircleCI machine runner 3 as a Docker Swarm stack on Wi
 
 # Install on Windows Server with Docker Swarm
 
-This page deploys CircleCI machine runner 3 as a Docker Swarm stack on Windows Server. Every job runs in a new Windows Server Core container, and Swarm replaces the container after the job. The steps cover one host ([Multi-Node Clusters](multi-node.md) adds more). For a first run, [Quickstart on Windows Server](quickstart-windows.md) is shorter.
+This page deploys CircleCI machine runner 3 as a Docker Swarm stack on Windows Server. Every job runs in a new Windows Server Core container, and Swarm replaces the container after the job. The steps cover one host ([Multi-node clusters](multi-node.md) adds more). For a first run, [Quickstart on Windows Server](quickstart-windows.md) is shorter.
 
 > [!NOTE]
 > If you can run Kubernetes, CircleCI recommends [container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/) for containerized jobs. This page is for teams that run Docker Swarm and need a clean Windows container for every job.
@@ -21,7 +21,7 @@ The steps: start or join a swarm, label the node, create the secrets, deploy. Th
 ## Prerequisites
 
 - A CircleCI cloud organization and a user who is an organization admin. CircleCI server is not tested: [CircleCI server](security.md#circleci-server) says what is known.
-- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. It can run on your workstation. Pass `--org <org>` (a slug such as `gh/my-org`, or a UUID): without it the CLI uses the organization of the git remote of the current directory, which in a clone of this repository is not yours.
+- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. It can run on your workstation. Pass `--org <ORG>` (a slug such as `gh/my-org`, or a UUID): without it the CLI uses the organization of the git remote of the current directory, which in a clone of this repository is not yours.
 - One or more Windows Server hosts (table below). The host cannot be a domain controller.
 - Docker Engine 28.0 or later (CLI and engine), in Windows-container mode, with the Windows Containers feature (enabling it restarts the host). The stack files mount a subpath of a volume (`current` and `git\current`), which older CLIs and engines ignore: the runner would not start. CI runs Docker 29.4.0 on Windows, and `windows\Setup.ps1` checks the version. The `Install-DockerCE` script in the `helpful_tools` directory of the [Microsoft Windows Containers repository](https://github.com/microsoft/Windows-Containers) installs both.
 - An elevated Windows PowerShell 5.1 session.
@@ -54,10 +54,10 @@ An organization admin must agree to the [CircleCI Runner Terms](https://circleci
 
 ## Get the files
 
-Use a release (recommended) or clone the repository at a release tag. Paths on this page are relative to the root of either. The [GitHub release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) has the bundle `machine-runner-swarm-<version>.zip`, and the Linux page lists [every file of a release](install-linux.md#get-the-files).
+Use a release (recommended) or clone the repository at a release tag. Paths on this page are relative to the root of either. The [GitHub release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) has the bundle `machine-runner-swarm-<VERSION>.zip`, and the Linux page lists [every file of a release](install-linux.md#get-the-files).
 
 ```powershell
-git clone --branch <release-tag> https://github.com/CircleCI-Labs/machine-runner-swarm.git
+git clone --branch <RELEASE_TAG> https://github.com/CircleCI-Labs/machine-runner-swarm.git
 cd machine-runner-swarm
 ```
 
@@ -135,7 +135,7 @@ The token proxy holds your class tokens ([The token proxy](concepts.md#the-token
 
 The image runs as `ContainerAdministrator`, as the stock Server Core image does, because `ContainerUser` of Nano Server cannot write to the volume that keeps the state of the proxy.
 
-There is no `windows/arm64` image, because CI has no Windows on Arm host to build and test one on. In a cluster with Windows on Arm nodes, pin the proxy to a `windows/amd64` node with `MACHINE_RUNNER_SWARM_PROXY_PLACEMENT` ([Multi-Node Clusters](multi-node.md)). A cluster of only Windows on Arm nodes needs an image of your own: build the proxy with `GOARCH=arm64`, build `proxy\Dockerfile.windows` on an arm64 host with an arm64 Nano Server image as `--build-arg BASE=`, and name it with `MACHINE_RUNNER_SWARM_PROXY_IMAGE`.
+There is no `windows/arm64` image, because CI has no Windows on Arm host to build and test one on. In a cluster with Windows on Arm nodes, pin the proxy to a `windows/amd64` node with `MACHINE_RUNNER_SWARM_PROXY_PLACEMENT` ([Multi-node clusters](multi-node.md)). A cluster of only Windows on Arm nodes needs an image of your own: build the proxy with `GOARCH=arm64`, build `proxy\Dockerfile.windows` on an arm64 host with an arm64 Nano Server image as `--build-arg BASE=`, and name it with `MACHINE_RUNNER_SWARM_PROXY_IMAGE`.
 
 To use another image (development, an air gap), set `MACHINE_RUNNER_SWARM_PROXY_IMAGE` in the environment of `docker stack deploy`. The image must be on the node that runs the proxy: a local build exists only where you built it. This builds one from a checkout: build the binary on any host with Go, then build the image on the Windows host whose build matches the base image.
 
@@ -152,13 +152,13 @@ $env:MACHINE_RUNNER_SWARM_PROXY_IMAGE = 'machine-runner-swarm-proxy:dev'
 1. Create a namespace if your organization has none.
 
    ```powershell
-   circleci namespace create <namespace> --org <org>
+   circleci namespace create <NAMESPACE> --org <ORG>
    ```
 
 2. Create one resource class for each service in the stack files. The class name must equal the service name. The shipped `windows\stack\runners.yaml` has the service `windows-default` and deploys on its own.
 
    ```powershell
-   circleci runner resource-class create <namespace>/windows-default --org <org> --generate-token
+   circleci runner resource-class create <NAMESPACE>/windows-default --org <ORG> --generate-token
    ```
 
 The command prints the token once: store it in your secret manager. The optional add-on files in the same directory add `windows-custom` (`custom-image.yaml`), `windows-persistent` (`persistent.yaml`), `windows-docker-build` (`docker-build.yaml`) and `windows-default-ssh` (`ssh-rerun.yaml`, untested). Create the classes you plan to use.
@@ -187,23 +187,23 @@ Run these steps in an elevated PowerShell on every host, before you start Swarm:
 
 ## 3. Start Swarm and label the node
 
-1. On the first host, start Swarm. Always pass `--advertise-addr` with the IPv4 address of the host: a plain `docker swarm init` fails on some hosts with `could not find the system's IP address`. For more than one node, see [Multi-Node Clusters](multi-node.md).
+1. On the first host, start Swarm. Always pass `--advertise-addr` with the IPv4 address of the host: a plain `docker swarm init` fails on some hosts with `could not find the system's IP address`. For more than one node, see [Multi-node clusters](multi-node.md).
 
    ```powershell
-   docker swarm init --advertise-addr <host IPv4 address>
+   docker swarm init --advertise-addr <HOST_IPV4_ADDRESS>
    ```
 
 2. Label the node with the image tags it can run. A Server 2022 node gets the first label, and a Server 2025 node gets both.
 
    ```powershell
-   docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <node name>
-   docker node update --label-add machine-runner-swarm.windows-ltsc2025=true <node name>
+   docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <NODE_NAME>
+   docker node update --label-add machine-runner-swarm.windows-ltsc2025=true <NODE_NAME>
    ```
 
 On a single node, the token proxy needs no label: it runs on the manager, and the jobs run there too. In a cluster, give the proxy a node of its own: label it `machine-runner-swarm.proxy=true`, and runner services never run there, so a job never shares a node with the proxy. Do not set the label on the only node of a swarm, because no runner would be placed. If the managers are Linux hosts, or there are several managers, also pin the proxy to a Windows node with the placement in the environment of `docker stack deploy`:
 
 ```powershell
-docker node update --label-add machine-runner-swarm.proxy=true <node name>
+docker node update --label-add machine-runner-swarm.proxy=true <NODE_NAME>
 $env:MACHINE_RUNNER_SWARM_PROXY_PLACEMENT = 'node.labels.machine-runner-swarm.proxy == true'
 ```
 
@@ -216,14 +216,14 @@ Without a matching node the proxy stays pending and no runner can claim ([Where 
 
 ## 4. Create the secrets
 
-Create one secret for each service you deploy, named `<service>-token`, including each optional class (`windows-persistent-token` too: `persistent.yaml` declares it as external, so the deploy fails without it). It is a runner config file that holds only the token:
+Create one secret for each service you deploy, named `<SERVICE>-token`, including each optional class (`windows-persistent-token` too: `persistent.yaml` declares it as external, so the deploy fails without it). It is a runner config file that holds only the token:
 
 ```yaml
 api:
-  auth_token: <token>
+  auth_token: <TOKEN>
 ```
 
-The token proxy mounts the secrets of the proxied classes, and those runners never see them. The persistent class is the exception ([The persistent class](security.md#the-persistent-class)). The runners read one more secret, `runner-placeholder-token`, with a made-up token in the same format (the setup helper creates it). Swarm mounts it at `C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`, and the runner reads it with `--config`. Every other runner setting is a `CIRCLECI_RUNNER_*` variable in the stack file.
+The token proxy mounts the secrets of the proxied classes, and those runners never see them. The persistent class is the exception ([The persistent class](security.md#the-persistent-class)). The runners read one more secret, `runner-placeholder-token`, with a dummy token in the same format (the setup helper creates it). Swarm mounts it at `C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`, and the runner reads it with `--config`. Every other runner setting is a `CIRCLECI_RUNNER_*` variable in the stack file.
 
 This block asks for the token with hidden input and passes the config to `docker secret create` on stdin, so no file with the token is written on the host. Repeat the first part for each class, with its name in `$class`. Create the placeholder once.
 
@@ -254,7 +254,7 @@ Check that the file parses. This needs no running Swarm.
 docker stack config -c deploy\runners.yaml | Out-Null
 ```
 
-The directory holds the stack files and `runner-distributor.ps1`, the script that `runners.yaml` ships as a Swarm config (`file: runner-distributor.ps1`): keep it next to `runners.yaml`. Review these first ([Resource Classes](resource-classes.md) has the details):
+The directory holds the stack files and `runner-distributor.ps1`, the script that `runners.yaml` ships as a Swarm config (`file: runner-distributor.ps1`): keep it next to `runners.yaml`. Review these first ([Resource classes](resource-classes.md) has the details):
 
 | Service | File | Purpose |
 |---|---|---|
@@ -262,10 +262,10 @@ The directory holds the stack files and `runner-distributor.ps1`, the script tha
 | `windows-default` | `runners.yaml` | Stock Server Core image, two replicas |
 | `windows-custom` | `custom-image.yaml` | Your own image on top of stock Server Core ([Images](images.md#windows-bring-your-own-image)). It has a placeholder image that you replace |
 | `windows-persistent` | `persistent.yaml` | A long-lived runner with a named volume ([Persistent mode](resource-classes.md#persistent-mode)) |
-| `windows-docker-build` | `docker-build.yaml` | Builds Windows images with the host engine ([Docker Builds](docker-builds.md)) |
+| `windows-docker-build` | `docker-build.yaml` | Builds Windows images with the host engine ([Docker builds](docker-builds.md)) |
 | `windows-default-ssh` | `ssh-rerun.yaml` | Rerun job with SSH, port 54782. Untested on Windows ([Rerun job with SSH](resource-classes.md#rerun-job-with-ssh)) |
 
-- `runners.yaml` needs the secrets `windows-default-token` and `runner-placeholder-token`. Each add-on file needs its own `<service>-token`.
+- `runners.yaml` needs the secrets `windows-default-token` and `runner-placeholder-token`. Each add-on file needs its own `<SERVICE>-token`.
 - The distributor settings (the runner version, a mirror, an explicit SHA-256 list) are variables of `docker stack deploy` and need no edit ([Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows)).
 - For a class on the `ltsc2025` image, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-ltsc2025 == true`.
 - Add each optional file with another `-c` flag, and pass the same list on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each add-on file repeats the anchors of `runners.yaml` and declares the volume `runner-bin`, so it also loads alone: change a common setting in every file you use.
@@ -276,7 +276,7 @@ To check the optional files, pass them all in the order you deploy them:
 docker stack config -c deploy\runners.yaml -c deploy\custom-image.yaml -c deploy\persistent.yaml -c deploy\docker-build.yaml | Out-Null
 ```
 
-For the keys that Windows honours and ignores, see [Stack keys on Windows](resource-classes.md#stack-keys-on-windows).
+For the keys that Windows honors and ignores, see [Stack keys on Windows](resource-classes.md#stack-keys-on-windows).
 
 ## 6. Deploy the stack
 
@@ -309,10 +309,10 @@ docker service logs runners_runner-distributor-windows
    docker stack ps runners --no-trunc
    ```
 
-2. Check that the runners connected. Each replica is listed as `online`, named `<node hostname>-<service>-<slot>`. The web app shows the same under **Runners**.
+2. Check that the runners connected. Each replica is listed as `online`, named `<NODE_HOSTNAME>-<SERVICE>-<SLOT>`. The web app shows the same under **Runners**.
 
    ```powershell
-   circleci runner instance list --org <org> --resource-class <namespace>/windows-default
+   circleci runner instance list --org <ORG> --resource-class <NAMESPACE>/windows-default
    ```
 
 3. Run a job. The [quickstart](quickstart-windows.md#steps) has a complete config, and [`examples/windows-job.yml`](../examples/windows-job.yml) has more steps. Run the workflow twice: the two runs print different values for `$MACHINE_RUNNER_SWARM_INSTANCE_ID`, because each job runs in a new container.
@@ -330,13 +330,13 @@ docker service logs runners_runner-distributor-windows
 
 ## Optional: use the setup helper
 
-`windows\Setup.ps1` checks the host, starts Swarm on request, labels the node, creates the secrets, and deploys. It does not install the runner: the distributor service of the stack does that on every node. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <name> PASS` or `FAIL` for each preflight check (administrator, Windows Server build, Windows-container mode, Docker 28.0 or later, Swarm manager), and ends with `Next:` and the steps still to do, or `Check:` and the commands that watch the start.
+`windows\Setup.ps1` checks the host, starts Swarm on request, labels the node, creates the secrets, and deploys. It does not install the runner: the distributor service of the stack does that on every node. It runs in an elevated Windows PowerShell 5.1 session and is safe to run again. It prints `CHECK <NAME> PASS` or `FAIL` for each preflight check (administrator, Windows Server build, Windows-container mode, Docker 28.0 or later, Swarm manager), and ends with `Next:` and the steps still to do, or `Check:` and the commands that watch the start.
 
 | Parameter | Effect |
 |---|---|
-| `-InitSwarm -AdvertiseAddr <ip>` | Creates a Swarm when none exists, and waits until the node is a manager. The address is needed only then: on an active Swarm, `-InitSwarm` changes nothing |
-| `-Class <name>,<name>` | Asks for each token with hidden input and creates the secret `<name>-token`. An existing secret stays unchanged |
-| (placeholder) | With `-Class` or `-Deploy`, it also creates the secret `runner-placeholder-token` with a made-up token, which every runner reads |
+| `-InitSwarm -AdvertiseAddr <IP_ADDRESS>` | Creates a Swarm when none exists, and waits until the node is a manager. The address is needed only then: on an active Swarm, `-InitSwarm` changes nothing |
+| `-Class <NAME>,<NAME>` | Asks for each token with hidden input and creates the secret `<NAME>-token`. An existing secret stays unchanged |
+| (placeholder) | With `-Class` or `-Deploy`, it also creates the secret `runner-placeholder-token` with a dummy token, which every runner reads |
 | `-Deploy` | Runs `docker stack deploy` with `-StackFile` (one or more files, `runners.yaml` first) and `-StackName` (default `runners`). Without `-StackFile` it deploys the shipped `windows\stack\runners.yaml` as it is, which suits a first run. Once you keep copies as in step 5, pass them. It prints the files it deploys |
 
 The helper labels the node from the host build: `windows-ltsc2022=true` on Server 2022, and both `windows-ltsc2022=true` and `windows-ltsc2025=true` on Server 2025 (`machine-runner-swarm.` prefix). It supports Server 2022 and 2025 only, and does not add the labels of the optional classes. The distributor reads its settings from the environment of `-Deploy`.
@@ -390,7 +390,7 @@ Refer to [Troubleshooting](troubleshooting.md#windows). The most common problems
 ## Additional resources
 
 - [Concepts](concepts.md)
-- [Resource Classes](resource-classes.md)
+- [Resource classes](resource-classes.md)
 - [Security](security.md)
 - [Operations](operations.md)
 - [Machine runner 3 on Windows](https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-windows/)

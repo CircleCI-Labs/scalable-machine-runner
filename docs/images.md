@@ -85,7 +85,7 @@ The default Windows service runs the unmodified Microsoft Server Core image, for
 | `current` | `C:\machine-runner-swarm` | `bin\circleci-runner.exe`, the record `SHA256`, and `VERSION` |
 | `git\current` | `C:\Program Files\Git` | Portable Git for Windows: `git`, `bash`, `sh`, `tar`, `gzip`, `ssh` |
 
-`current` and `git\current` are relative directory symbolic links, to `versions\<version>` and to the pinned Git, which the distributor moves. Docker resolves a link when it creates a container, so a new runner version reaches the next container only, and a running job keeps its version. Docker refuses a junction or an absolute link in a subpath ([Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows)).
+`current` and `git\current` are relative directory symbolic links, to `versions\<VERSION>` and to the pinned Git, which the distributor moves. Docker resolves a link when it creates a container, so a new runner version reaches the next container only, and a running job keeps its version. Docker refuses a junction or an absolute link in a subpath ([Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows)).
 
 The runner is the main process: the service sets `entrypoint` to `C:\machine-runner-swarm\bin\circleci-runner.exe machine --config C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`. It also sets the full `PATH`, because a `PATH` in the service environment replaces the one of the image. Git for Windows comes after the Windows directories, so the Windows `find`, `sort`, and `tar` stay first.
 

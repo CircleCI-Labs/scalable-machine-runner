@@ -75,7 +75,7 @@ Do not scale a Windows class down while it runs jobs.
 
 Two limits sit above the replicas, both on the CircleCI side: the **runner concurrency of your plan** (shared by all self-hosted runner jobs of the organization) and **`maxConcurrentTasks` of the resource class** (20 by default, raised by CircleCI support). Queued tasks count against concurrency, and the inventory shows running tasks only, so runners can look idle while jobs wait. A job for a class with no runner queues indefinitely and holds concurrency: cancel it ([Jobs wait while the runners are idle](troubleshooting.md#jobs-wait-while-the-runners-are-idle)).
 
-The stack has no autoscaling and no cloud integration, and a dead node is not replaced. Plan for one node less than you have. A labelled node of the token proxy carries no replicas ([Where the proxy runs, and when it moves](#where-the-proxy-runs-and-when-it-moves)).
+The stack has no autoscaling and no cloud integration, and a dead node is not replaced. Plan for one node less than you have. A labeled node of the token proxy carries no replicas ([Where the proxy runs, and when it moves](#where-the-proxy-runs-and-when-it-moves)).
 
 One `token-proxy` replica serves all classes of an OS, because a second would not share the list of runners that have claimed. 100 idle runners are 20 claims a second, plus the calls of running jobs. Its shipped limits are 0.5 CPU and 128 MB on Linux, 1 CPU and 512 MB on Windows. This project has not load-tested it and states no tested fleet size (the CI runs a few replicas). Before more than a few dozen replicas, test with your own load and watch `docker stats --no-stream <CONTAINER>` on its node, 503 answers with `Retry-After` in runner logs, and a rising claim count in its summary line. Raise its `limits` in your copy of the stack file if it is the bottleneck. A second stack (own name, proxy, classes and tokens) is the structure to try beyond that, and it is not tested.
 
@@ -222,7 +222,7 @@ The last command names the version directory that a container resolved at start.
 
 #### Run the downloads from a mirror
 
-A site without a route to CircleCI's release bucket serves `<version>/circleci-runner_linux_<arch>.tar.gz` for every version the nodes may run from an internal HTTP server. The distributor builds the tarball address from the base URL and version and ignores the manifest's `url` fields, so a copy of `manifest.json` stays unchanged.
+A site without a route to CircleCI's release bucket serves `<VERSION>/circleci-runner_linux_<ARCH>.tar.gz` for every version the nodes may run from an internal HTTP server. The distributor builds the tarball address from the base URL and version and ignores the manifest's `url` fields, so a copy of `manifest.json` stays unchanged.
 
 | Setting | Reads `manifest.json` | The mirror must hold |
 |---|---|---|
@@ -262,13 +262,13 @@ sudo env MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=https://mirror.example.com/circl
 
 The service `runner-distributor-windows` is the only way a runner and Git reach a Windows node. It works like the [Linux distributor](#upgrade-the-runner-on-linux): same variables ([table](#settings-of-the-distributor)), same policy, no version in the runner services. An upgrade, pin or rollback changes the distributor only, so **no runner service restarts and no busy job is killed.**
 
-It installs into the volume `runner-bin` (`versions\<version>` for the runner, `git\<git version>` for portable Git) and mounts the links `current` and `git\current` read-only at `C:\machine-runner-swarm` and `C:\Program Files\Git`. Docker resolves a link when it creates a container, so the next job runs the new version and a running job keeps its directory. The distributor never overwrites a version or removes one in use (Windows cannot replace files a running container uses): it tries again at its next check. During a flip `current` is missing for a few milliseconds, and a container created then does not start (Swarm retries after the restart delay of 10 seconds). On a new node, runner tasks fail the same way until the first download is done.
+It installs into the volume `runner-bin` (`versions\<VERSION>` for the runner, `git\<GIT_VERSION>` for portable Git) and mounts the links `current` and `git\current` read-only at `C:\machine-runner-swarm` and `C:\Program Files\Git`. Docker resolves a link when it creates a container, so the next job runs the new version and a running job keeps its directory. The distributor never overwrites a version or removes one in use (Windows cannot replace files a running container uses): it tries again at its next check. During a flip `current` is missing for a few milliseconds, and a container created then does not start (Swarm retries after the restart delay of 10 seconds). On a new node, runner tasks fail the same way until the first download is done.
 
 Differences from Linux, in `x-distributor-env` of `windows\stack\runners.yaml`:
 
 - `MACHINE_RUNNER_SWARM_RUNNER_SHA256` defaults to the two values (`amd64`, `arm64`) of the pinned version.
-- `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` holds `manifest.json` and `<version>/circleci-runner_windows_<arch>.tar.gz`. It must be `https://` (or `file://`), unless a SHA-256 list is set.
-- `MACHINE_RUNNER_SWARM_TOOLS_BASE_URL` is a directory URL with `PortableGit-<version>-64-bit.7z.exe` (arm64: `-arm64.7z.exe`) and `7zr.exe`, the two downloads the script pins by SHA-256. Without it they come from GitHub.
+- `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` holds `manifest.json` and `<VERSION>/circleci-runner_windows_<ARCH>.tar.gz`. It must be `https://` (or `file://`), unless a SHA-256 list is set.
+- `MACHINE_RUNNER_SWARM_TOOLS_BASE_URL` is a directory URL with `PortableGit-<VERSION>-64-bit.7z.exe` (arm64: `-arm64.7z.exe`) and `7zr.exe`, the two downloads the script pins by SHA-256. Without it they come from GitHub.
 - The architecture is `amd64` or `arm64`. CI runs the distributor on amd64 hosts only: arm64 file names and manifest entries are tested, and no Windows arm64 host runs the stack.
 - There is no start-time binary check (no entrypoint script): the distributor compares the active binary with its record at every check and reinstalls it if it changed ([Runner binary integrity on Windows](security.md#runner-binary-integrity-on-windows)).
 - A mirror needs the `windows` tarballs, the two Git downloads in the tools directory, and `manifest.json` where the [Linux mirror table](#run-the-downloads-from-a-mirror) says. The distributor downloads with PowerShell, so an `https` mirror needs a certificate the stock Server Core image trusts (not your own authority): otherwise use an `http://` mirror with the SHA-256 list, or an image of your own. It reads only `HTTPS_PROXY`.
@@ -345,7 +345,7 @@ Swarm secrets are immutable: create a second secret and swap it into the service
    unset TOKEN
    ```
 
-3. Swap the secret. Single-task class on Linux, in the proxy. Keep the `target`: the proxy names a class after the file `<service>-token`, and a new name makes a new class that no runner belongs to:
+3. Swap the secret. Single-task class on Linux, in the proxy. Keep the `target`: the proxy names a class after the file `<SERVICE>-token`, and a new name makes a new class that no runner belongs to:
 
    ```sh
    docker service update \
@@ -430,7 +430,7 @@ A restart is safe at any time, on the same node. The proxy keeps the addresses o
    docker service logs --tail 30 runners_token-proxy
    ```
 
-3. `state restored; <class>: N runner(s) have claimed and stay refused` means you are done. `no state` or `state lost` with running tasks at CircleCI means the runners present are refused (403) until they recycle. Replace the idle ones on a Linux class:
+3. `state restored; <CLASS>: N runner(s) have claimed and stay refused` means you are done. `no state` or `state lost` with running tasks at CircleCI means the runners present are refused (403) until they recycle. Replace the idle ones on a Linux class:
 
    ```sh
    docker service update --force --update-parallelism 0 runners_linux-default
@@ -497,7 +497,7 @@ An update that restarts the Docker daemon or the node ends every container on it
 
 ### The node of the proxy
 
-Draining the node that runs `token-proxy` stops the proxy. A proxy pinned to a labelled node stays `Pending` until that node is `active`, then starts there with its state. No claim is possible meanwhile, so choose a quiet period and patch that node last. A proxy with the default placement moves to another manager and its state stays behind ([Where the proxy runs, and when it moves](#where-the-proxy-runs-and-when-it-moves)). Draining every manager, or the only node that can run the proxy, stops every claim: keep one node undrained for it ([the warning in Multi-Node Clusters](multi-node.md#managers-and-quorum)).
+Draining the node that runs `token-proxy` stops the proxy. A proxy pinned to a labeled node stays `Pending` until that node is `active`, then starts there with its state. No claim is possible meanwhile, so choose a quiet period and patch that node last. A proxy with the default placement moves to another manager and its state stays behind ([Where the proxy runs, and when it moves](#where-the-proxy-runs-and-when-it-moves)). Draining every manager, or the only node that can run the proxy, stops every claim: keep one node undrained for it ([the warning in Multi-Node Clusters](multi-node.md#managers-and-quorum)).
 
 ### Stop a busy Windows container
 
@@ -611,14 +611,14 @@ docker service logs --tail 30 runners_token-proxy
 
 | Log line | Meaning |
 |---|---|
-| `listening on :8080, upstream <host>, classes tasks.linux-default,...` | Started. One class per secret `<service>-token` it holds. A class missing here gets 403 from its runners: its secret is not mounted in `token-proxy` or not named `<service>-token` |
-| `claim from <ip> (tasks.<service>): upstream status 204` or `200` | 204: no task (normal, about every 5 seconds per idle runner). 200: a task was handed out, and that runner cannot claim again |
-| `released <ip> (tasks.<service>)` | DNS has not listed the address for 30 seconds in a row: the container is gone, and a new one on that address may claim |
-| `claim from <ip> refused: not a runner of any class (tasks.<service> lists [...], ...)` | Not a runner of a configured class, or one DNS does not list yet. Compare with the addresses in the line. Look for a class added without adding it to the proxy |
-| `claim from <ip> refused: this runner has already claimed a task` | A second claim from one container. After a restart, a runner that has claimed gets this until Swarm replaces it ([Restart the proxy](#restart-the-proxy)) |
-| `claim from <ip> refused: too many claims` | More than 2 claims a second from one container (429) |
+| `listening on :8080, upstream <HOST>, classes tasks.linux-default,...` | Started. One class per secret `<SERVICE>-token` it holds. A class missing here gets 403 from its runners: its secret is not mounted in `token-proxy` or not named `<SERVICE>-token` |
+| `claim from <IP_ADDRESS> (tasks.<SERVICE>): upstream status 204` or `200` | 204: no task (normal, about every 5 seconds per idle runner). 200: a task was handed out, and that runner cannot claim again |
+| `released <IP_ADDRESS> (tasks.<SERVICE>)` | DNS has not listed the address for 30 seconds in a row: the container is gone, and a new one on that address may claim |
+| `claim from <IP_ADDRESS> refused: not a runner of any class (tasks.<SERVICE> lists [...], ...)` | Not a runner of a configured class, or one DNS does not list yet. Compare with the addresses in the line. Look for a class added without adding it to the proxy |
+| `claim from <IP_ADDRESS> refused: this runner has already claimed a task` | A second claim from one container. After a restart, a runner that has claimed gets this until Swarm replaces it ([Restart the proxy](#restart-the-proxy)) |
+| `claim from <IP_ADDRESS> refused: too many claims` | More than 2 claims a second from one container (429) |
 | `state: cannot write it: ...` | [When the proxy cannot save its state](#when-the-proxy-cannot-save-its-state) |
-| `claim from <ip> (tasks.<service>): upstream status 401` | CircleCI rejects the class token: deleted, or the secret holds another class's token ([The runner log shows 401](troubleshooting.md#the-runner-log-shows-401)) |
+| `claim from <IP_ADDRESS> (tasks.<SERVICE>): upstream status 401` | CircleCI rejects the class token: deleted, or the secret holds another class's token ([The runner log shows 401](troubleshooting.md#the-runner-log-shows-401)) |
 | `upstream error: ...` | The proxy node cannot reach the runner API, or the connection broke (runners get 502). A claim that had reached CircleCI is latched ([A claim whose outcome is unknown](#a-claim-whose-outcome-is-unknown)) |
 | `cannot resolve the runners`, `token file` | Swarm DNS or a class secret is unavailable (runners get 503). No latch is released meanwhile |
 | One summary line a minute | Claims forwarded, latched and refused, refusals by reason. Rising refusals while runners are healthy point to the causes above. The wording can change between releases: alert on the numbers |
@@ -682,7 +682,7 @@ docker node update --label-add machine-runner-swarm.proxy=true <MANAGER>
 sudo env MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true' docker stack deploy -c deploy/runners.yaml runners
 ```
 
-The placement variable pins the proxy to a labelled node (manager or worker), and runner services never run on a labelled node, so no job shares a node with the class tokens. On a single node, with no label, the proxy and runners share the node. If the labelled node dies, the service stays pending until you label another. The labelled node runs no jobs: size the cluster so the other nodes carry the replicas.
+The placement variable pins the proxy to a labeled node (manager or worker), and runner services never run on a labeled node, so no job shares a node with the class tokens. On a single node, with no label, the proxy and runners share the node. If the labeled node dies, the service stays pending until you label another. The labeled node runs no jobs: size the cluster so the other nodes carry the replicas.
 
 **Planned work on the proxy's node.** A reboot keeps the state, and a move loses it. If the proxy is pinned, drain the node, patch it and set it `active`: the proxy is pending meanwhile, no runner can claim, and running jobs wait for the proxy at the end. It then starts on the same node with its state. Keep the downtime to the patch, and patch this node last ([Drain a node for patching](#drain-a-node-for-patching)). With the default placement and other managers, draining moves the proxy with an empty state (the worst case above): pin it first, or accept replacing the refused runners afterwards.
 
@@ -791,7 +791,7 @@ Leave mixed Docker versions only for the length of the upgrade. The runner upgra
 Swarm marks a node `Down` after it misses its heartbeats and starts replacement tasks on other nodes that match the constraints.
 
 - **The jobs on the node are lost.** CircleCI reports them as failed because of a problem with your infrastructure. Self-hosted runners have no automatic retry: rerun the workflow from the failed job.
-- **Services pinned to the node stay `Pending`**: the persistent class (`node.hostname`) and the docker-build classes (a labelled node). Capacity drops by the node's replicas until it returns or other nodes have room.
+- **Services pinned to the node stay `Pending`**: the persistent class (`node.hostname`) and the docker-build classes (a labeled node). Capacity drops by the node's replicas until it returns or other nodes have room.
 - **A returning node** rejoins by itself while its certificate is valid. Swarm does not move tasks back.
 - **A node gone for good:** `docker node rm --force <NODE>`. For a lost manager use `docker node demote` (if reachable) or `docker node rm --force`, and add a new manager to hold the quorum. The cluster runs while a majority of managers remains. Without one, running jobs finish but no replica is replaced ([Managers and quorum](multi-node.md#managers-and-quorum)).
 
@@ -923,7 +923,7 @@ Before you move to an untested runner version (any floating value included), pin
 Two setups are **not tested yet**: CircleCI server, and an installation with no route to the internet. Nothing here promises either works.
 
 - **CircleCI server.** The proxy takes the runner API address in its `-upstream` argument, in the `command` of `token-proxy` in the stack file. The CI runs against CircleCI cloud and a fake API, never a server installation. Open questions: whether the claim and scale calls match your server version, which runner versions your server accepts (the default pin is tested against cloud only), and whether the proxy and runner trust your server's certificate ([the table below](#proxies-and-certificate-authorities-component-by-component)). Run the [canary](#monitor-the-cluster) first, and do not assume anything on this page was checked for your version.
-- **An air-gapped installation.** It does not work with this release: every runner container downloads its task agent from `circleci-binary-releases.s3.amazonaws.com` at start, and no setting redirects that. Nodes must reach that host, directly or through a proxy the runner honours.
+- **An air-gapped installation.** It does not work with this release: every runner container downloads its task agent from `circleci-binary-releases.s3.amazonaws.com` at start, and no setting redirects that. Nodes must reach that host, directly or through a proxy the runner honors.
 
 ### What needs the internet
 
@@ -950,7 +950,7 @@ Each component has its own network stack, so a variable that works for one does 
 
 | Component | Proxy variables | Your own certificate authority |
 |---|---|---|
-| The Docker engine of each node (every image pull) | The engine's own settings: `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` in a systemd drop-in of `docker.service`, or `proxies` in `daemon.json`. The stack files set nothing | The node's trust store. For a private registry, `/etc/docker/certs.d/<registry>/ca.crt` |
+| The Docker engine of each node (every image pull) | The engine's own settings: `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` in a systemd drop-in of `docker.service`, or `proxies` in `daemon.json`. The stack files set nothing | The node's trust store. For a private registry, `/etc/docker/certs.d/<REGISTRY>/ca.crt` |
 | `runner-distributor` on Linux | Its `wget` is BusyBox: it reads only lowercase `http_proxy`, sends an `https://` URL as `GET https://...` (not `CONNECT`), and ignores `no_proxy`. `HTTPS_PROXY` does nothing. Use a mirror that the node reaches without a proxy | The Alpine image's CA bundle only. Use an `http://` mirror with the SHA-256 list, or an image of your own |
 | `runner-distributor-windows` | `HTTPS_PROXY` only, for every download. `NO_PROXY` is not read | The container's Windows certificate store, which lacks your authority. Use an `http://` mirror with the SHA-256 list, or an image of your own |
 | `token-proxy` | A Go program: `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` apply to its calls to CircleCI, set under the service's `environment`. Swarm DNS lookups ignore them | Linux: `SSL_CERT_FILE` **replaces** the image's public roots, so mount one bundle with the public roots and yours (a Swarm config) and point `SSL_CERT_FILE` at it. Windows: the container's Windows certificate store |
@@ -973,7 +973,7 @@ For a site that reaches CircleCI through a proxy, or mirrors what it can, copy i
    docker stack rm runners
    ```
 
-2. Remove the secrets (`<service>-token` of every class you deployed) and the persistent-class volumes:
+2. Remove the secrets (`<SERVICE>-token` of every class you deployed) and the persistent-class volumes:
 
    ```sh
    docker secret rm linux-default-token runner-placeholder-token

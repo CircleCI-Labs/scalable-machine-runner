@@ -1,6 +1,6 @@
 # The smallest complete config for a Linux class of the machine runner swarm.
 #
-# 1. Replace my-namespace with your organization's runner namespace. linux-default is a service in
+# 1. Replace <NAMESPACE> with your organization's runner namespace. linux-default is a service in
 #    linux/stack/runners.yaml, and its resource class must exist with that name.
 # 2. Save the file as .circleci/config.yml in a project of the organization, commit it and push.
 # 3. Run the workflow twice. Both runs pass, because every job runs in a new container, so the marker
@@ -13,7 +13,7 @@ version: 2.1
 jobs:
   hello:
     machine: true
-    resource_class: my-namespace/linux-default
+    resource_class: <NAMESPACE>/linux-default
     steps:
       - run:
           name: Show where this job runs

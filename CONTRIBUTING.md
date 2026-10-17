@@ -8,7 +8,7 @@ Search the [existing issues](https://github.com/CircleCI-Labs/machine-runner-swa
 
 - The release or commit of this repository, and the runner version. On Linux, run `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node. On Windows, run `docker service logs --tail 100 runners_runner-distributor-windows`.
 - The operating system of the node and the Docker Engine version.
-- The output of `docker service ps --no-trunc runners_<service>` and `docker service logs --tail 100 runners_<service>`.
+- The output of `docker service ps --no-trunc runners_<SERVICE>` and `docker service logs --tail 100 runners_<SERVICE>`.
 
 Remove tokens, runner config files, and internal host names from everything you paste.
 
@@ -103,7 +103,7 @@ The suite needs no installed runner: the distributor of the shipped stack instal
 
 Three variables change the setup: `SWARM_TEST_DIND_IMAGE` sets the Docker-in-Docker image, `SWARM_TEST_CACHE` sets the directory that caches the real runner binary (`~/.cache/swarm-tests` by default), and `SWARM_TEST_KEEP=1` keeps the containers for debugging.
 
-The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and one `RESULT` line, and exit 0 only when every check passes. `Invoke-UnitTests.ps1` runs the Pester tests on any system with PowerShell 7. The `Test-*.ps1` scripts (`Injection`, `Ephemerality`, `Exit80`, `Placement`, `StopHandling`, `Install`, `Distributor` and `Persistent`) need a Windows host with Docker in Windows-container mode and no runner token. Each script's header says what it checks. `Test-Injection.ps1 -Online` and `Test-StopHandling.ps1 -Online` use the real runner.
+The Windows tests in `windows/tests` print `CHECK <NAME> PASS|FAIL` lines and one `RESULT` line, and exit 0 only when every check passes. `Invoke-UnitTests.ps1` runs the Pester tests on any system with PowerShell 7. The `Test-*.ps1` scripts (`Injection`, `Ephemerality`, `Exit80`, `Placement`, `StopHandling`, `Install`, `Distributor` and `Persistent`) need a Windows host with Docker in Windows-container mode and no runner token. Each script's header says what it checks. `Test-Injection.ps1 -Online` and `Test-StopHandling.ps1 -Online` use the real runner.
 
 ### Swarm config names
 

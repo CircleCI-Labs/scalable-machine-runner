@@ -11,7 +11,7 @@ version: 2.1
 jobs:
   image:
     machine: true
-    resource_class: my-namespace/linux-docker-build
+    resource_class: <NAMESPACE>/linux-docker-build
     steps:
       - checkout
       - run:

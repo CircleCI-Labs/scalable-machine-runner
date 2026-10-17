@@ -6,7 +6,7 @@ page-description: Deploy CircleCI machine runner 3 as a Docker Swarm stack on Ub
 
 # Install on Linux with Docker Swarm
 
-This page deploys CircleCI machine runner 3 as a Docker Swarm stack on Linux: one service for each resource class, and a clean container for every job. The steps cover one node ([Multi-Node Clusters](multi-node.md) adds more). For a first run, [Quickstart on Linux](quickstart-linux.md) is shorter.
+This page deploys CircleCI machine runner 3 as a Docker Swarm stack on Linux: one service for each resource class, and a clean container for every job. The steps cover one node ([Multi-node clusters](multi-node.md) adds more). For a first run, [Quickstart on Linux](quickstart-linux.md) is shorter.
 
 > [!NOTE]
 > If you can run Kubernetes, CircleCI recommends [container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/) for containerized jobs, and documents a plain [machine runner 3 on Docker](https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-docker/) setup. This page is for teams that run Docker Swarm and want a clean container for every job.
@@ -18,7 +18,7 @@ Nothing is installed on a node by hand: a service of the stack installs the runn
 ## Prerequisites
 
 - A CircleCI cloud organization and a user who is an organization admin. CircleCI server is not tested: [CircleCI server](security.md#circleci-server) says what is known.
-- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. Pass `--org <org>` (a slug such as `gh/my-org`, or a UUID): without it the CLI uses the organization of the git remote of the current directory, which in a clone of this repository is not yours.
+- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. Pass `--org <ORG>` (a slug such as `gh/my-org`, or a UUID): without it the CLI uses the organization of the git remote of the current directory, which in a clone of this repository is not yours.
 - Docker Engine 24 or later, running, with Swarm mode (Podman cannot run Swarm). Root access or membership of the `docker` group, which is equivalent to root: limit it to administrators.
 - A node clock synchronized with NTP. TLS to CircleCI fails silently when the clock drifts.
 - Outbound HTTPS from each node to the hosts in [Egress hosts](security.md#egress-hosts): the release bucket of CircleCI (the runner), and the registries of the `alpine` image (the distributor) and the token proxy image (Docker Hub). No inbound access is needed. [What needs internet](security.md#what-needs-internet) lists everything. Not tested without internet access: [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror).
@@ -40,16 +40,16 @@ An organization admin must agree to the [CircleCI Runner Terms](https://circleci
 Use a release (recommended) or clone the repository at a release tag. Paths on this page are relative to the root of the repository or of the extracted bundle.
 
 ```bash
-git clone --branch <release-tag> https://github.com/CircleCI-Labs/machine-runner-swarm.git
+git clone --branch <RELEASE_TAG> https://github.com/CircleCI-Labs/machine-runner-swarm.git
 cd machine-runner-swarm
 ```
 
-A release is recommended because its stack files name the token proxy image of that release by tag and digest. A clone names the tag `latest`, which is not a pin ([The token proxy image](#the-token-proxy-image)). Each [GitHub release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) carries four files, with `<version>` the release number without the `v`:
+A release is recommended because its stack files name the token proxy image of that release by tag and digest. A clone names the tag `latest`, which is not a pin ([The token proxy image](#the-token-proxy-image)). Each [GitHub release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) carries four files, with `<VERSION>` the release number without the `v`:
 
 | File | Content |
 |---|---|
-| `machine-runner-swarm-<version>.tar.gz` | The Linux bundle: stack files, scripts, documentation and examples, without the tests, plus `VERSION` and `CHANGELOG.md` |
-| `machine-runner-swarm-<version>.zip` | The same bundle for Windows |
+| `machine-runner-swarm-<VERSION>.tar.gz` | The Linux bundle: stack files, scripts, documentation and examples, without the tests, plus `VERSION` and `CHANGELOG.md` |
+| `machine-runner-swarm-<VERSION>.zip` | The same bundle for Windows |
 | `SHA256SUMS` | The SHA-256 checksum of both bundles |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of `SHA256SUMS` |
 
@@ -128,7 +128,7 @@ The token proxy is the one container that holds your class tokens ([The token pr
 | `edge` | The newest commit of the main branch that passed the end-to-end tests. For testing `main`, not for jobs that matter |
 | `sha-<12 characters>` | One commit of the main branch, published before its tests have run |
 
-The stack file reads the image from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. A release bundle defaults to `ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`, a checkout to `ccilabs/machine-runner-swarm-proxy:latest` (`linux/setup.sh --deploy` warns when the variable is not pinned by digest). To use another image (a digest for a pin, a registry of your own for an air gap, a local build for development), set the variable in the environment of `docker stack deploy`. The image must be on the node that runs the proxy, so build a local one there, or copy it with `docker save`.
+The stack file reads the image from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. A release bundle defaults to `ccilabs/machine-runner-swarm-proxy:<VERSION>@sha256:<DIGEST>`, a checkout to `ccilabs/machine-runner-swarm-proxy:latest` (`linux/setup.sh --deploy` warns when the variable is not pinned by digest). To use another image (a digest for a pin, a registry of your own for an air gap, a local build for development), set the variable in the environment of `docker stack deploy`. The image must be on the node that runs the proxy, so build a local one there, or copy it with `docker save`.
 
 ```bash
 docker build -t machine-runner-swarm-proxy:dev proxy/
@@ -142,16 +142,16 @@ sudo env MACHINE_RUNNER_SWARM_PROXY_IMAGE=machine-runner-swarm-proxy:dev docker 
 1. Create a namespace if your organization has none. An organization has one namespace, and orbs use the same one.
 
    ```bash
-   circleci namespace create <namespace> --org <org>
+   circleci namespace create <NAMESPACE> --org <ORG>
    ```
 
 2. Create one resource class for each service in the stack file. The class name must equal the service name. The shipped `linux/stack/runners.yaml` has one service, `linux-default`: keep that name for a first run.
 
    ```bash
-   circleci runner resource-class create <namespace>/linux-default --org <org> --generate-token
+   circleci runner resource-class create <NAMESPACE>/linux-default --org <ORG> --generate-token
    ```
 
-The command prints a token once: store it in your secret manager. If you lose it, run `circleci runner token create <namespace>/<class> --nickname <nickname>`. To rename the service, edit your copy of the file first ([step 5](#5-review-the-stack-file)), then create the class and the secret under the new name. More classes: [Resource Classes](resource-classes.md#define-a-class).
+The command prints a token once: store it in your secret manager. If you lose it, run `circleci runner token create <NAMESPACE>/<CLASS> --nickname <NICKNAME>`. To rename the service, edit your copy of the file first ([step 5](#5-review-the-stack-file)), then create the class and the secret under the new name. More classes: [Resource classes](resource-classes.md#define-a-class).
 
 ## 2. Prepare each node
 
@@ -196,21 +196,21 @@ The second command keeps fewer stopped containers on the node (each finished job
 The node is a manager, and the token proxy runs on a manager by default. On a single node, set no proxy label. In a cluster, label the node that runs the proxy: runner services never run on a node with this label, so a job never shares a node with the proxy.
 
 ```bash
-docker node update --label-add machine-runner-swarm.proxy=true <manager node name>
+docker node update --label-add machine-runner-swarm.proxy=true <MANAGER_NAME>
 ```
 
-With several managers, also pin the proxy to one ([Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves)). A loopback node cannot accept other nodes: for a cluster, use a routable address ([Multi-Node Clusters](multi-node.md#create-the-swarm)).
+With several managers, also pin the proxy to one ([Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves)). A loopback node cannot accept other nodes: for a cluster, use a routable address ([Multi-node clusters](multi-node.md#create-the-swarm)).
 
 ## 4. Create the secrets
 
-Create one secret for each service in the stack file, named `<service>-token`. It is a runner config file that holds only the token:
+Create one secret for each service in the stack file, named `<SERVICE>-token`. It is a runner config file that holds only the token:
 
 ```yaml
 api:
-  auth_token: <token>
+  auth_token: <TOKEN>
 ```
 
-The token proxy mounts these secrets at `/run/secrets/<service>-token` (uid 65534, mode `0400`), and the runners never see them. The runners read one more secret, `runner-placeholder-token`, with a made-up token in the same format, mounted at `/run/secrets/circleci_runner_config.yaml` (runner user, uid 2000, mode `0400`). Only the persistent class mounts its own token in the runner. Every other runner setting is a `CIRCLECI_RUNNER_*` variable in the stack file.
+The token proxy mounts these secrets at `/run/secrets/<SERVICE>-token` (uid 65534, mode `0400`), and the runners never see them. The runners read one more secret, `runner-placeholder-token`, with a dummy token in the same format, mounted at `/run/secrets/circleci_runner_config.yaml` (runner user, uid 2000, mode `0400`). Only the persistent class mounts its own token in the runner. Every other runner setting is a `CIRCLECI_RUNNER_*` variable in the stack file.
 
 Set `classes` to every class you deploy. The loop asks for each token with a hidden prompt, so the token does not reach your shell history or the process list. It works in bash, zsh and dash and stops at an empty token. Do not use `read -rsp`: zsh reads `-p` as a coprocess, which leaves `TOKEN` empty and creates a secret without a token.
 
@@ -242,9 +242,9 @@ Check that the file parses. This needs no running Swarm.
 docker stack config -c deploy/runners.yaml > /dev/null
 ```
 
-The directory holds the stack files and the two scripts that they ship as Swarm configs, `circleci-runner-entrypoint` and `runner-distributor.sh`. Keep the scripts next to the stack files, and keep the service `runner-distributor` and the top-level `configs:` and `volumes:`. A Swarm config cannot change, so its name carries the first 12 hex digits of the SHA-256 of its file: if you edit a script, rename its config the same way (`sha256sum <file> | cut -c1-12`).
+The directory holds the stack files and the two scripts that they ship as Swarm configs, `circleci-runner-entrypoint` and `runner-distributor.sh`. Keep the scripts next to the stack files, and keep the service `runner-distributor` and the top-level `configs:` and `volumes:`. A Swarm config cannot change, so its name carries the first 12 hex digits of the SHA-256 of its file: if you edit a script, rename its config the same way (`sha256sum <FILE> | cut -c1-12`).
 
-Review these settings first ([Resource Classes](resource-classes.md) has the details):
+Review these settings first ([Resource classes](resource-classes.md) has the details):
 
 | Setting | Default | Change it to |
 |---|---|---|
@@ -255,12 +255,12 @@ Review these settings first ([Resource Classes](resource-classes.md) has the det
 | `placement.constraints` | `node.platform.os == linux` | Add architecture or zone constraints |
 | `x-distributor-env` | An exact runner version (`3.1.13` in this release) with the SHA-256 values of its tarballs, major version 3, a check every 24 hours | Nothing for a first run. A newer pin, a floating version or a mirror are variables of `docker stack deploy` ([Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux)) |
 
-The optional classes are add-on files in `deploy/`. Add each with another `-c` flag, and pass the same list on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each needs its own resource class and secret `<service>-token`.
+The optional classes are add-on files in `deploy/`. Add each with another `-c` flag, and pass the same list on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each needs its own resource class and secret `<SERVICE>-token`.
 
 | File | Services | Purpose |
 |---|---|---|
 | `classes-extra.yaml` | `linux-java`, `linux-hardened` | Examples: an image swap, and a class without sudo. Reserves 6 more CPUs and 12 GB ([Define a class](resource-classes.md#define-a-class)) |
-| `docker-build.yaml` | `linux-docker-build` | Builds images with the host engine. Needs a labeled worker ([Docker Builds](docker-builds.md)) |
+| `docker-build.yaml` | `linux-docker-build` | Builds images with the host engine. Needs a labeled worker ([Docker builds](docker-builds.md)) |
 | `microvm.yaml` | `linux-microvm`, `linux-microvm-docker`, `microvm-dns` | Each job in a Kata Containers microVM. Needs KVM ([MicroVM jobs](microvm.md)) |
 | `persistent.yaml` | `linux-persistent` | A long-lived runner. Needs the node name edited in the file ([Persistent mode](resource-classes.md#persistent-mode)) |
 | `ssh-rerun.yaml` | `linux-default-ssh` | Rerun job with SSH. Publishes port 54782 ([Rerun job with SSH](resource-classes.md#rerun-job-with-ssh)) |
@@ -314,10 +314,10 @@ Other distributor settings, such as a floating version like `3.1` (weaker: the d
    docker service logs --tail 20 runners_runner-distributor
    ```
 
-4. Check that the runners connected. Each replica is listed as `online`, named `<node hostname>-<service>-<slot>` (for example `node1-linux-default-1`). The web app shows the same under **Runners**.
+4. Check that the runners connected. Each replica is listed as `online`, named `<NODE_HOSTNAME>-<SERVICE>-<SLOT>` (for example `node1-linux-default-1`). The web app shows the same under **Runners**.
 
    ```bash
-   circleci runner instance list --org <org> --resource-class <namespace>/linux-default
+   circleci runner instance list --org <ORG> --resource-class <NAMESPACE>/linux-default
    ```
 
 5. Run a job with [`examples/linux-hello.yml`](../examples/linux-hello.yml) (the [quickstart](quickstart-linux.md#steps) shows it), twice. After each job, Swarm shows a new task for the slot. The job `clean-check` in [`examples/linux-jobs.yml`](../examples/linux-jobs.yml) fails if anything from an earlier job is still present.
@@ -330,7 +330,7 @@ Other distributor settings, such as a floating version like `3.1` (weaker: the d
 |---|---|
 | `--check` | Preflight: Linux on amd64, arm64, ppc64le or s390x, Docker running and 24 or later, Swarm state, NTP |
 | `--swarm-init` | Runs `docker swarm init` on the loopback address unless Swarm is active, and sets the task history limit to 2 |
-| `--secret <service>` | Creates the secret `<service>-token` from a token read on stdin |
+| `--secret <SERVICE>` | Creates the secret `<SERVICE>-token` from a token read on stdin |
 | `--deploy` | Runs `docker stack deploy` with each `--stack-file`. Without one it deploys the shipped `linux/stack/runners.yaml`, so pass your copy from step 5. It warns when `MACHINE_RUNNER_SWARM_PROXY_IMAGE` is not pinned by digest |
 
 With no step it runs `--check`. Steps run in the order of the table. Options are `--stack-file` (repeatable) and `--stack-name`. Each run ends with `Next:` and the steps still to do, or `Check:` and the commands that show the runners start.
@@ -343,7 +343,7 @@ sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml
 ```
 
 - `--secret` asks for the token with a hidden prompt. To script it, pipe the token (`printf %s "$TOKEN" | sudo linux/setup.sh --secret linux-default`). Several `--secret` values need a terminal. A token has only letters, digits, `.`, `_` and `-`, and an existing secret stays unchanged ([Rotate a runner token](operations.md#rotate-a-runner-token)). Create a secret for every service you deploy.
-- The helper does not label nodes. For a docker-build class, run `docker node update --label-add machine-runner-swarm.docker-build=true <worker node>`.
+- The helper does not label nodes. For a docker-build class, run `docker node update --label-add machine-runner-swarm.docker-build=true <WORKER_NODE>`.
 - The distributor reads `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`, `MACHINE_RUNNER_SWARM_CHECK_INTERVAL`, `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` and `MACHINE_RUNNER_SWARM_RUNNER_SHA256` from the environment of `--deploy`, and the token proxy reads `MACHINE_RUNNER_SWARM_PROXY_*`. `sudo` drops the environment: use `sudo env VAR=value linux/setup.sh --deploy` ([Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux)).
 
 ## Upgrade
@@ -395,7 +395,7 @@ Refer to [Troubleshooting](troubleshooting.md). The most common problems on a fi
 ## Additional resources
 
 - [Concepts](concepts.md)
-- [Resource Classes](resource-classes.md)
+- [Resource classes](resource-classes.md)
 - [Security](security.md)
 - [Operations](operations.md)
 - [Machine runner 3 configuration reference](https://circleci.com/docs/guides/execution-runner/machine-runner-3-configuration-reference/)

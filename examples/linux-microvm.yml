@@ -11,7 +11,7 @@ version: 2.1
 jobs:
   kernel:
     machine: true
-    resource_class: my-namespace/linux-microvm
+    resource_class: <NAMESPACE>/linux-microvm
     steps:
       - run:
           name: The kernel of the job is the guest kernel, not the node's
@@ -22,7 +22,7 @@ jobs:
 
   image:
     machine: true
-    resource_class: my-namespace/linux-microvm-docker
+    resource_class: <NAMESPACE>/linux-microvm-docker
     steps:
       - checkout
       - run:

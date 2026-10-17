@@ -17,8 +17,8 @@ The old setup restarted the same container after each job, so jobs did not get a
 |---|---|
 | Services `base`, `convenience`, and `machine` in `docker-compose.yml` | One service for each resource class in `linux/stack/runners.yaml`. The continuous runner is `linux/stack/persistent.yaml` |
 | `restart: unless-stopped`, which restarts the same container | `restart_policy: condition: any`, which creates a new container |
-| Token in a `.env` file as `CIRCLECI_RUNNER_API_AUTH_TOKEN`, visible in `docker inspect` | Swarm secret `<service>-token`, which holds a runner config file |
-| The same `CIRCLECI_RUNNER_NAME` for every replica | `{{.Node.Hostname}}-<service>-{{.Task.Slot}}`, unique for each replica |
+| Token in a `.env` file as `CIRCLECI_RUNNER_API_AUTH_TOKEN`, visible in `docker inspect` | Swarm secret `<SERVICE>-token`, which holds a runner config file |
+| The same `CIRCLECI_RUNNER_NAME` for every replica | `{{.Node.Hostname}}-<SERVICE>-{{.Task.Slot}}`, unique for each replica |
 | Dockerfiles that build the runner into an image | A stock image, with the runner mounted from the volume `runner-bin` ([Images](images.md)) |
 | `CIRCLECI_RUNNER_MODE` and `CIRCLECI_RUNNER_CLEANUP_WORK_DIR` in the service environment | The same variables, in the stack file. Cleanup is `"false"` on Linux |
 
@@ -28,7 +28,7 @@ The old setup restarted the same container after each job, so jobs did not get a
 2. **Prepare the host.** Docker Engine is already there. Start Swarm and install nothing else: the `runner-distributor` service installs the runner on every node ([Start Swarm](install-linux.md#3-start-swarm)).
 3. **Create the secrets.** Use the token of each class, the value of `CIRCLECI_RUNNER_API_AUTH_TOKEN` in your old `.env` file ([Create the secrets](install-linux.md#4-create-the-secrets)).
 4. **Choose the images.** The old `convenience` service maps to `cimg/base` or another `cimg` image, and `base` to a stock image with your tools. Move extra tools from your Dockerfiles into a derived image ([Linux: bring your own image](images.md#linux-bring-your-own-image)).
-5. **Edit the stack file.** Rename or copy the services, set your old replica counts, and keep only what you need. The old `machine` service becomes `linux/stack/persistent.yaml` ([Resource Classes](resource-classes.md)).
+5. **Edit the stack file.** Rename or copy the services, set your old replica counts, and keep only what you need. The old `machine` service becomes `linux/stack/persistent.yaml` ([Resource classes](resource-classes.md)).
 6. **Deploy next to the old setup.** Both can run at once, because the runner names differ. Check that the new runners show up in the inventory. If a new service keeps a class whose old runners are busy, the token proxy sees running tasks at its first start, cannot tell whose they are, and refuses the present runners until their idle timeout, or until you run the command below once the old runners are idle. New classes avoid this ([Restart the proxy](operations.md#restart-the-proxy)).
 
    ```bash

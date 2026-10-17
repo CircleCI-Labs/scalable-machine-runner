@@ -99,7 +99,7 @@ Self-hosted runners need at least one credit on your account, although runner co
 
 Swarm has no autoscaling, so you choose the number of replicas.
 
-- **Permanent.** Edit `deploy.replicas` in your stack file and deploy again with the same files ([Choose replica counts](resource-classes.md#choose-replica-counts)). To go beyond one node, add nodes ([Multi-Node Clusters](multi-node.md)).
+- **Permanent.** Edit `deploy.replicas` in your stack file and deploy again with the same files ([Choose replica counts](resource-classes.md#choose-replica-counts)). To go beyond one node, add nodes ([Multi-node clusters](multi-node.md)).
 - **Quick.** `docker service scale runners_linux-default=4`. The next `docker stack deploy` resets it. A scale-down stops containers: on Linux a running job finishes first, and on Windows it is killed ([why](operations.md#stop-a-busy-windows-container)).
 - **Queue depth.** Ask the runner API with a personal API token, not a resource class token:
 
@@ -116,7 +116,7 @@ No. Capacity is fixed and you pay for the peak: an idle replica keeps its reserv
 
 ## Does it create or remove nodes?
 
-No. You install Docker, join the node to the Swarm, and label it from a manager (a node cannot label itself), and a Windows node needs its base image before the first task. A terminated instance leaves a `Down` node until you run `docker node rm`. There is no cloud integration or machine image. If you create nodes with user data, do not leave the Swarm join token readable in it ([Cloud nodes: block the metadata address](security.md#cloud-nodes-block-the-metadata-address)). Refer to [Multi-Node Clusters](multi-node.md).
+No. You install Docker, join the node to the Swarm, and label it from a manager (a node cannot label itself), and a Windows node needs its base image before the first task. A terminated instance leaves a `Down` node until you run `docker node rm`. There is no cloud integration or machine image. If you create nodes with user data, do not leave the Swarm join token readable in it ([Cloud nodes: block the metadata address](security.md#cloud-nodes-block-the-metadata-address)). Refer to [Multi-node clusters](multi-node.md).
 
 ## Where are the tokens kept, and can I use my secrets manager?
 
@@ -153,7 +153,7 @@ Yes, with the add-on file `ssh-rerun.yaml`, which defines `linux-default-ssh` (`
 
 ## Can a job read the runner token?
 
-Not in a single-task class, with or without sudo: the runner container holds only a made-up placeholder, and the [token proxy](security.md#the-token-proxy) holds the class token. On Windows no test asserts this, and a hostile job on the same host as the proxy can reach the token, because process isolation is not a security boundary ([Windows](security.md#windows)). In a persistent class the container holds the token: on Linux a job that uses sudo can read it (the shipped class disables sudo), and on Windows every job can. Use BitLocker and one token for each class and host. A holder of a token can run a rogue runner on that class, so rotate tokens ([how](operations.md#rotate-a-runner-token)). Refer to [Token model on each OS](security.md#token-model-on-each-os).
+Not in a single-task class, with or without sudo: the runner container holds only a placeholder, and the [token proxy](security.md#the-token-proxy) holds the class token. On Windows no test asserts this, and a hostile job on the same host as the proxy can reach the token, because process isolation is not a security boundary ([Windows](security.md#windows)). In a persistent class the container holds the token: on Linux a job that uses sudo can read it (the shipped class disables sudo), and on Windows every job can. Use BitLocker and one token for each class and host. A holder of a token can run a rogue runner on that class, so rotate tokens ([how](operations.md#rotate-a-runner-token)). Refer to [Token model on each OS](security.md#token-model-on-each-os).
 
 ## What is the token proxy, and what happens when it is down?
 

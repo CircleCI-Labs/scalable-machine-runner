@@ -1,7 +1,7 @@
 # Example .circleci/config.yml for jobs on the machine-runner-swarm Linux classes. For a minimal job that
 # runs as it is, use linux-hello.yml; the jobs here assume project files such as build.gradle and build.sh.
-# Replace my-namespace with your organization's runner namespace. Each resource class is one service
-# of the stack files (linux-default of runners.yaml is my-namespace/linux-default, and so on; linux-java and
+# Replace <NAMESPACE> with your organization's runner namespace. Each resource class is one service
+# of the stack files (linux-default of runners.yaml is <NAMESPACE>/linux-default, and so on; linux-java and
 # linux-hardened come from classes-extra.yaml). Every job below runs in a brand-new container; nothing from an
 # earlier job is visible.
 version: 2.1
@@ -11,7 +11,7 @@ jobs:
   # passwordless sudo as on the Docker executor.
   lint:
     machine: true
-    resource_class: my-namespace/linux-default
+    resource_class: <NAMESPACE>/linux-default
     steps:
       - checkout
       - run:
@@ -27,7 +27,7 @@ jobs:
   # cimg/openjdk:21.0 environment (service linux-java of linux/stack/classes-extra.yaml). Caches go to CircleCI storage, not to the host.
   test-java:
     machine: true
-    resource_class: my-namespace/linux-java
+    resource_class: <NAMESPACE>/linux-java
     steps:
       - checkout
       - restore_cache:
@@ -45,7 +45,7 @@ jobs:
   # job's home. The runner token is not reachable from here.
   build-hardened:
     machine: true
-    resource_class: my-namespace/linux-hardened
+    resource_class: <NAMESPACE>/linux-hardened
     steps:
       - checkout
       - run:
@@ -60,7 +60,7 @@ jobs:
   # (or run the workflow twice) and it still passes.
   clean-check:
     machine: true
-    resource_class: my-namespace/linux-default
+    resource_class: <NAMESPACE>/linux-default
     steps:
       - run:
           name: No residue from earlier jobs
@@ -77,7 +77,7 @@ jobs:
   # cannot remove files that the job user owns). Put cleanup steps at the start of jobs that run here.
   warm-build:
     machine: true
-    resource_class: my-namespace/linux-persistent
+    resource_class: <NAMESPACE>/linux-persistent
     steps:
       - run: rm -rf "$HOME/scratch" && mkdir "$HOME/scratch"
       - checkout

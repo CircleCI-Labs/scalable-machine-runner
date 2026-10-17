@@ -1,9 +1,9 @@
 # Example CircleCI config for jobs that run on Windows runner containers from this repo
-# (windows/stack/runners.yaml, service "windows-default", resource class <namespace>/windows-default).
+# (windows/stack/runners.yaml, service "windows-default", resource class <NAMESPACE>/windows-default).
 #
 # Every job gets a brand-new Windows Server Core container: Swarm replaces the container after each
 # job, so nothing a job leaves in the profile, TEMP, the registry or C:\ProgramData reaches the next one.
-# Replace <namespace> with your runner namespace.
+# Replace <NAMESPACE> with your runner namespace.
 #
 # Headless only: no desktop or UI automation, no Docker commands (see windows-docker-build.yml), no
 # service containers. Jobs run as ContainerAdministrator.
@@ -15,7 +15,7 @@ version: 2.1
 jobs:
   build-and-test:
     machine: true
-    resource_class: <namespace>/windows-default
+    resource_class: <NAMESPACE>/windows-default
     steps:
       - checkout
       - run:
@@ -49,7 +49,7 @@ jobs:
 
   consume-workspace:
     machine: true
-    resource_class: <namespace>/windows-default
+    resource_class: <NAMESPACE>/windows-default
     shell: powershell.exe -ExecutionPolicy Bypass
     steps:
       - attach_workspace:
@@ -60,7 +60,7 @@ jobs:
   # (continuous mode). Only for a trusted resource class; a job can leave anything behind for the next one.
   warm-cache:
     machine: true
-    resource_class: <namespace>/windows-persistent
+    resource_class: <NAMESPACE>/windows-persistent
     shell: powershell.exe -ExecutionPolicy Bypass
     steps:
       - checkout

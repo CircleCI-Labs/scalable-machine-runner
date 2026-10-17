@@ -36,7 +36,7 @@ This page lists what the stack protects, what it does not, and which controls yo
 | A job reaches other tenants through the network | One overlay network for each Linux class | Replicas of one class reach each other ([Isolation between runners](#isolation-between-runners)) |
 | A job breaks out of the container | Default seccomp and AppArmor profiles, dropped capabilities, no privileged mode | Containers share the host kernel, so a kernel or runtime vulnerability bypasses every control on this page. The opt-in [microVM classes](microvm.md) give each job its own kernel |
 | A job reaches the instance-metadata service of a cloud node | Nothing, by default | The credentials of the node role, and on some clouds the user data ([Cloud nodes: block the metadata address](#cloud-nodes-block-the-metadata-address)) |
-| A job takes over the node through Docker | The Docker engine is not mounted by default | The opt-in docker-build classes are root-equivalent (administrator-equivalent on Windows): [Docker Builds](docker-builds.md) |
+| A job takes over the node through Docker | The Docker engine is not mounted by default | The opt-in docker-build classes are root-equivalent (administrator-equivalent on Windows): [Docker builds](docker-builds.md) |
 
 The stack does not harden the host operating system, the Docker daemon, or your network.
 
@@ -71,8 +71,8 @@ A single-task class (Linux and Windows) takes the path through the proxy: only t
 
 ### Linux
 
-- **Single-task classes.** The class secret `<service>-token` is mounted into the `token-proxy` service and nowhere else. Runners read a placeholder config, so the sudo setting does not decide whether a job reaches the class token.
-- **Storage.** A class secret is a minimal runner config file with only `api.auth_token`. Swarm mounts it as a read-only file in memory: in the proxy container at `/run/secrets/<service>-token` (uid 65534, mode `0400`), or, in a persistent class, in the runner container at `/run/secrets/circleci_runner_config.yaml` (owner `circleci-runner`, uid 2000, mode `0400`). Every other runner mounts the placeholder secret `runner-placeholder-token` at the same path. The token is in no environment variable, no command line, and no stack file, and `docker inspect` does not show it.
+- **Single-task classes.** The class secret `<SERVICE>-token` is mounted into the `token-proxy` service and nowhere else. Runners read a placeholder config, so the sudo setting does not decide whether a job reaches the class token.
+- **Storage.** A class secret is a minimal runner config file with only `api.auth_token`. Swarm mounts it as a read-only file in memory: in the proxy container at `/run/secrets/<SERVICE>-token` (uid 65534, mode `0400`), or, in a persistent class, in the runner container at `/run/secrets/circleci_runner_config.yaml` (owner `circleci-runner`, uid 2000, mode `0400`). Every other runner mounts the placeholder secret `runner-placeholder-token` at the same path. The token is in no environment variable, no command line, and no stack file, and `docker inspect` does not show it.
 - **Users.** The runner runs as `circleci-runner`, which has no sudo rights and cannot write to `/opt/machine-runner-swarm`. Jobs run as the job user, stepped down with `command_prefix`.
 - **Default class.** The job user keeps passwordless sudo, so a job is root in its container. It can read the placeholder and the files of the runner, and become the runner user, but finds no class token. It still gets the task token of its own job.
 - **Hardened class.** `MACHINE_RUNNER_SWARM_JOB_SUDO: "false"` steps every job down with `setpriv --no-new-privs`, even when the image has sudo, and the container does not start when the image has no util-linux `setpriv`. Swarm ignores `no-new-privileges`, so this per-job flag, inherited by everything the job starts, is what stops a setuid binary (`sudo`, `su`, or one with a local-root bug) from lifting a job to root. The job gets none of the `CIRCLECI_RUNNER_*` and `MACHINE_RUNNER_SWARM_*` variables, cannot read the file or the process of the runner, and cannot become another user. Tools must be in the image. A kernel or container-runtime bug can still lift a job to root. Use it for shared or regulated work. [Users and the runner token on Linux](concepts.md#users-and-the-runner-token-on-linux) compares the classes.
@@ -82,15 +82,15 @@ A single-task class (Linux and Windows) takes the path through the proxy: only t
 | Probe, run as the job user | Default class | Hardened class |
 |---|---|---|
 | Read the config file (the real token in the persistent class, the placeholder in the others) | Denied | Denied |
-| Read `/proc/<runner pid>/environ`, or find the token in the job environment | Denied, no token in it | Denied, no token in it |
+| Read `/proc/<RUNNER_PID>/environ`, or find the token in the job environment | Denied, no token in it | Denied, no token in it |
 | `sudo -n true` | Works | Fails: `NoNewPrivs` stops the setuid `sudo` |
 | Run a setuid-root binary through the step-down of the runner | Becomes root | Stays the job user: `NoNewPrivs` is `1`. Without the flag the same binary reads the token |
 | Write to `/opt/machine-runner-swarm` | No | No |
 
 ### Windows
 
-- **Single-task classes.** The class secret `<service>-token` is mounted into the service `token-proxy-windows` and nowhere else. Runners read a placeholder, as on Linux.
-- **Storage and users.** Swarm places the secret at `C:\ProgramData\Docker\secrets\<target>`. Windows has no `uid`, `gid`, or `mode` for secrets, and only administrators and `SYSTEM` can read the file. There is no step-down: the runner and the jobs run as `ContainerAdministrator`, because the runner needs its symbolic link privilege. A job can read the config file of its runner (the placeholder, or the token in a persistent class). The token is not in the job environment.
+- **Single-task classes.** The class secret `<SERVICE>-token` is mounted into the service `token-proxy-windows` and nowhere else. Runners read a placeholder, as on Linux.
+- **Storage and users.** Swarm places the secret at `C:\ProgramData\Docker\secrets\<TARGET>`. Windows has no `uid`, `gid`, or `mode` for secrets, and only administrators and `SYSTEM` can read the file. There is no step-down: the runner and the jobs run as `ContainerAdministrator`, because the runner needs its symbolic link privilege. A job can read the config file of its runner (the placeholder, or the token in a persistent class). The token is not in the job environment.
 - **No `NET_RAW` drop.** The proxy uses the source address to tell the runners of a class apart, and a Windows container cannot drop `NET_RAW`, so a job can forge a source address. This gains little: the answer to a claim goes to the owner of the address, and a container that has claimed cannot claim again. Windows is not tested for this.
 - **Clear text on disk.** Swarm writes the secret as plain text to the root disk of the proxy container (and of the runner container, in a persistent class) until the container stops. Linux keeps it in memory (tmpfs). Anyone who can read the Docker root directory of the host can read a Windows token, so enable [BitLocker](#bitlocker-on-windows-hosts).
 - **The proxy is not a boundary against a hostile job on its host.** A job runs as an administrator, with process isolation, next to the proxy when both run on one node. Microsoft does not treat process isolation as a security boundary. It becomes a boundary only when the proxy runs on a node that runs no jobs (label that node `machine-runner-swarm.proxy=true`) and untrusted classes run with Hyper-V isolation, which needs nested virtualization on a virtual machine and is not tested here. The end-to-end jobs on Windows run real jobs through the proxy, but only record whether a job can read the token and assert nothing about it, and no test forges a source address. Treat these protections as untested, and use one trust group of classes for each host.
@@ -111,7 +111,7 @@ The service `token-proxy` in `runners.yaml` keeps the class tokens of the single
 ### What it does
 
 - **Only the claim gets the class token.** The proxy replaces the `Authorization` header of the task-claim call (`POST /api/v3/runner/claim`) with the class token and passes every other call on unchanged. The runner and its task agent use the task token from the claim response, which is scoped to one task.
-- **The network decides the class, not the caller.** Every secret `<service>-token` in its secrets directory is the class `<service>`, whose runners are `tasks.<service>`. `runner-placeholder-token` is never a class, and no runner token is mounted into the proxy. A claim is allowed only from an IP address that Swarm DNS lists now for `tasks.<service>`, and gets the token of that class. Any other address (a container that you started on the class network, or an address that two classes list) gets 403 and nothing reaches CircleCI. The 403 says only `claim refused`: the reason is in the log of the proxy, where a job cannot read it.
+- **The network decides the class, not the caller.** Every secret `<SERVICE>-token` in its secrets directory is the class `<SERVICE>`, whose runners are `tasks.<SERVICE>`. `runner-placeholder-token` is never a class, and no runner token is mounted into the proxy. A claim is allowed only from an IP address that Swarm DNS lists now for `tasks.<SERVICE>`, and gets the token of that class. Any other address (a container that you started on the class network, or an address that two classes list) gets 403 and nothing reaches CircleCI. The 403 says only `claim refused`: the reason is in the log of the proxy, where a job cannot read it.
 - **One claim per container.** After a claim that returns a task, that address cannot claim again until DNS has not listed it for 30 seconds in a row, which means the container is gone. One missing answer, even a `no such host` for the whole class, is one poll of the 30 and never a release.
 - **A job cannot forge the source address on Linux.** The proxy attaches to each class overlay with `endpoint_mode: dnsrr`, so it sees the address of the container that connects. The runner services drop `NET_RAW`, so even root in a container cannot send packets with another address. Keep `cap_drop: [NET_RAW, MKNOD]` or `ALL` on every class that uses the proxy.
   - The encrypted class networks need Docker Engine 23.0.3 or later (or 20.10.24). Earlier engines accepted unauthenticated VXLAN traffic on encrypted overlay networks ([CVE-2023-28840](https://github.com/advisories/GHSA-232p-vwff-86mp)), which lets a host on the node network inject packets into a class overlay. The setup helper requires Docker 24 or later.
@@ -160,7 +160,7 @@ The distributor downloads the tarball over HTTPS from the release bucket of Circ
 
 | When | Who | What |
 |---|---|---|
-| Download and install | Distributor | The SHA-256 of the tarball must equal a value of the list (or, with `manifest`, the manifest value), otherwise nothing is installed. The binary must report exactly the version that it installs (a pin of `3.1.1` does not accept `3.1.13`). The SHA-256 of the binary goes to `versions/<version>/SHA256`. Files are owned by root |
+| Download and install | Distributor | The SHA-256 of the tarball must equal a value of the list (or, with `manifest`, the manifest value), otherwise nothing is installed. The binary must report exactly the version that it installs (a pin of `3.1.1` does not accept `3.1.13`). The SHA-256 of the binary goes to `versions/<VERSION>/SHA256`. Files are owned by root |
 | Every check interval (24 hours by default) | Distributor | It compares the active binary with its record, and installs the version again when the binary changed |
 | Every container start | Entrypoint | It resolves `current` once and runs `sha256sum -c` against the record. A missing record or a different binary ends in exit code 80 and the log line `does not match its SHA-256 record` ([Error: does not match its SHA-256 record](troubleshooting.md#error-does-not-match-its-sha-256-record)). Hashing the 74 MB binary takes about 0.05 seconds |
 | While a job runs | Mount | The volume is read-only in the runner containers (files owned by root, mode `0755`). The entrypoint is an immutable Swarm config |
@@ -169,7 +169,7 @@ The distributor downloads the tarball over HTTPS from the release bucket of Circ
 
 The distributor does not install the token proxy. It is the image `ccilabs/machine-runner-swarm-proxy` of Docker Hub, which Swarm pulls, and its integrity rests on the image digest.
 
-- A release bundle names the image by tag and digest (`ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`), so Docker pulls exactly the image that the release pipeline pushed, whatever happens to the tag later.
+- A release bundle names the image by tag and digest (`ccilabs/machine-runner-swarm-proxy:<VERSION>@sha256:<DIGEST>`), so Docker pulls exactly the image that the release pipeline pushed, whatever happens to the tag later.
 - A checkout names the tag `latest`, which only a release moves and which is not a digest. Pin a digest for anything that matters ([Upgrade the token proxy](operations.md#upgrade-the-token-proxy)). `linux/setup.sh --deploy` warns when `MACHINE_RUNNER_SWARM_PROXY_IMAGE` is not pinned by digest.
 - `ccilabs` is the Docker Hub organization of CircleCI Labs. You trust the signature below, not the name: an image of that name that does not verify is not this project's.
 
@@ -203,17 +203,17 @@ The notes of every release name the image of that release.
 
 - **Not verified:** the task agent, which every container downloads from the same bucket at start, with no pin and no check (it runs as the job user and holds the task token), and the source of the pinned SHA-256 values (CircleCI's manifest at the time of the bump).
 - **A race at start.** The check narrows the window and does not close it: a sibling that rewrites the file between the hash and the `exec` of one container start is not detected.
-- **A privileged sibling container** with `SYS_ADMIN` on the same node could mount the volume read-write and change both the binary and its record. The docker-build class mounts the Docker socket and can do the same ([Docker Builds](docker-builds.md)). The microVM classes do not mount the volume: each VM downloads and verifies its own runner ([MicroVM jobs](microvm.md#the-runner-in-a-vm)).
+- **A privileged sibling container** with `SYS_ADMIN` on the same node could mount the volume read-write and change both the binary and its record. The docker-build class mounts the Docker socket and can do the same ([Docker builds](docker-builds.md)). The microVM classes do not mount the volume: each VM downloads and verifies its own runner ([MicroVM jobs](microvm.md#the-runner-in-a-vm)).
 - **Whoever can update the `runner-distributor` service** (for example a user in the `docker` group of a manager) chooses the version and the download address. A list in `MACHINE_RUNNER_SWARM_RUNNER_SHA256` limits what can be installed to the tarballs on it.
 
 ## Runner binary integrity on Windows
 
-The trust is the one of Linux. The service `runner-distributor-windows` downloads the tarball over HTTPS from the release bucket of CircleCI, compares its SHA-256 with the two values (`amd64` and `arm64`) that the stack file carries for the pinned version, checks that the binary reports the version, and records its SHA-256 in `versions\<version>\SHA256`. A floating value ignores the list and uses CircleCI's `manifest.json` (weaker), and a mirror must be `https://` unless a usable list is set for an exact pin (or `MACHINE_RUNNER_SWARM_ALLOW_HTTP=true` when there is no list). Portable Git and `7zr.exe` are pinned by SHA-256 in the script, so a new Git version is a new release of this repository.
+The trust is the one of Linux. The service `runner-distributor-windows` downloads the tarball over HTTPS from the release bucket of CircleCI, compares its SHA-256 with the two values (`amd64` and `arm64`) that the stack file carries for the pinned version, checks that the binary reports the version, and records its SHA-256 in `versions\<VERSION>\SHA256`. A floating value ignores the list and uses CircleCI's `manifest.json` (weaker), and a mirror must be `https://` unless a usable list is set for an exact pin (or `MACHINE_RUNNER_SWARM_ALLOW_HTTP=true` when there is no list). Portable Git and `7zr.exe` are pinned by SHA-256 in the script, so a new Git version is a new release of this repository.
 
 Two things differ from Linux:
 
 - The runner is the main process of the container and there is no entrypoint, so **nothing checks the binary when a container starts**. The distributor compares the active binary with its record at every check interval (24 hours by default) and installs it again when it changed.
-- A job runs as an administrator in its own container, and the volume is mounted read-only through two links, so a job cannot change the runner or Git. A container with write access to the volume can, for example one of the docker-build class ([Docker Builds](docker-builds.md)).
+- A job runs as an administrator in its own container, and the volume is mounted read-only through two links, so a job cannot change the runner or Git. A container with write access to the volume can, for example one of the docker-build class ([Docker builds](docker-builds.md)).
 
 ## Compared with the official runner installs
 
@@ -279,7 +279,7 @@ Replicas of one class share an overlay network and can reach each other. Swarm c
 
 To reduce the exposure:
 
-- Run sensitive classes on dedicated nodes ([Multi-Node Clusters](multi-node.md)).
+- Run sensitive classes on dedicated nodes ([Multi-node clusters](multi-node.md)).
 - Filter egress on the host, for example in the `DOCKER-USER` chain on Linux. Docker bypasses `ufw` and `firewalld` rules for published ports and for container traffic.
 - Rely on single-use containers: a compromised replica disappears with its job.
 - Any container on a class network can reach the proxy. It answers only claims from the runners of the class.
@@ -361,8 +361,8 @@ The stack cannot decide which projects may use a class. Apply these controls in 
    enable_hard["resource_class_check"]
 
    resource_class_check = config.resource_class_by_project({
-     "<namespace>/linux-hardened": {"<project ID>"},
-     "<namespace>/linux-docker-build": {"<project ID>", "<project ID>"}
+     "<NAMESPACE>/linux-hardened": {"<PROJECT_ID>"},
+     "<NAMESPACE>/linux-docker-build": {"<PROJECT_ID>", "<PROJECT_ID>"}
    })
    ```
 

@@ -58,27 +58,27 @@ Quorum matters more here than in a typical Swarm. Every job ends with a runner e
 Keep jobs off managers when you can: a container breakout on a manager exposes the tokens of every class. In a cluster, label the node that runs the token proxy (a manager) and tell the deploy about it. Runner services never run on a node with that label, so no job shares a node with the class tokens.
 
 ```bash
-docker node update --label-add machine-runner-swarm.proxy=true <manager name>
+docker node update --label-add machine-runner-swarm.proxy=true <MANAGER_NAME>
 sudo env MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true' docker stack deploy -c deploy/runners.yaml runners
 ```
 
 Keep the variable with your other deploy variables ([Keep the deploy variables in version control](operations.md#keep-the-deploy-variables-in-version-control)): a deploy without it puts the proxy back on any manager. Drain the other managers so that they run no tasks.
 
 ```bash
-docker node update --availability drain <other manager name>
+docker node update --availability drain <OTHER_MANAGER_NAME>
 ```
 
 > [!WARNING]
 > **The token proxy needs a node that is not drained.** `token-proxy` runs on a manager by default (`node.role == manager`), or on the labeled node. If you drain every manager, or the labeled node, the proxy stays `Pending` (`no suitable node`) and no runner can claim a job, with no other error: the runners only log 502 or a refused connection to `token-proxy`. The same happens when the managers are Linux hosts and the proxy is the Windows one (`token-proxy-windows` also defaults to a manager, and a Windows task cannot run on a Linux manager), and when a Windows-only swarm has no Windows manager. Label a Windows node for it (a worker works), and in a mixed cluster label one Linux and one Windows node, because each proxy keeps to its own operating system. Never drain the labeled node without the steps in [The node of the proxy](operations.md#the-node-of-the-proxy). A proxy on a worker still holds every class token, so choose a node that runs no jobs.
 
-On a single-node Swarm the only node is a manager and runs the replicas and the proxy: set no label. Never use the Docker socket classes (pattern A) there ([Docker Builds](docker-builds.md)).
+On a single-node Swarm the only node is a manager and runs the replicas and the proxy: set no label. Never use the Docker socket classes (pattern A) there ([Docker builds](docker-builds.md)).
 
 ## Create the swarm
 
 Initialize Swarm on the first manager with an address that the other nodes can reach (not the loopback address of the single-node install).
 
 ```bash
-docker swarm init --advertise-addr <manager IP address> --task-history-limit 2 --default-addr-pool 10.20.0.0/16 --default-addr-pool-mask-length 24
+docker swarm init --advertise-addr <MANAGER_IP_ADDRESS> --task-history-limit 2 --default-addr-pool 10.20.0.0/16 --default-addr-pool-mask-length 24
 ```
 
 Two options matter for this stack, and neither is the default:
@@ -88,7 +88,7 @@ Two options matter for this stack, and neither is the default:
 
 If you started with the loopback address, run `docker stack rm runners` and `docker swarm leave --force`, initialize again, and recreate the secrets.
 
-Get the join command for each node type on a manager. Run the printed command (`docker swarm join --token <token> <manager IP address>:2377`) on the node.
+Get the join command for each node type on a manager. Run the printed command (`docker swarm join --token <TOKEN> <MANAGER_IP_ADDRESS>:2377`) on the node.
 
 ```bash
 docker swarm join-token worker
@@ -118,13 +118,13 @@ Nothing else is installed on the node. The `runner-distributor` service is `glob
 The `runner-distributor` service reads the architecture of the node and installs the `arm64` runner build on an Arm node. Swarm reports Arm nodes as `aarch64` and Intel and AMD nodes as `x86_64`.
 
 - Give each architecture its own resource class, for example `linux-arm64`, constrained with `node.platform.arch == aarch64`: a job cannot pick an architecture inside a class that spans both.
-- Use an image that publishes an `arm64` variant (check with `docker buildx imagetools inspect <image>`).
+- Use an image that publishes an `arm64` variant (check with `docker buildx imagetools inspect <IMAGE>`).
 
 ### Mixed architectures
 
 One cluster can have `x86_64` and `aarch64` nodes. Nothing else is needed on the nodes.
 
-- **Which build a node gets.** Each `runner-distributor` task downloads `circleci-runner_linux_<arch>.tar.gz` for its own node and checks its SHA-256 against the entry of that architecture in the manifest. If you set `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, list the hash of every architecture in the cluster. A tarball that does not match installs nothing on that node, and the other nodes still install.
+- **Which build a node gets.** Each `runner-distributor` task downloads `circleci-runner_linux_<ARCH>.tar.gz` for its own node and checks its SHA-256 against the entry of that architecture in the manifest. If you set `MACHINE_RUNNER_SWARM_RUNNER_SHA256`, list the hash of every architecture in the cluster. A tarball that does not match installs nothing on that node, and the other nodes still install.
 - **Placement.** A class without an architecture constraint can run on both kinds of node. Add `node.platform.arch == aarch64` or `x86_64` to the constraints of the classes that need one. When the nodes of that architecture are drained or gone, the class stays `Pending` with `no suitable node`: it never moves to the other architecture.
 - **What is tested.** [`linux/tests/mixed-arch.sh`](../linux/tests/mixed-arch.sh) (the optional CI job `linux-mixed-arch`, see [CI](ci.md)) deploys the shipped stack file on an amd64 manager and an arm64 worker. It checks that each node installs the runner of its own architecture, that a tarball that does not match its manifest entry installs nothing on that node only, and that classes constrained by `node.platform.arch` run only on their architecture, also when the other node is drained.
 - **Emulated, not real.** That arm64 worker is a `docker:dind` container under QEMU emulation on an x86_64 host. The test proves the install, the verification and the placement logic, not the speed or system call behavior of an Arm node. IPsec on overlays does not work under emulation, so it deploys the plain-overlay copy of the stack files (the opt-out of [Encrypted class networks](#encrypted-class-networks)), and `placement.sh` tests the encrypted files on two nodes. Real arm64 nodes are tested by the single-node jobs `linux-arm64` and `e2e-linux-arm64` (a real runner on an Arm VM).
@@ -140,8 +140,8 @@ On each node:
 5. From a manager, label the node with the image tags it can run. A Server 2025 node also gets `windows-ltsc2025`, because it runs `ltsc2022` images too.
 
    ```bash
-   docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <node name>
-   docker node update --label-add machine-runner-swarm.windows-ltsc2025=true <node name>
+   docker node update --label-add machine-runner-swarm.windows-ltsc2022=true <NODE_NAME>
+   docker node update --label-add machine-runner-swarm.windows-ltsc2025=true <NODE_NAME>
    ```
 
 The labels are required, because the image build must be the host build or an older one ([Image tags and host builds](install-windows.md#image-tags-and-host-builds)).
@@ -176,18 +176,18 @@ deploy:
 
 ### Labels used by this repository
 
-Set a label with `docker node update --label-add <key>=<value> <node name>`, and remove it with `--label-rm <key>`. Constraints on labels have the form `node.labels.<key> == <value>`.
+Set a label with `docker node update --label-add <KEY>=<VALUE> <NODE_NAME>`, and remove it with `--label-rm <KEY>`. Constraints on labels have the form `node.labels.<KEY> == <VALUE>`.
 
 | Label | Value | Used by |
 |---|---|---|
 | `machine-runner-swarm.windows-ltsc2022` | `true` | Every shipped Windows service, which uses `ltsc2022` images. Set on Server 2022 and 2025 nodes |
 | `machine-runner-swarm.windows-ltsc2025` | `true` | Services on an `ltsc2025` image. Set on Server 2025 nodes only |
 | `machine-runner-swarm.zone` | A network zone name | Services that must run in one zone. A commented example sits in the Linux placement block |
-| `machine-runner-swarm.docker-build` | `true` | The docker-build services (pattern A) ([Docker Builds](docker-builds.md)) |
+| `machine-runner-swarm.docker-build` | `true` | The docker-build services (pattern A) ([Docker builds](docker-builds.md)) |
 | `machine-runner-swarm.container-mode` | `true` | The container agent of [container mode](container-mode.md) (experimental), on workers only. The token proxy stays off container-mode nodes |
 | `machine-runner-swarm.proxy` | `true` | The node that runs the token proxy, in a cluster. With `MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'` the proxy runs only there, and no runner service runs on a node with this label. On a single node, set no label ([Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves)) |
 | `machine-runner-swarm.microvm` | `true` | The microVM services, on nodes whose Docker daemon runs every container in a Kata microVM. Every other service stays off these nodes ([MicroVM jobs](microvm.md)) |
-| `machine-runner-swarm.class.<service>` | `true` | Pins a service to the labeled nodes. `windows-persistent` uses `machine-runner-swarm.class.windows-persistent`. `linux-persistent` pins itself with `node.hostname` instead |
+| `machine-runner-swarm.class.<SERVICE>` | `true` | Pins a service to the labeled nodes. `windows-persistent` uses `machine-runner-swarm.class.windows-persistent`. `linux-persistent` pins itself with `node.hostname` instead |
 
 ### Keep the docker-build node to itself
 
@@ -224,7 +224,7 @@ Swarm does not share images between nodes: each node pulls the image of a task f
 
 - Every node must reach the registry of every image that a service on that node uses ([Egress hosts](security.md#egress-hosts)). Your own image must be in a registry that all nodes of its OS can reach ([Images](images.md)).
 - For a private registry, run `docker login` on the manager and deploy with `docker stack deploy --with-registry-auth`.
-- Pin images by digest, for example `cimg/base:2026.10@sha256:<digest>`, so every node runs the same content. Tags such as `21.0` move.
+- Pin images by digest, for example `cimg/base:2026.10@sha256:<DIGEST>`, so every node runs the same content. Tags such as `21.0` move.
 - Pull large images ahead of time (a Windows `servercore` image is about 2.2 GB compressed). Public registries apply pull rate limits: a mirror or an authenticated pull avoids failed pulls.
 - `runner-distributor` runs the stock `alpine:3` image on every Linux node. If the nodes cannot reach Docker Hub, mirror it and change `image` in your copy of the stack file. Copy it with its digest (`docker buildx imagetools create` keeps it), so the pin holds.
 - The token proxy runs from `ccilabs/machine-runner-swarm-proxy`. Mirror it with its signature (`cosign copy`), pin the digest in `MACHINE_RUNNER_SWARM_PROXY_IMAGE`, and keep that in your deploy file ([Upgrade the token proxy](operations.md#upgrade-the-token-proxy)).
@@ -247,17 +247,17 @@ The runner containers need no inbound ports, and the stack publishes none. Outbo
 Ubuntu with `ufw`:
 
 ```bash
-sudo ufw allow from <cluster subnet> to any port 2377 proto tcp
-sudo ufw allow from <cluster subnet> to any port 7946
-sudo ufw allow from <cluster subnet> to any port 4789 proto udp
-sudo ufw allow from <cluster subnet> proto esp
+sudo ufw allow from <CLUSTER_SUBNET> to any port 2377 proto tcp
+sudo ufw allow from <CLUSTER_SUBNET> to any port 7946
+sudo ufw allow from <CLUSTER_SUBNET> to any port 4789 proto udp
+sudo ufw allow from <CLUSTER_SUBNET> proto esp
 ```
 
 RHEL with `firewalld`:
 
 ```bash
 sudo firewall-cmd --permanent --new-zone=swarm
-sudo firewall-cmd --permanent --zone=swarm --add-source=<cluster subnet>
+sudo firewall-cmd --permanent --zone=swarm --add-source=<CLUSTER_SUBNET>
 sudo firewall-cmd --permanent --zone=swarm --add-port=2377/tcp --add-port=7946/tcp --add-port=7946/udp --add-port=4789/udp
 sudo firewall-cmd --permanent --zone=swarm --add-protocol=esp
 sudo firewall-cmd --reload
@@ -268,8 +268,8 @@ In a cloud, add a security group rule for protocol number 50 (ESP) with the secu
 Windows Server:
 
 ```powershell
-New-NetFirewallRule -DisplayName 'Swarm TCP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 2377,7946 -RemoteAddress <cluster subnet>
-New-NetFirewallRule -DisplayName 'Swarm UDP' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 7946,4789 -RemoteAddress <cluster subnet>
+New-NetFirewallRule -DisplayName 'Swarm TCP' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 2377,7946 -RemoteAddress <CLUSTER_SUBNET>
+New-NetFirewallRule -DisplayName 'Swarm UDP' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 7946,4789 -RemoteAddress <CLUSTER_SUBNET>
 ```
 
 On a Windows host with a single network adapter, an existing `transparent` network can block the creation of the overlay networks: see the Microsoft documentation on Windows container networking if overlay creation fails.
@@ -286,7 +286,7 @@ The Linux stack files create the class networks as encrypted overlays: `driver: 
 
 ```bash
 docker node ls
-docker node inspect --format '{{ .Spec.Labels }}' <node name>
+docker node inspect --format '{{ .Spec.Labels }}' <NODE_NAME>
 docker service ps runners_linux-default
 ```
 
@@ -294,6 +294,6 @@ The `NODE` column of `docker service ps` shows where each replica runs. A task t
 
 ## Additional resources
 
-- [Resource Classes](resource-classes.md)
+- [Resource classes](resource-classes.md)
 - [Operations](operations.md), including how to drain a node for patching
 - [Security](security.md)

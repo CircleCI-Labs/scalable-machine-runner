@@ -69,7 +69,7 @@ The code has two sides, so that the part that runs a job on an engine can later 
 1. The agent polls CircleCI with the token of each class, only while it has a free slot, because a claim assigns the job to it. The claim returns a task token, which fetches the job configuration. A job without a `docker:` list is a machine job, and the agent reports a failure.
 2. It pulls the init, pause and job images. Registry credentials from the job go to the engine for the pull and are never stored. Variables such as `$DOCKERHUB_PASSWORD` are expanded from the environment of the job.
 3. It creates a network and a volume, and starts the **init** container (no network), which copies `orchestrator` (GOAT) and `circleci-agent` into the volume at `/opt/circleci/bin` and exits.
-4. It starts the **pause** container, then each **service** container with the image, entrypoint, command, user and environment from the job, and the service limits of the class. All use `--network container:<pause>`, so a service listens on `localhost` for the primary container.
+4. It starts the **pause** container, then each **service** container with the image, entrypoint, command, user and environment from the job, and the service limits of the class. All use `--network container:<PAUSE>`, so a service listens on `localhost` for the primary container.
 5. It starts the **primary** container with the entrypoint `/opt/circleci/bin/orchestrator run-task` and the GOAT settings, including the task token, in one environment variable. GOAT starts the task agent with the token on its standard input and removes the settings from the environment before any step starts. The task agent reports steps and output to CircleCI itself.
 6. When the primary container stops, the agent removes the containers, network, and volume, and tells CircleCI that the job is cleaned up (after reporting a failure, if the primary container failed). If a container could not start, for example after a failed image pull, it returns the job to the queue, and reports a failure only when CircleCI has no retries left.
 
@@ -109,10 +109,10 @@ Set these in the `environment` of the service in the stack file.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MACHINE_RUNNER_SWARM_CONTAINER_CLASSES` | none, required | A JSON array of classes. Each entry has `name` (`<namespace>/<class>`), `token_file` (a Swarm secret: the bare token, or a runner config with an `auth_token` line), and the limits `primary` and `service`, each with `cpus`, `memory_mb`, and `pids` (default 4096) |
+| `MACHINE_RUNNER_SWARM_CONTAINER_CLASSES` | none, required | A JSON array of classes. Each entry has `name` (`<NAMESPACE>/<CLASS>`), `token_file` (a Swarm secret: the bare token, or a runner config with an `auth_token` line), and the limits `primary` and `service`, each with `cpus`, `memory_mb`, and `pids` (default 4096) |
 | `MACHINE_RUNNER_SWARM_CONTAINER_MAX_TASKS` | `2` | Jobs at the same time on this node |
 | `MACHINE_RUNNER_SWARM_CONTAINER_MAX_RUN_TIME` | `5h` | The longest a job may run. After it, the agent reports a failure and removes the job |
-| `MACHINE_RUNNER_SWARM_CONTAINER_INIT_IMAGE` | `circleci/runner-init:<tag of the claim>` | The init image. The stack file pins a digest |
+| `MACHINE_RUNNER_SWARM_CONTAINER_INIT_IMAGE` | `circleci/runner-init:<CLAIM_TAG>` | The init image. The stack file pins a digest |
 | `MACHINE_RUNNER_SWARM_CONTAINER_PAUSE_IMAGE` | `registry.k8s.io/pause:3.10` | The image that holds the network namespace. The stack file pins a digest |
 | `MACHINE_RUNNER_SWARM_CONTAINER_PULL` | `always` | `always` pulls a tag before each job. `missing` pulls only an image that the node lacks. An image pinned by digest is pulled once |
 | `MACHINE_RUNNER_SWARM_CONTAINER_RUNNER_API` | `https://runner.circleci.com` | The runner API. Set the URL of your CircleCI server for a server installation |
@@ -166,7 +166,7 @@ Swarm sees only the agent service, so it cannot place jobs by free memory or CPU
 
 Windows is not supported. It needs:
 
-- A way to share one network namespace between containers, for the `localhost` behavior. Check whether the engine accepts `--network container:<id>` for Windows containers.
+- A way to share one network namespace between containers, for the `localhost` behavior. Check whether the engine accepts `--network container:<ID>` for Windows containers.
 - Windows images for the init step, GOAT, and the pause container, and the Windows build of the task agent.
 - The named pipe `\\.\pipe\docker_engine` in place of the socket, an isolation mode with matching limits, Windows paths for the volume, and a different user model.
 

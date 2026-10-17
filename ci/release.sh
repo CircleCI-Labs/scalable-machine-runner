@@ -272,7 +272,8 @@ publish() {
   local repo="${CIRCLE_PROJECT_USERNAME:?}/${CIRCLE_PROJECT_REPONAME:?}" remote
   local -a assets=("${out}/${name}.tar.gz" "${out}/${name}.zip" "${out}/SHA256SUMS" "${out}/SHA256SUMS.sigstore.json")
   [ "${RELEASE_SKIP_SIGN:-}" != 1 ] || die "refusing to publish an unsigned release"
-  remote="$(gh api "repos/${repo}/git/ref/tags/${version}" --jq .object.sha 2>/dev/null || true)"
+  # A tag that does not exist is a 404, and then gh prints the error body on stdout: only a successful lookup names the tag's commit
+  remote="$(gh api "repos/${repo}/git/ref/tags/${version}" --jq .object.sha 2>/dev/null)" || remote=""
   [ -z "${remote}" ] || [ "${remote}" = "${sha}" ] || die "tag ${version} exists at ${remote}, not at ${sha}"
   # The image first: its signature is checked, and X.Y.Z (which never moves) and the floating tags are made. A release that fails after this
   # one is finished by the next run, which tags the same digest again.

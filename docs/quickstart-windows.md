@@ -9,29 +9,31 @@ page-description: Run a first job on a Windows Server Docker Swarm node with Cir
 Go from nothing to a first job on one Windows Server node in five steps. Nothing is built or installed on the host: the stack uses the stock Server Core image, and a service of the stack installs the runner and Git.
 
 > [!NOTE]
-> This is a CircleCI Labs project, not supported by CircleCI support. It is a `0.x` release: read the release notes before you upgrade. [What is tested](../README.md#what-is-tested) says how it is checked. One token proxy runs on a manager, so while it is down no new job starts. This page sets up one host that runs the proxy and the jobs together: use it for a trial.
+> CircleCI Labs project, `0.x`, not supported by CircleCI support. This trial runs the proxy and the jobs on one host, so it is not for production. [What is tested](../README.md#what-is-tested) shows what CI checks.
 
 ## Before you start
 
-- A Windows Server 2022 or 2025 host (amd64, not a domain controller) with a clock on NTP and outbound HTTPS ([what needs internet](security.md#what-needs-internet)).
-- Docker Engine and CLI 28.0 or later in Windows-container mode, and the Windows Containers feature ([Prerequisites](install-windows.md#prerequisites) shows how to install both). The first pull of the Server Core image is about 2.2 GB.
-- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, on your workstation or on the host.
+- A Windows Server 2022 or 2025 host (amd64, not a domain controller) with a clock synced with NTP, and outbound HTTPS ([what needs internet](security.md#what-needs-internet)).
+- Size: 6 CPUs and 12 GB for the two sample replicas, or run one replica (4 CPUs, 8 GB). The first pull of the Server Core image is about 2.2 GB.
+- Docker Engine and CLI 28.0 or later in Windows-container mode, and the Windows Containers feature. Check with `docker version --format '{{.Server.Version}}'` and `docker info --format '{{.OSType}}'` (it must print `windows`). If either fails, follow [Prerequisites](install-windows.md#prerequisites).
+- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, on your workstation.
 - An organization admin who accepted the [CircleCI Runner Terms](https://circleci.com/legal/runner-terms/).
-- A runner namespace. If your organization has none, create one with `circleci namespace create <NAMESPACE> --org <ORG>`.
+- A repository that is set up as a CircleCI project in your organization, and runner concurrency in your plan (2 for the sample replicas).
+- A namespace. An organization has one, and orbs use it too. It is the part before the `/` in a resource class (`acme` in `acme/my-class`). If you have none, run `circleci namespace create <NAMESPACE> --org <ORG>`.
 - An elevated Windows PowerShell 5.1 session on the host.
 
-Replace `<NAMESPACE>` with your runner namespace, and `<ORG>` with your organization slug such as `gh/my-org`, or its UUID.
+Replace `<NAMESPACE>` with your namespace, and `<ORG>` with your organization slug such as `gh/my-org`, or its UUID. Run step 1 on your workstation, where a browser opens for `circleci auth login`. Run steps 2 to 4 in the PowerShell session on the host.
 
 ## Steps
 
-1. Create a resource class and a token. The command prints the token once: keep it for step 3.
+1. Create a resource class and a token. Copy the token from the output: the command prints it once, and step 3 asks for it on the host.
 
    ```powershell
    circleci auth login
    circleci runner resource-class create <NAMESPACE>/windows-default --org <ORG> --generate-token
    ```
 
-2. On the host, download the latest release. To verify the release signature first, see [Install on Windows Server > Verify a release](install-windows.md#verify-a-release).
+2. On the host, download the latest release. To verify the release signature first, see [Install on Windows Server: Verify a release](install-windows.md#verify-a-release).
 
    ```powershell
    $uri = (Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/CircleCI-Labs/machine-runner-swarm/releases/latest').BaseResponse.ResponseUri.AbsoluteUri
@@ -42,11 +44,23 @@ Replace `<NAMESPACE>` with your runner namespace, and `<ORG>` with your organiza
    cd "machine-runner-swarm-$version"
    ```
 
-3. Pull the base image, then run the helper. Pull first: the network of the host drops for a few seconds after `docker swarm init`. The helper creates the Swarm, labels the node, asks for the token from step 1 (hidden input), creates the secrets, and deploys the stack. Use the IPv4 address of the host.
+3. Pull the images, then run the helper. Pull first: the network of the host drops for a few seconds after `docker swarm init`. The first command pulls the base image, and the second pulls the token proxy image that your stack file names.
 
    ```powershell
    docker pull mcr.microsoft.com/windows/servercore:ltsc2022
    ```
+
+   ```powershell
+   docker pull ((Select-String -Path windows\stack\runners.yaml -Pattern 'MACHINE_RUNNER_SWARM_PROXY_IMAGE:-([^}]+)\}').Matches[0].Groups[1].Value)
+   ```
+
+   The helper needs the IPv4 address of the host. If the host has several, use the address of the adapter that other nodes will reach. For a one-host trial, any address of the host works.
+
+   ```powershell
+   Get-NetIPAddress -AddressFamily IPv4 -PrefixOrigin Dhcp,Manual | Select-Object IPAddress, InterfaceAlias
+   ```
+
+   Swarm takes `10.0.0.0/8` for its overlay networks. If your network uses that range, run `docker swarm init --advertise-addr <HOST_IPV4_ADDRESS> --default-addr-pool <POOL_CIDR> --default-addr-pool-mask-length 24` yourself, and run the helper below without `-InitSwarm` and `-AdvertiseAddr`. Otherwise, the helper creates the Swarm, labels the node, asks for the token from step 1 (hidden input), creates the secrets, and deploys the stack:
 
    ```powershell
    .\windows\Setup.ps1 -InitSwarm -AdvertiseAddr <HOST_IPV4_ADDRESS> -Class windows-default -Deploy
@@ -59,9 +73,15 @@ Replace `<NAMESPACE>` with your runner namespace, and `<ORG>` with your organiza
    circleci runner instance list --org <ORG> --resource-class <NAMESPACE>/windows-default
    ```
 
-   The stack is up when `runners_windows-default` shows `2/2` and the CLI lists an instance with the status `online`. If a replica stays `Pending`, the host is too small: each replica reserves 2 CPUs and 4 GB, so set a lower `deploy.replicas` ([Size the limits](resource-classes.md#size-the-limits), [A task stays pending](troubleshooting.md#a-task-stays-pending)). `docker service logs runners_runner-distributor-windows` shows the install.
+   The stack is up when `runners_windows-default` shows `2/2`, `runners_token-proxy-windows` shows `1/1`, and the CLI lists an instance with the status `online`. `docker service logs runners_runner-distributor-windows` shows the install. If a replica stays `Pending`, the host is too small: each replica reserves 2 CPUs and 4 GB, and the proxy and the distributor reserve nothing but can use 1 CPU each. The Windows engine rejects a CPU limit above the CPU count of the host. Run one replica:
 
-5. Run a job. Save this as `.circleci/config.yml` in a project of your organization, replace `my-namespace` with your namespace, then commit and push. The file [`examples/windows-job.yml`](../examples/windows-job.yml) has more steps.
+   ```powershell
+   docker service scale runners_windows-default=1
+   ```
+
+   The next `docker stack deploy` resets it to 2. To keep one, set `deploy.replicas` in your copy of the stack file ([Size the limits](resource-classes.md#size-the-limits), [A task stays pending](troubleshooting.md#a-task-stays-pending)).
+
+5. Run a job. Save this as `.circleci/config.yml` in a project of your organization, replace `<NAMESPACE>` with your namespace, then commit and push. The file [`examples/windows-job.yml`](../examples/windows-job.yml) has more steps.
 
    ```yaml
    version: 2.1
@@ -69,7 +89,7 @@ Replace `<NAMESPACE>` with your runner namespace, and `<ORG>` with your organiza
    jobs:
      hello:
        machine: true
-       resource_class: my-namespace/windows-default
+       resource_class: <NAMESPACE>/windows-default
        steps:
          - run: echo "computer $COMPUTERNAME, instance $MACHINE_RUNNER_SWARM_INSTANCE_ID"
 
@@ -79,7 +99,7 @@ Replace `<NAMESPACE>` with your runner namespace, and `<ORG>` with your organiza
          - hello
    ```
 
-   Run the workflow twice. The two runs print different values, because Swarm starts a new container for each job.
+   Run the workflow twice. The two runs print different values, because Swarm starts a new container for each job. The job shows `Queued` while no runner is online: check step 4 first. The default shell is Git Bash, so `$COMPUTERNAME` is an environment variable. For PowerShell, set `shell: powershell.exe -ExecutionPolicy Bypass` and write `$env:COMPUTERNAME`.
 
 ## What differs from Linux
 
@@ -93,3 +113,4 @@ Replace `<NAMESPACE>` with your runner namespace, and `<ORG>` with your organiza
 - [Images](images.md): add your own tools on top of Server Core.
 - [Security](security.md): the token model and BitLocker.
 - [Operations](operations.md): upgrade, rotate tokens, and run the cluster.
+- [Uninstall](operations.md#uninstall): remove the trial, and leave the swarm.

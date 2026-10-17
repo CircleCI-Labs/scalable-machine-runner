@@ -1,5 +1,5 @@
 ---
-page-title: Releasing machine-runner-swarm
+page-title: Releasing
 page-audience: developer
 page-description: How a merge to main becomes a signed GitHub release, how maintainers enable publishing, and how to recover from a failed release.
 ---

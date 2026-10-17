@@ -1,3 +1,8 @@
+---
+page-title: CI/CD
+page-description: What the pipeline tests, how the docs site is built, and how releases are signed and published.
+---
+
 # CI/CD for this repository
 
 The pipeline lints everything, tests the Linux and Windows Swarm stacks, and proves with real

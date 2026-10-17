@@ -1,7 +1,7 @@
 ---
 page-title: Security
 page-audience: admin
-page-description: The threat model, how the runner token is stored on Linux and Windows, the token proxy, a comparison with the official runner installs, the hardening defaults, CircleCI-side controls, egress hosts, and BitLocker.
+page-description: Threat model, token storage on Linux and Windows, the token proxy, hardening defaults, CircleCI-side controls, egress hosts, and BitLocker.
 ---
 
 # Security

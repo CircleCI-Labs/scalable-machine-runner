@@ -1,7 +1,7 @@
 ---
 page-title: Resource classes
 page-audience: admin
-page-description: Define resource classes as Swarm services, size their limits, choose replica counts, run persistent classes, enable Rerun job with SSH, and look up every setting the stack files use.
+page-description: Define resource classes as Swarm services, size limits, choose replica counts, persistent classes, Rerun job with SSH, and the stack configuration reference.
 ---
 
 # Resource classes

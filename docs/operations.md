@@ -1,7 +1,7 @@
 ---
 page-title: Operations
 page-audience: admin
-page-description: Check status and logs, run the cluster with monitoring, capacity, backups and recovery, upgrade the runner and images, rotate tokens, drain nodes for patching, and uninstall the stack.
+page-description: Status and logs, monitoring, capacity, backups, runner upgrades, token rotation, node drain, and uninstall for the Swarm runner stack.
 ---
 
 # Operations

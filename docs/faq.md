@@ -1,7 +1,7 @@
 ---
 page-title: FAQ
 page-audience: admin
-page-description: Answers to common questions about the Docker Swarm runner stack, including what to build, how it compares with the official runners, scaling, unsupported jobs, and node loss.
+page-description: Common questions about the Swarm runner stack: what to build, comparisons with official runners, scaling, unsupported jobs, and node loss.
 ---
 
 # FAQ

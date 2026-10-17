@@ -40,22 +40,30 @@ repo="${repo%/}"
 
 # nav.txt -> nav.tsv, fields separated by "|": kind (G group, P page), path or slug, label or title,
 # destination (without extension), weight, group slug
-awk -F'|' '
+awk '
   function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+  function fields(line, a,   n, i, s) {
+    n = split(line, a, "|")
+    for (i = 1; i <= n; i++) a[i] = trim(a[i])
+    return n
+  }
   /^[ \t]*(#|$)/ { next }
   /^==/ {
-    title = trim(substr($0, 3)); group = ""
+    rest = trim(substr($0, 3)); n = fields(rest, gf); title = gf[1]; grouplead = (n >= 2 ? gf[2] : ""); group = ""
     if (title != "") {
       group = tolower(title); gsub(/[^a-z0-9]+/, "-", group); gsub(/^-|-$/, "", group)
-      top++; printf "G|%s|%s|docs/%s|%d|\n", group, title, group, top * 10
+      top++; printf "G|%s|%s|docs/%s|%d|%s\n", group, title, group, top * 10, grouplead
       pages = 0
+    } else {
+      group = ""
     }
     next
   }
   {
-    path = trim($1); label = trim($2); stem = path; sub(/^.*\//, "", stem); sub(/\.md$/, "", stem); stem = tolower(stem)
+    n = fields($0, pf); path = pf[1]; label = (n >= 2 ? pf[2] : ""); pdesc = (n >= 3 ? pf[3] : "")
+    stem = path; sub(/^.*\//, "", stem); sub(/\.md$/, "", stem); stem = tolower(stem)
     if (group == "") { top++; w = top * 10; dest = "docs/" stem } else { pages++; w = pages * 10; dest = "docs/" group "/" stem }
-    printf "P|%s|%s|%s|%d|%s\n", path, label, dest, w, group
+    printf "P|%s|%s|%s|%d|%s|%s\n", path, label, dest, w, group, pdesc
   }
 ' "${here}/nav.txt" > "${tmp}/nav.tsv"
 
@@ -77,9 +85,9 @@ git -C "${root}" ls-files | awk '
   { print "F\t" $0; n = split($0, a, "/"); d = ""; for (i = 1; i < n; i++) { d = d (i > 1 ? "/" : "") a[i]; seen[d] = 1 } }
   END { for (d in seen) print "D\t" d }' > "${tmp}/paths.tsv"
 
-# The transformation of one page: stage MARKDOWN-FILE DESTINATION WEIGHT LABEL
+# The transformation of one page: stage MARKDOWN-FILE DESTINATION WEIGHT LABEL [NAV-DESCRIPTION]
 transform() {
-  awk -v src="$1" -v dest="$2" -v weight="$3" -v label="$4" -v repo="${repo}" -v ref="${ref}" \
+  awk -v src="$1" -v dest="$2" -v weight="$3" -v label="$4" -v navdesc="${5:-}" -v repo="${repo}" -v ref="${ref}" \
     -v mapfile="${tmp}/map.tsv" -v pathsfile="${tmp}/paths.tsv" -v manifest="${tmp}/pages.tsv" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
     function unquote(s) { if (s ~ /^".*"$/ || s ~ /^\047.*\047$/) s = substr(s, 2, length(s) - 2); return s }
@@ -140,6 +148,7 @@ transform() {
         key = substr($0, 1, RLENGTH - 1); val = trim(substr($0, RLENGTH + 1))
         if (key == "page-title") title = unquote(val)
         else if (key == "page-description") description = unquote(val)
+        else if (key == "description") description = unquote(val)
         else if (key ~ /^page-/) params = params "  " substr(key, 6) ": " yq(unquote(val)) "\n"
         else extra = extra $0 "\n"
       } else extra = extra $0 "\n"
@@ -164,6 +173,7 @@ transform() {
     END {
       if (title == "") title = h1
       if (title == "") print "stage: warning: " src ": no title" > "/dev/stderr"
+      if (description == "" && navdesc != "") description = navdesc
       print "---"
       print "title: " yq(title)
       if (label != "") print "linkTitle: " yq(label)
@@ -182,11 +192,30 @@ rm -rf "${content}"
 mkdir -p "${content}/docs"
 : > "${tmp}/pages.tsv"
 
+home_description=$(
+  awk '
+    /^params:/ { inparams = 1; next }
+    inparams && /^  description:/ {
+      sub(/^  description:[ \t]*/, "")
+      gsub(/^"|"$/, "")
+      print
+      exit
+    }
+    inparams && /^[^ \t#]/ { exit }
+  ' "${here}/hugo.yaml"
+)
 transform README.md _index "" "" > "${content}/_index.md"
-while IFS='|' read -r kind path label dest weight _; do
+if [ -n "${home_description}" ] && ! grep -q '^description:' "${content}/_index.md"; then
+  awk -v d="${home_description}" '
+    BEGIN { done = 0 }
+    /^title:/ && !done { print; print "description: \"" d "\""; done = 1; next }
+    { print }
+  ' "${content}/_index.md" > "${content}/_index.md.tmp" && mv "${content}/_index.md.tmp" "${content}/_index.md"
+fi
+while IFS='|' read -r kind path label dest weight _group navdesc; do
   [ "${kind}" = P ] || continue
   mkdir -p "${content}/$(dirname "${dest}")"
-  transform "${path}" "${dest}" "${weight}" "${label}" > "${content}/${dest}.md"
+  transform "${path}" "${dest}" "${weight}" "${label}" "${navdesc:-}" > "${content}/${dest}.md"
 done < "${tmp}/nav.tsv"
 
 # The index pages: one for each group and one for the documentation root, each with a list of its pages.
@@ -200,9 +229,30 @@ list() {
       printf "\n"
     }' "${tmp}/nav.tsv"
 }
+cut155() {
+  awk -v s="$1" '
+    function cut155(x) {
+      if (length(x) <= 155) return x
+      x = substr(x, 1, 155)
+      sub(/[ \t][^ \t]*$/, "", x)
+      return x "…"
+    }
+    BEGIN { print cut155(s) }
+  '
+}
+
+group_description() {
+  local g=$1 lead firstdest d
+  lead=$(awk -F'|' -v g="$1" '$1 == "G" && $2 == g { print $6; exit }' "${tmp}/nav.tsv")
+  if [ -n "${lead}" ]; then cut155 "${lead}"; return; fi
+  firstdest=$(awk -F'|' -v g="$1" '$1 == "P" && $6 == g { print $4; exit }' "${tmp}/nav.tsv")
+  [ -n "${firstdest}" ] || return 0
+  d=$(awk -F'\t' -v d="${firstdest}" '$1 == d { print $3; exit }' "${tmp}/pages.tsv")
+  [ -n "${d}" ] && cut155 "${d}"
+}
 {
-  printf -- '---\ntitle: Documentation\n---\n\n'
-  while IFS='|' read -r kind slug title _; do
+  printf -- '---\ntitle: Documentation\ndescription: "Install, configure, operate and secure machine runner swarm: CircleCI machine runner 3 as Docker Swarm services on Linux and Windows Server."\n---\n\nStart with a quickstart, then use the groups below.\n\n'
+  while IFS='|' read -r kind slug title _dest _weight _lead; do
     case "${kind}" in
       G) printf '## %s\n\n' "${title}"; list "${slug}"; printf '\n' ;;
     esac
@@ -210,10 +260,15 @@ list() {
   top=$(list "")
   if [ -n "${top}" ]; then printf '## More\n\n%s\n' "${top}"; fi
 } > "${content}/docs/_index.md"
-while IFS='|' read -r kind slug title dest weight _; do
+while IFS='|' read -r kind slug title dest weight _lead; do
   [ "${kind}" = G ] || continue
   mkdir -p "${content}/${dest}"
-  printf -- '---\ntitle: "%s"\nweight: %s\n---\n\n' "${title}" "${weight}" > "${content}/${dest}/_index.md"
+  gdesc=$(group_description "${slug}")
+  if [ -n "${gdesc}" ]; then
+    printf -- '---\ntitle: "%s"\nweight: %s\ndescription: "%s"\n---\n\n' "${title}" "${weight}" "${gdesc}" > "${content}/${dest}/_index.md"
+  else
+    printf -- '---\ntitle: "%s"\nweight: %s\n---\n\n' "${title}" "${weight}" > "${content}/${dest}/_index.md"
+  fi
   list "${slug}" >> "${content}/${dest}/_index.md"
 done < "${tmp}/nav.tsv"
 

@@ -1,7 +1,7 @@
 ---
 page-title: Concepts
 page-audience: admin
-page-description: How Docker Swarm services map to CircleCI resource classes, what the token proxy does, what a clean environment covers, and how the sudo default and the hardened class differ.
+page-description: How Swarm services map to resource classes, what the token proxy does, what a clean environment covers, and how the default and hardened classes differ.
 ---
 
 # Concepts

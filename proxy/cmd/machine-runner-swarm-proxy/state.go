@@ -107,7 +107,16 @@ func (s *store) write(classes []*class) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(s.dir, stateMarker), nil, 0o600); err != nil {
+	marker := filepath.Join(s.dir, stateMarker)
+	mf, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := mf.Sync(); err != nil {
+		mf.Close()
+		return err
+	}
+	if err := mf.Close(); err != nil {
 		return err
 	}
 	tmp := filepath.Join(s.dir, stateFile+".tmp")
@@ -126,5 +135,8 @@ func (s *store) write(classes []*class) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(s.dir, stateFile))
+	if err := os.Rename(tmp, filepath.Join(s.dir, stateFile)); err != nil {
+		return err
+	}
+	return syncDir(s.dir)
 }

@@ -22,6 +22,10 @@
 #             runners keep polling and do not exit (the proxy answers 403, not 401: the runner does not exit on a 401 either, see docs/operations.md)
 #   unknown   the same, and the scale call fails: the proxy fails safe, every runner present is refused
 #   fresh     the whole state directory is empty again (a first start) and no task runs: the idle runners present may claim
+#   lostanswer  a claim reaches the API and the API closes the connection without an answer: the proxy answers 502 and latches the runner
+#             (fail closed: the task may have been handed out), saves it, and a restart keeps it refused
+#   limits    one container that floods the proxy gets 429 with Retry-After for every path, and the others are not affected
+#   summary   the proxy logs one summary line a minute with the counts, and does not log the claims that got no task (204)
 # Usage: proxy.sh        Env: TIMEOUT=240, JOB_S=60 (seconds a job runs)
 set -euo pipefail
 # shellcheck source=linux/tests/lib.sh
@@ -119,7 +123,6 @@ restart_proxy() {
   state_line=$(plog_now | grep -aE 'state restored|no state|state lost' | tail -n 1 | cut -c21-)
 }
 claimed_from() { [[ $(count "$(plog)" "claim from $1 ($2): upstream status 200") -ge 1 ]]; }
-polled_from() { [[ $(count "$(plog)" "claim from $1 ($2): upstream status 204") -ge 1 ]]; }
 refused_from() { [[ $(count "$(plog)" "claim from $1 refused: this runner has already claimed") -ge 1 ]]; }
 # scan CONTAINER NEEDLE...: files outside /proc, /sys and /dev, plus every process's environment and command line
 scan() {
@@ -170,14 +173,14 @@ echo "RESULT test=proxy phase=order runners_before_the_proxy=2 same_containers_c
 ip_def=$(ip_of "$c_def")
 ip_java=$(ip_of "$c_java")
 echo "RESULT test=proxy phase=claims classes=2 default_ip=$ip_def java_ip=$ip_java proxy_claims=$(count "$(plog)" 'upstream status 200')"
-# the label of the token at the API must match the class of the claimer: counted per class on both sides
-same_count() { [[ $(count "$(plog)" "(tasks.$class): upstream status") -eq $(claims_of "$class") ]]; }
+# The label of the token at the API must match the class of the claimer. The proxy logs the claims that got a task and no longer the ones
+# that got none (204), so each task that it logged for a class is a claim at the API with the token of that class, and there are at
+# least as many claims at the API (the 204 ones come on top).
 for class in linux-default linux-java; do
-  wait_for 15 same_count || true   # a claim can be on its way
-  at_proxy=$(count "$(plog)" "(tasks.$class): upstream status")
+  at_proxy=$(count "$(plog)" "(tasks.$class): upstream status 200")
   at_api=$(claims_of "$class")
-  echo "RESULT test=proxy phase=claims class=$class claims_at_proxy=$at_proxy claims_at_api_with_own_token=$at_api"
-  [[ $at_proxy -ge 1 && $at_proxy -eq $at_api ]] || fail "$class: claims at the proxy ($at_proxy) and claims at the API with its own token ($at_api) differ"
+  echo "RESULT test=proxy phase=claims class=$class tasks_at_proxy=$at_proxy claims_at_api_with_own_token=$at_api"
+  [[ $at_proxy -ge 1 && $at_api -ge $at_proxy ]] || fail "$class: tasks at the proxy ($at_proxy) and claims at the API with its own token ($at_api) do not match"
 done
 [[ $(alog | grep -a "REQ POST $CLAIM" | grep -avc 'auth=CLASS:') -eq 0 ]] || fail "a claim reached the API without a class token"
 [[ $(alog | grep -a 'auth=CLASS:' | grep -av -e "REQ POST $CLAIM" -e "REQ GET $SCALE " | wc -l) -eq 0 ]] || fail "a class token reached an API call other than the claim and the scale call of a start with no state"
@@ -272,7 +275,16 @@ new_containers() { # the replacements of the containers $1 and $2: they are in n
 wait_for "$TIMEOUT" new_containers "$c_def" "$c_java" || fail "no new containers after the jobs"
 nip_def=$(ip_of "$n_def")
 nip_java=$(ip_of "$n_java")
-idle() { polled_from "$1" tasks.linux-default && polled_from "$2" tasks.linux-java; }
+# idle: the idle runner of each class polls. The proxy does not log a claim that gets no task, but the API sees every claim that the proxy
+# forwards, with the token of its class: a new claim of each class after this call starts is from the one idle runner of that class (the
+# queue is held, and the claims of the containers that left are over). The arguments (the addresses) are for the reader.
+claims_grew() { [[ $(claims_of linux-default) -gt $1 && $(claims_of linux-java) -gt $2 ]]; }
+idle() {
+  local d j
+  d=$(claims_of linux-default)
+  j=$(claims_of linux-java)
+  wait_for 30 claims_grew "$d" "$j"
+}
 wait_for 120 idle "$nip_def" "$nip_java" || fail "the new containers do not poll"
 restart_proxy
 echo "RESULT test=proxy phase=restart idle_runners_present=2 state=\"$state_line\""
@@ -423,4 +435,88 @@ wait_for "$TIMEOUT" claimed_both "$fip_def" "$fip_java" || fail "the idle runner
 hold
 echo "RESULT test=proxy phase=fresh idle_runners_claimed=yes"
 
-pass "the proxy runs from its image; runners that start before the proxy are not locked out; two classes claim through one proxy, each with its own token and nowhere else; no class token in a runner container; one claim per container; 403 for non-runners; a restart with state refuses only the runners that claimed; with no state the proxy asks the API how many tasks run: some, or no answer, and every runner present is refused, none and they may claim"
+# ---------------------------------------------------------------------------------------------
+# lostanswer: the API gets a claim and closes the connection without an answer (the outcome is unknown): fail closed
+# ---------------------------------------------------------------------------------------------
+hold
+dk service update -d --force --update-parallelism 0 "${STACK}_linux-default" > /dev/null
+dk service update -d --force --update-parallelism 0 "${STACK}_linux-java" > /dev/null
+wait_for "$TIMEOUT" new_containers "$n_def" "$n_java" || fail "the idle runners were not replaced"
+oip_def=$(ip_of "$n_def")
+oip_java=$(ip_of "$n_java")
+wait_for 120 idle "$oip_def" "$oip_java" || fail "the replacement runners do not poll"
+# the fake agent prints a TASK line when a runner gets a task: read the logs of the two containers (a service log can hang right after an update)
+tasks_in() { count "$(dk logs "$1" 2>&1)" 'TASK '; }
+dk exec fake-api touch /tmp/drop   # the API reads a claim and closes the connection
+release
+unknown_outcome() { [[ $(count "$(plog_now)" "claim from $1 ($2): outcome unknown") -ge 1 ]]; }
+unknown_both() { unknown_outcome "$oip_def" tasks.linux-default && unknown_outcome "$oip_java" tasks.linux-java; }
+wait_for 90 unknown_both || fail "a claim whose answer was lost did not latch the runners: $(plog_now | grep -aE "claim from ($oip_def|$oip_java)" | tail -n 6 | cut -c1-220)"
+dk exec fake-api rm -f /tmp/drop
+hold
+claims3=$(upstream_claims)
+[[ $(claim_code "$n_def") == 403 && $(claim_code "$n_java") == 403 ]] || fail "a runner whose claim had an unknown outcome could claim again"
+[[ $(upstream_claims) == "$claims3" ]] || fail "a claim of a latched runner reached the API"
+vol grep -q "$oip_def" "$state_dir/state.json" && vol grep -q "$oip_java" "$state_dir/state.json" || fail "the latches of the claims with an unknown outcome were not saved"
+sleep 5
+[[ $(tasks_in "$n_def") -eq 0 && $(tasks_in "$n_java") -eq 0 ]] || fail "a runner got a task from a claim whose answer was lost"
+echo "RESULT test=proxy phase=lostanswer latched=2 saved=yes second_claim=403 reached_upstream=0"
+restart_proxy
+[[ $state_line == *"state restored"* ]] || fail "the restart after a lost answer did not restore its state: $state_line"
+wait_for 30 reachable "$n_def" || fail "the restarted proxy is not reachable from the runner"
+wait_for 30 reachable "$n_java" || fail "the restarted proxy is not reachable from the runner"
+[[ $(claim_code "$n_def") == 403 && $(claim_code "$n_java") == 403 ]] || fail "a runner whose claim had an unknown outcome could claim after a restart"
+echo "RESULT test=proxy phase=lostanswer refused_after_a_restart=yes state=\"$state_line\""
+
+# ---------------------------------------------------------------------------------------------
+# limits: one container that floods the proxy is limited on every path, and a runner is not
+# ---------------------------------------------------------------------------------------------
+# 3000 requests for a pass-through path from the intruder of one class, 60 at a time: the burst is 200 and the rate 50 a second, so most get 429.
+# The output is one line per answer: "<count> <status> <Retry-After or ->".
+flood() {
+  idocker "$mgr" exec -i -u 0 "$i_def" python3 - << 'PY'
+import collections, concurrent.futures, http.client
+
+def one(_):
+    try:
+        c = http.client.HTTPConnection("token-proxy", 8080, timeout=10)
+        c.request("GET", "/api/v2/task/config")
+        r = c.getresponse()
+        r.read()
+        c.close()
+        return (str(r.status), r.getheader("Retry-After") or "-")
+    except Exception as e:
+        return ("error", type(e).__name__)
+
+with concurrent.futures.ThreadPoolExecutor(60) as ex:
+    n = collections.Counter(ex.map(one, range(3000)))
+for (status, retry), k in sorted(n.items()):
+    print(k, status, retry)
+PY
+}
+flooded=$(flood)
+echo "RESULT test=proxy phase=limits flood=\"$(tr '\n' ';' <<< "$flooded" | tr -s ' ')\""
+[[ $(awk '$2 == 429 && $3 == 1 { n += $1 } END { print n + 0 }' <<< "$flooded") -ge 1 ]] || fail "a flood from one address was not limited with 429 and Retry-After: $flooded"
+[[ $(awk '$2 == 200 { n += $1 } END { print n + 0 }' <<< "$flooded") -ge 150 ]] || fail "the burst of the per-address limit did not pass: $flooded"
+[[ $(count "$(plog_now)" "request from $(ip_of "$i_def") refused: too many requests") -ge 1 && $(count "$(plog_now)" "refused: too many requests") -le 2 ]] || fail "the refusals of the flood are not one log line (and a count): $(count "$(plog_now)" 'refused: too many requests') lines"
+sleep 3   # the bucket of the intruder refills
+[[ $(probe "$i_java" curl -s -m 5 -o /dev/null -w '%{http_code}' http://token-proxy:8080/healthz || true) == 200 ]] || fail "the proxy does not answer another container after a flood"
+[[ $(claim_code "$n_def") == 403 ]] || fail "the proxy does not answer a runner after a flood"
+
+# ---------------------------------------------------------------------------------------------
+# summary: one line a minute, and no line for a claim that got no task
+# ---------------------------------------------------------------------------------------------
+summary_line() { plog_now | grep -a 'summary of the last' | grep -a 'over the per-address limit [1-9]' | tail -n 1 | cut -c1-400; }
+have_summary() { [[ -n $(summary_line) ]]; }
+wait_for 90 have_summary || fail "no summary line counts the flood: $(plog_now | grep -a 'summary of the last' | tail -n 2)"
+line=$(summary_line)
+echo "RESULT test=proxy phase=summary line=\"${line#*summary of the last }\""
+[[ $line == *"claims forwarded "* && $line == *"latched "* && $line == *"refused "* && $line == *"over capacity 0"* ]] || fail "the summary line lacks a count: $line"
+two_summaries() { [[ $(dk logs -t "$(cont token-proxy)" 2>&1 | grep -ac 'summary of the last') -ge 2 ]]; }
+wait_for 130 two_summaries || fail "the proxy did not log a second summary line"
+stamps=$(dk logs -t "$(cont token-proxy)" 2>&1 | grep -a 'summary of the last' | cut -d' ' -f1 | head -n 2)
+gap=$(($(date -d "$(sed -n 2p <<< "$stamps")" +%s) - $(date -d "$(sed -n 1p <<< "$stamps")" +%s)))
+[[ $gap -ge 55 && $gap -le 65 ]] || fail "the summary lines are $gap seconds apart, want a minute"
+[[ $(count "$(plog)" 'upstream status 204') -eq 0 ]] || fail "the proxy logs claims that got no task"
+
+pass "the proxy runs from its image; runners that start before the proxy are not locked out; two classes claim through one proxy, each with its own token and nowhere else; no class token in a runner container; one claim per container; 403 for non-runners; a restart with state refuses only the runners that claimed; with no state the proxy asks the API how many tasks run: some, or no answer, and every runner present is refused, none and they may claim; a claim whose answer is lost latches the runner; one address that floods the proxy is limited; one summary line a minute"

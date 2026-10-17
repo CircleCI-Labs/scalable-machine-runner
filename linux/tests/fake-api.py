@@ -18,7 +18,7 @@ GET /api/v3/runner/scale answers like CircleCI's scale call for the class of the
 token gets 401): {"data":{"attributes":{"unclaimed_task_count":N,"running_task_count":R}}}, the two names that CircleCI's own scale endpoint uses and
 that the proxy reads, and nothing else. R is what GET /_running/R last set
 (default 0: the test says how many tasks run, because the fake agent does not report the end of its job). While the file
-/tmp/scale-fail exists the call answers 500.
+/tmp/scale-fail exists the call answers 500. While the file /tmp/drop exists a claim is read and the connection is closed without an answer.
 """
 import hashlib
 import http.server
@@ -112,6 +112,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._drain_request_body()
         self._log()
         claim = self.path.startswith("/api/v3/runner/claim")
+        if claim and os.path.exists("/tmp/drop"):
+            self.close_connection = True   # no answer: the caller cannot tell whether the claim was acted on
+            return
         if claim and CLASS_TOKENS and not self._auth().startswith("CLASS:"):
             self._reply(401, b'{"message":"bad resource class token"}')
         elif claim and state["claims"] < state["limit"] and not os.path.exists("/tmp/hold"):

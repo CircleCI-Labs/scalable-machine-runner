@@ -1330,6 +1330,17 @@ body {
   color: var(--cci-muted);
 }
 
+.cci-404 {
+  padding-block: 6rem;
+  text-align: center;
+  max-width: 36rem;
+  margin-inline: auto;
+}
+
+.cci-404 h1 {
+  margin-top: 0;
+}
+
 .cci-snippet-note {
   margin-top: 0.75rem;
   color: var(--cci-muted);

@@ -1,0 +1,7 @@
+{{ define "main" }}
+  {{ partial "sidebar.html" (dict "context" . "disableSidebar" true "displayPlaceholder" true) }}
+  <main id="content" class="cci-wrap cci-404">
+    <h1>Page not found</h1>
+    <p>This page does not exist, or it moved. Go to the <a href="{{ "index.html" | relURL }}">home page</a> or the <a href="{{ "docs/index.html" | relURL }}">documentation</a>, or press <kbd>Ctrl</kbd> <kbd>K</kbd> to search.</p>
+  </main>
+{{ end }}

@@ -17,11 +17,13 @@ const (
 	dnsInfoNoRecords    = syscall.Errno(9501)
 )
 
+var dnsFallback fallbackNotice
+
 // lookupHost resolves a host name for the claim checks. The proxy must see the runner that Swarm has just replaced in the answer for
 // tasks.<service>, and the Windows DNS Client service caches an answer for as long as its TTL, so the lookup of the Go net package (the
 // system resolver, GetAddrInfoEx) can name a container that is gone and miss the one that took its place. DnsQuery with
 // DNS_QUERY_BYPASS_CACHE asks the DNS servers of the container, which is what the Linux build does. A failure of the call itself falls
-// back to the system resolver.
+// back to the system resolver, which can answer from the cache: that is logged once (dnsFallback) and counted in the summary line.
 func lookupHost(ctx context.Context, host string) ([]string, error) {
 	var addrs []string
 	found := false
@@ -32,6 +34,7 @@ func lookupHost(ctx context.Context, host string) ([]string, error) {
 			if errno, ok := err.(syscall.Errno); ok && (errno == dnsErrNameError || errno == dnsInfoNoRecords) {
 				continue // no such name, or none of this type
 			}
+			dnsFallback.note(host, err)
 			return net.DefaultResolver.LookupHost(ctx, host)
 		}
 		for r := rec; r != nil; r = r.Next {

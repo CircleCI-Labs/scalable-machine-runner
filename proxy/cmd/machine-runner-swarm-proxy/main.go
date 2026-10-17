@@ -12,7 +12,15 @@
 // One claim per runner container: after a claim that returns a task, that IP is latched and further claims from it
 // get 403 until the IP has been missing from the DNS answer for several polls in a row (the container is gone). Single-task
 // mode only: a continuous runner claims many times. The latch fails closed: a claim whose latch cannot be saved does not
-// get its task, and any failure to write the state removes the state file, so that the next start takes the fail-safe path.
+// get its task, and any failure to write the state removes the state file, so that the next start takes the fail-safe path. A claim
+// whose outcome is unknown is latched too: when the request reached CircleCI and the answer was lost (a reset, or no response headers
+// within upstreamHeaderTimeout), the task may have been handed out, so the runner may not claim again. That costs one idle runner,
+// which Swarm replaces. A claim that failed before the request was sent (no connection) is not latched.
+//
+// Every client IP is limited to ipRate requests a second (ipBurst burst) on all paths, and the proxy serves at most maxInFlight requests at
+// a time (more get 503 with Retry-After): one job cannot starve the claims of every class. /healthz counts for the per-address limit and
+// not for the cap, so that a busy proxy is not restarted by its own health check (a restart takes the fail-safe path). Once a minute
+// the proxy logs one summary line of the claims (forwarded, latched, refused by reason).
 //
 // A restarted proxy must know who has claimed. With -state-dir it keeps the latched IPs in a small file of a volume,
 // written before the claim's answer goes back to the runner, and a restart with that state refuses every IP that really
@@ -34,6 +42,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
@@ -45,6 +54,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -61,6 +71,17 @@ const (
 	maxClaimBody  = 64 << 10 // a claim is a small JSON document
 	releasePolls  = 30       // seconds of polls that DNS must omit a latched IP before the latch is released
 	restoreWithin = 25 * time.Second
+
+	// upstreamHeaderTimeout is how long CircleCI has to start its answer once the request is sent. A claim that hangs holds its
+	// runner's in-flight mark, and the claim is latched when the time runs out (the outcome is unknown).
+	upstreamHeaderTimeout = 60 * time.Second
+
+	// Limits for every client IP and for the proxy as a whole, on all paths (a claim has its own, lower limit as well).
+	ipRate      = 50  // requests a second from one IP
+	ipBurst     = 200 // and bursts of up to this many
+	maxInFlight = 512 // requests being served at once
+
+	summaryEvery = time.Minute
 )
 
 var version = "dev" // -ldflags "-X main.version=..."
@@ -114,25 +135,45 @@ type proxy struct {
 	classes  []*class
 	lookup   func(ctx context.Context, host string) ([]string, error)
 
-	store    *store // nil: no persistence: a restart asks CircleCI (scale) which runners may claim
-	stateErr error  // the last failure to write the state, which makes the proxy unhealthy and refuses claims
+	store    *store      // nil: no persistence: a restart asks CircleCI (scale) which runners may claim
+	stateErr error       // the last failure to write the state, which makes the proxy unhealthy and refuses claims; guarded by mu
+	stateBad atomic.Bool // stateErr != nil, readable without the lock (the health check)
+	saveMu   sync.Mutex  // one save at a time, each with a snapshot taken after the one before it was written
 
 	scaleTries      int           // attempts of the scale call at start (at least 1)
 	scaleWait       time.Duration // between the attempts
 	restoreDeadline time.Duration // all the scale calls of the start together; a class without an answer by then is latched
 	releaseAfter    int           // polls without a class listing a latched IP before the latch goes (at least 1)
 
-	limit    *limiter      // claims per source address
-	cacheTTL time.Duration // how long a claim may use the DNS answer of an earlier lookup
+	limit     *limiter          // claims per source address
+	ipLimit   *limiter          // all requests per source address
+	slots     chan struct{}     // one slot per request being served (not /healthz); nil: no cap
+	events    *limiter          // the lines about single requests; nil: all of them
+	stats     *tally            // for the summary line; nil: no counts
+	transport http.RoundTripper // to the upstream; nil: a transport with upstreamHeaderTimeout
+	cacheTTL  time.Duration     // how long a claim may use the DNS answer of an earlier lookup
 
-	mu sync.Mutex // guards the latched, absent and busy maps of every class, stateErr and the state file
+	mu sync.Mutex // guards the latched, absent and busy maps of every class and stateErr. It is not held while the state is written.
 
 	cacheMu  sync.Mutex // one DNS lookup at a time for the claims
 	cache    map[*class]map[string]bool
 	cacheErr error // the lookup at cacheAt failed
 	cacheAt  time.Time
 
-	limitLog logEvery // the refusals of the rate limit: a flood would fill the log
+	limitLog   logEvery // the refusals of the claim rate limit: a flood would fill the log
+	ipLimitLog logEvery // the refusals of the limit on all requests
+	busyLog    logEvery // the requests refused because the cap is reached
+	stateLog   logEvery // the failures to write the state: every claim that comes while it fails tries again
+}
+
+// setDefaultLimits sets the limits of a running proxy.
+func (p *proxy) setDefaultLimits() {
+	p.limit = newLimiter(2, 10)
+	p.ipLimit = newLimiter(ipRate, ipBurst)
+	p.slots = make(chan struct{}, maxInFlight)
+	p.events = newLimiter(2, 20)
+	p.stats = newTally()
+	p.limitLog.every, p.ipLimitLog.every, p.busyLog.every, p.stateLog.every = time.Minute, time.Minute, time.Minute, time.Minute
 }
 
 // describe lists what DNS says for every class, for the log line of a claim from an address that belongs to none: a runner that
@@ -236,9 +277,8 @@ func (p *proxy) poll(ctx context.Context) error {
 	p.cacheMu.Lock()
 	p.cache, p.cacheErr, p.cacheAt = sets, nil, time.Now()
 	p.cacheMu.Unlock()
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	changed := false
+	p.mu.Lock()
 	for _, c := range p.classes {
 		for ip := range c.latched {
 			if sets[c][ip] {
@@ -254,10 +294,12 @@ func (p *proxy) poll(ctx context.Context) error {
 			}
 		}
 	}
-	if changed || p.stateErr != nil { // a state that could not be written is tried again
+	p.mu.Unlock()
+	if changed || p.stateBad.Load() { // a state that could not be written is tried again
 		p.persist()
 	}
 	p.limit.gc()
+	p.ipLimit.gc()
 	return nil
 }
 
@@ -395,15 +437,15 @@ func (p *proxy) restore(ctx context.Context) (string, error) {
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	var lines []string
+	p.mu.Lock()
 	for i, c := range p.classes {
 		for _, ip := range verdicts[i].latch {
 			c.latched[ip] = true
 		}
 		lines = append(lines, c.dns+": "+verdicts[i].what)
 	}
+	p.mu.Unlock()
 	if err := p.persist(); err != nil {
 		return "", &storeError{err}
 	}
@@ -437,23 +479,35 @@ func orDefault(d, def time.Duration) time.Duration {
 
 // persist writes the latched IPs to the state directory, if there is one, and returns the failure: a latch that is not on disk is not
 // to be relied on. A failed write removes the state file (store.save), so that a restart does not read a state that is behind.
-// The caller holds p.mu.
+// The caller does not hold p.mu: the snapshot of the latches is taken under it, and the fsyncs run without it, so that a slow volume does
+// not stall the other claims or the health check. Saves are one at a time (saveMu), and each takes its snapshot after the one before has
+// been written, so that it holds every latch that was set before the call (and maybe more, which is safe): the claim that calls persist
+// has set its latch first, and does not answer its runner before the state holds it.
 func (p *proxy) persist() error {
-	if err := p.store.save(p.classes); err != nil {
-		p.stateErr = err
-		log.Printf("state: cannot write it: %v", err)
-		return err
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
+	p.mu.Lock()
+	snap := snapshotLatched(p.classes)
+	p.mu.Unlock()
+	err := p.store.save(snap)
+	p.mu.Lock()
+	p.stateErr = err
+	p.mu.Unlock()
+	p.stateBad.Store(err != nil)
+	if err != nil {
+		p.stateLog.printf("state: cannot write it: %v", err)
 	}
-	p.stateErr = nil
-	return nil
+	return err
 }
 
 // errNotLatched: the upstream answered a claim with a task, but its latch could not be saved. The runner does not get the task.
 var errNotLatched = errors.New("the latch of the claim could not be saved")
 
 // refuse answers a claim that is not allowed. The reason goes to the log only: the body says nothing about the classes or the runners.
-func refuse(w http.ResponseWriter, ip, why string, code int) {
-	log.Printf("claim from %s refused: %s", ip, why)
+// The line is one of the lines about single requests (eventf), and the refusal is counted under kind for the summary line.
+func (p *proxy) refuse(w http.ResponseWriter, ip, kind, why string, code int) {
+	p.stats.refuse(kind)
+	p.eventf("claim from %s refused: %s", ip, why)
 	body := "claim refused"
 	if code != http.StatusForbidden {
 		body = "unavailable"
@@ -462,45 +516,67 @@ func refuse(w http.ResponseWriter, ip, why string, code int) {
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ap, _ := netip.ParseAddrPort(r.RemoteAddr)
+	ip := ap.Addr().Unmap().String()
+	if !p.ipLimit.allow(ip) { // every path, the health check too
+		p.stats.limit()
+		p.ipLimitLog.printf("request from %s refused: too many requests", ip)
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
 	if r.URL.Path == healthPath {
 		p.health(w)
 		return
+	}
+	if p.slots != nil {
+		select {
+		case p.slots <- struct{}{}:
+			defer func() { <-p.slots }()
+		default:
+			p.stats.overload()
+			p.busyLog.printf("request from %s refused: %d requests are being served", ip, cap(p.slots))
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "too many requests in progress", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	if r.Method != http.MethodPost || r.URL.Path != claimPath {
 		p.forward(w, r, "", nil, "")
 		return
 	}
-	ap, _ := netip.ParseAddrPort(r.RemoteAddr)
-	ip := ap.Addr().Unmap().String()
 	if !p.limit.allow(ip) {
+		p.stats.refuse(refRate)
 		p.limitLog.printf("claim from %s refused: too many claims", ip)
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "too many claims", http.StatusTooManyRequests)
 		return
 	}
 	if r.ContentLength > maxClaimBody {
+		p.stats.refuse(refTooLarge)
 		http.Error(w, "claim too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxClaimBody)
 	// An address that has claimed, or has a claim in flight, is refused from memory: no DNS lookup is spent on it.
 	p.mu.Lock()
-	why := ""
+	kind, why := "", ""
 	for _, k := range p.classes {
 		if k.latched[ip] {
-			why = "this runner has already claimed a task"
+			kind, why = refAlready, "this runner has already claimed a task"
 		} else if k.busy[ip] && why == "" {
-			why = "a claim from this runner is in flight"
+			kind, why = refInFlight, "a claim from this runner is in flight"
 		}
 	}
 	p.mu.Unlock()
 	if why != "" {
-		refuse(w, ip, why, http.StatusForbidden)
+		p.refuse(w, ip, kind, why, http.StatusForbidden)
 		return
 	}
 	sets, err := p.membership(r.Context())
 	if err != nil {
-		log.Printf("claim from %s refused: cannot resolve the runners: %v", ip, err)
+		p.stats.refuse(refDNS)
+		p.eventf("claim from %s refused: cannot resolve the runners: %v", ip, err)
 		http.Error(w, "cannot resolve the runners", http.StatusServiceUnavailable)
 		return
 	}
@@ -516,44 +592,46 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case owners == 0:
-		why = "not a runner of any class (" + describe(p.classes, sets) + ")"
+		kind, why = refNotRunner, "not a runner of any class ("+describe(p.classes, sets)+")"
 	case owners > 1: // overlapping networks: do not guess whose token this is
-		why = "the address belongs to several classes"
+		kind, why = refSeveral, "the address belongs to several classes"
 	case c.latched[ip]: // it claimed while the lookup ran
-		why = "this runner has already claimed a task"
+		kind, why = refAlready, "this runner has already claimed a task"
 	case c.busy[ip]:
-		why = "a claim from this runner is in flight"
-	case p.stateErr != nil && p.persist() != nil: // no task that the latch could not hold
-		why, code = "the state cannot be written", http.StatusServiceUnavailable
+		kind, why = refInFlight, "a claim from this runner is in flight"
 	default:
 		c.busy[ip] = true
 	}
 	p.mu.Unlock()
+	if why == "" && p.stateBad.Load() && p.persist() != nil { // no task that the latch could not hold
+		p.mu.Lock()
+		delete(c.busy, ip)
+		p.mu.Unlock()
+		kind, why, code = refState, "the state cannot be written", http.StatusServiceUnavailable
+	}
 	if why != "" {
-		refuse(w, ip, why, code)
+		p.refuse(w, ip, kind, why, code)
 		return
 	}
 	defer func() { p.mu.Lock(); delete(c.busy, ip); p.mu.Unlock() }()
 	if tok, err := c.token(); err != nil {
-		log.Printf("claim from %s (%s) failed: %v", ip, c.dns, err)
+		p.stats.refuse(refNoToken)
+		p.eventf("claim from %s (%s) failed: %v", ip, c.dns, err)
 		http.Error(w, "no token", http.StatusServiceUnavailable)
 	} else {
 		p.forward(w, r, tok, c, ip)
 	}
 }
 
-// health answers 200 when every class has a usable token file. It never says which class or why.
+// health answers 200 when every class has a usable token file. It never says which class or why. It takes no lock that a claim holds.
 func (p *proxy) health(w http.ResponseWriter) {
-	p.mu.Lock()
-	stateErr := p.stateErr
-	p.mu.Unlock()
-	if stateErr != nil {
+	if p.stateBad.Load() {
 		http.Error(w, "unhealthy", http.StatusServiceUnavailable)
 		return
 	}
 	for _, c := range p.classes {
 		if _, err := c.token(); err != nil {
-			log.Printf("health: %s: %v", c.dns, err)
+			p.eventf("health: %s: %v", c.dns, err)
 			http.Error(w, "unhealthy", http.StatusServiceUnavailable)
 			return
 		}
@@ -561,9 +639,38 @@ func (p *proxy) health(w http.ResponseWriter) {
 	fmt.Fprintln(w, "ok")
 }
 
-// forward proxies r upstream. With tok set it adds the bearer token; with c and ip set a task in the response latches ip.
+// upstreamTransport is the transport to the upstream: the default one, with a limit on the wait for the response headers.
+var upstreamTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ResponseHeaderTimeout = upstreamHeaderTimeout
+	return t
+}()
+
+// trackedBody remembers that reading the body of a request failed (it was cut at the cap, or the runner went away): the request that
+// the upstream got was then not complete, and it cannot have acted on it.
+type trackedBody struct {
+	io.ReadCloser
+	failed *atomic.Bool
+}
+
+func (b trackedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && err != io.EOF {
+		b.failed.Store(true)
+	}
+	return n, err
+}
+
+// forward proxies r upstream. With tok set it adds the bearer token; with c and ip set a task in the response latches ip, and so does
+// a failure after the request reached the upstream (the outcome of the claim is unknown: fail closed).
 func (p *proxy) forward(w http.ResponseWriter, r *http.Request, tok string, c *class, ip string) {
+	var connected, bodyFailed atomic.Bool // a connection to the upstream was in use; the body of the claim could not be read to its end
+	var transport http.RoundTripper = upstreamTransport
+	if p.transport != nil {
+		transport = p.transport
+	}
 	(&httputil.ReverseProxy{
+		Transport: transport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(p.upstream)
 			if tok != "" {
@@ -572,32 +679,67 @@ func (p *proxy) forward(w http.ResponseWriter, r *http.Request, tok string, c *c
 			if ua := pr.Out.UserAgent(); ua != "" { // tell CircleCI which requests came through this proxy
 				pr.Out.Header.Set("User-Agent", ua+" machine-runner-swarm-proxy/"+version)
 			}
+			if c != nil {
+				pr.Out = pr.Out.WithContext(httptrace.WithClientTrace(pr.Out.Context(), &httptrace.ClientTrace{
+					GotConn: func(httptrace.GotConnInfo) { connected.Store(true) },
+				}))
+				if pr.Out.Body != nil {
+					pr.Out.Body = trackedBody{pr.Out.Body, &bodyFailed}
+				}
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			if c != nil {
+			if c == nil {
+				return nil
+			}
+			switch {
+			case resp.StatusCode/100 == 2 && resp.StatusCode != http.StatusNoContent: // 204: no task yet
+				p.stats.forward(fwdTask)
 				log.Printf("claim from %s (%s): upstream status %d", ip, c.dns, resp.StatusCode)
-				if resp.StatusCode/100 == 2 && resp.StatusCode != http.StatusNoContent { // 204: no task yet
-					p.mu.Lock()
-					defer p.mu.Unlock()
-					c.latched[ip] = true
-					delete(c.absent, ip)
-					if p.persist() != nil { // before the runner gets its task: a restart must know that it has claimed
-						return errNotLatched // the runner does not get the task; the latch stays in memory
-					}
+				p.latch(c, ip, latchTask)
+				if p.persist() != nil { // before the runner gets its task: a restart must know that it has claimed
+					return errNotLatched // the runner does not get the task; the latch stays in memory
 				}
+			case resp.StatusCode == http.StatusNoContent:
+				p.stats.forward(fwdNone) // not logged: an idle runner asks about every five seconds
+			default:
+				p.stats.forward(fwdStatus)
+				p.eventf("claim from %s (%s): upstream status %d", ip, c.dns, resp.StatusCode)
 			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			if errors.Is(err, errNotLatched) {
+			switch {
+			case errors.Is(err, errNotLatched):
+				p.stats.refuse(refState)
 				log.Printf("claim from %s (%s): %v: the task is not handed to the runner", ip, c.dns, err)
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
+			case c == nil:
+				p.eventf("upstream error: %v", err)
+			case connected.Load() && !bodyFailed.Load():
+				// The request was sent on a connection and the answer is lost (a reset, a timeout, the runner gave up): CircleCI may have
+				// handed out a task. The runner must not claim again, as for a claim that answered with a task.
+				p.stats.forward(fwdError)
+				p.latch(c, ip, latchUnknown)
+				log.Printf("claim from %s (%s): outcome unknown (%v): latched, the runner may not claim again", ip, c.dns, err)
+				p.persist() // a failure is logged, and makes the proxy refuse claims until a write works
+			default:
+				p.stats.forward(fwdError)
+				p.eventf("claim from %s (%s): the request was not sent: %v", ip, c.dns, err)
 			}
-			log.Printf("upstream error: %v", err)
 			w.WriteHeader(http.StatusBadGateway)
 		},
 	}).ServeHTTP(w, r)
+}
+
+// latch marks ip of class c as having claimed. The caller saves the state afterwards (persist).
+func (p *proxy) latch(c *class, ip, kind string) {
+	p.mu.Lock()
+	c.latched[ip] = true
+	delete(c.absent, ip)
+	p.mu.Unlock()
+	p.stats.latch(kind)
 }
 
 // checkHealth is the -healthcheck flag: the exit status of one GET of /healthz on the address that -listen names.
@@ -728,8 +870,9 @@ func main() {
 		upstream: u, classes: classes, store: st, lookup: lookupHost,
 		scaleTries: 3, scaleWait: 2 * time.Second, restoreDeadline: restoreWithin,
 		releaseAfter: int(math.Ceil(releasePolls * float64(time.Second) / float64(*poll))),
-		limit:        newLimiter(2, 10), cacheTTL: time.Second, limitLog: logEvery{every: time.Minute},
+		cacheTTL:     time.Second,
 	}
+	p.setDefaultLimits()
 	for _, c := range classes { // fail closed: no token, no proxy
 		if _, err := c.token(); err != nil {
 			log.Fatalf("token file of %s: %v", c.dns, err)
@@ -747,6 +890,7 @@ func main() {
 	}
 	log.Print(what)
 	go p.pollLoop(ctx, *poll)
+	go p.summaryLoop(ctx, summaryEvery)
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		log.Fatal(err)

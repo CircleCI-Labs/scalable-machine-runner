@@ -212,6 +212,16 @@ Describe 'the stack files' {
         }
     }
 
+    It 'keep every runner service off the node that runs the token proxy (the node label machine-runner-swarm.proxy=true), and the proxy itself can run there' {
+        # a job on the node of the proxy would share a host with every class token. A node without the label matches != true, so a single node is unchanged.
+        foreach ($s in $script:blocks.Keys) {
+            $script:blocks[$s] | Should -Match '(?m)^          - node\.labels\.machine-runner-swarm\.proxy != true' -Because "$s must not run on the node of the proxy"
+        }
+        $proxy = [regex]::Match($script:files['runners.yaml'], '(?ms)^  token-proxy-windows:\r?\n(.*?)(?=^[a-z])').Groups[1].Value
+        $proxy | Should -Not -Match 'machine-runner-swarm\.proxy !=' -Because 'the proxy has to be able to run on the node that carries the label'
+        $script:files['runners.yaml'] | Should -Match 'runners stay pending' -Because 'the comment says what the label does on a single node'
+    }
+
     It 'publish the SSH rerun port only in the SSH add-on: host mode, one replica per node, the node name advertised' {
         $b = $script:blocks['windows-default-ssh']
         $b | Should -Match '(?m)^    ports:\r?\n      - target: 54782\r?\n        published: 54782\r?\n        protocol: tcp\r?\n        mode: host'

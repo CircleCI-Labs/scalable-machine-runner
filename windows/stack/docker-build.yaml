@@ -125,6 +125,7 @@ services:
           - node.labels.machine-runner-swarm.docker-build == true
           # A worker only: on a manager the engine pipe also gives a job every secret of the swarm (a service that mounts them), the class tokens included.
           - node.role == worker
+          - node.labels.machine-runner-swarm.proxy != true   # never on the node that runs the token proxy: a job there can read every class token
 
 volumes:
   runner-bin: {}                            # declared by runners.yaml too: this file must also deploy (and lint) alone

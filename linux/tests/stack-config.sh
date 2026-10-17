@@ -36,6 +36,18 @@ for n in $nets; do
   fi
 done
 [[ $(wc -w <<< "$nets") -eq 8 ]] || { echo "  expected 8 class networks in the Linux stack files, found $(wc -w <<< "$nets"): $nets"; problems=$((problems + 1)); }
+# Whatever the list of services below says, EVERY service that runs a runner (it has a CIRCLECI_RUNNER_NAME) keeps off the node of the
+# proxy, and the proxy and the other services do not (the proxy must be able to run there, and the label means "no jobs here").
+cfg=$cfg_all
+for s in $(awk '/^services:/ { f = 1; next } /^[^ ]/ { f = 0 } f && /^  [^ ]+:$/ { sub(/^  /, ""); sub(/:$/, ""); print }' <<< "$cfg"); do
+  block=$(service_block "$s")
+  if grep -q '^      CIRCLECI_RUNNER_NAME:' <<< "$block"; then
+    check "$s" 'the proxy-node constraint (proxy != true): every runner service needs it' '^          - node.labels.machine-runner-swarm.proxy != true$'
+  elif grep -q 'machine-runner-swarm.proxy' <<< "$block" && [[ $s != token-proxy ]]; then
+    echo "  $s: mentions the proxy node label, but runs no runner"
+    problems=$((problems + 1))
+  fi
+done
 # The shipped runners.yaml is ONE class (a first job needs one resource class, one token and one network): the others are add-on stack files.
 cfg_base=$(docker stack config -c "$dir/runners.yaml")
 base_runners=$(awk '/^services:/ { f = 1; next } /^[^ ]/ { f = 0 } f && /^  [^ ]+:$/ { sub(/^  /, ""); sub(/:$/, ""); print }' <<< "$cfg_base" | sort | paste -sd' ' -)
@@ -87,6 +99,9 @@ for s in "${services[@]}"; do
     # Swarm reads a missing label as "not equal", so unlabelled nodes still match.
     check "$s" 'the microVM isolation constraint (microvm != true)' '^          - node.labels.machine-runner-swarm.microvm != true$'
   fi
+  # no job on the node that runs the proxy (the node label machine-runner-swarm.proxy=true): a job there shares a host with every class token.
+  # Swarm reads a missing label as "not equal", so a node without the label, and a single node, still match.
+  check "$s" 'the proxy-node constraint (proxy != true)' '^          - node.labels.machine-runner-swarm.proxy != true$'
   check "$s" 'a logging block with rotation' '^        max-size: 20m$'
   # linux-microvm-docker has none by design: BuildKit and runc inside its VM need Docker's default set, NET_RAW included (checked below)
   [[ $s == linux-microvm-docker ]] || check "$s" 'cap_drop' '^    cap_drop:$'
@@ -286,6 +301,10 @@ block=$(service_block token-proxy)
 check token-proxy 'the pin by label from the environment of the deploy' '^          - node.labels.machine-runner-swarm.proxy == true$'
 if grep -q 'node.role == manager' <<< "$block"; then
   echo "  token-proxy: the pin by label must replace the manager default, not add to it"
+  problems=$((problems + 1))
+fi
+if grep -q 'machine-runner-swarm.proxy !=' <<< "$block"; then
+  echo "  token-proxy: must be able to run on the labelled node: it carries the constraint that keeps runners off it"
   problems=$((problems + 1))
 fi
 

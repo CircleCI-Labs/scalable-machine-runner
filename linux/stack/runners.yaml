@@ -67,6 +67,10 @@ x-placement: &placement
     - node.labels.machine-runner-swarm.docker-build != true
     # Never on a microVM node (microvm.yaml): Docker's DNS does not work in a Kata VM, so a job would have none.
     - node.labels.machine-runner-swarm.microvm != true
+    # Never on the node that runs the token proxy (label it: docker node update --label-add machine-runner-swarm.proxy=true <node>, then
+    # deploy with MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'): a job there shares a host with
+    # every class token. A node without the label matches, so a single node, or a cluster that sets no label, is unchanged.
+    - node.labels.machine-runner-swarm.proxy != true
     # - node.platform.arch == x86_64                # or aarch64
     # - node.labels.machine-runner-swarm.zone == <network zone>      # docker node update --label-add machine-runner-swarm.zone=<zone> <node>
   preferences:
@@ -175,9 +179,12 @@ services:
   # docker build -t machine-runner-swarm-proxy:dev proxy/ and deploy with MACHINE_RUNNER_SWARM_PROXY_IMAGE set to that name. It keeps
   # the addresses of the runners that have claimed in the small volume proxy-state, so that a restart refuses only them. It runs
   # on a manager by default, with no label. If the proxy moves to another node, its state stays behind, and docs/operations.md says
-  # what the runners then see. In a cluster with several managers, pin it to one:
+  # what the runners then see. In a cluster, put the label on the node that runs the proxy (a manager) and pin the proxy to it:
   # docker node update --label-add machine-runner-swarm.proxy=true <node>, and deploy with
   # MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'.
+  # Every runner service of these stack files carries the constraint node.labels.machine-runner-swarm.proxy != true, so no job runs
+  # on that node and shares a host with the class tokens. On a single node set no label: proxy and runners share the node. With the
+  # label on your only node, the runners stay pending.
   token-proxy:
     image: ${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:latest}
     user: "65534"
@@ -215,7 +222,7 @@ services:
           - node.platform.os == linux
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: the tokens must not sit next to the Docker socket
           - node.labels.machine-runner-swarm.microvm != true   # Docker's DNS, which finds tasks.<service>, does not work in a Kata VM
-          - "${MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node.role == manager}"   # the node that keeps proxy-state; choose one that runs no jobs when you can
+          - "${MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node.role == manager}"   # the node that keeps proxy-state; with the label above, no runner runs there
 
 networks:
   # One overlay per class: classes cannot reach each other (replicas of a class still can). Encrypted: the runners reach the token-proxy over plain

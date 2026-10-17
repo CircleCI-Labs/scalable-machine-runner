@@ -39,6 +39,10 @@ x-placement: &placement
     - node.labels.machine-runner-swarm.docker-build != true
     # Never on a microVM node (microvm.yaml): Docker's DNS does not work in a Kata VM, so a job would have none.
     - node.labels.machine-runner-swarm.microvm != true
+    # Never on the node that runs the token proxy (label it: docker node update --label-add machine-runner-swarm.proxy=true <node>, then
+    # deploy with MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'): a job there shares a host with
+    # every class token. A node without the label matches, so a single node, or a cluster that sets no label, is unchanged.
+    - node.labels.machine-runner-swarm.proxy != true
     # - node.platform.arch == x86_64                # or aarch64
     # - node.labels.machine-runner-swarm.zone == <network zone>      # docker node update --label-add machine-runner-swarm.zone=<zone> <node>
   preferences:

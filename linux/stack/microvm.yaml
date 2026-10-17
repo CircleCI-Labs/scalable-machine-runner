@@ -61,6 +61,7 @@ x-placement: &placement
     - node.platform.os == linux
     - node.labels.machine-runner-swarm.microvm == true
     - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node (see runners.yaml)
+    - node.labels.machine-runner-swarm.proxy != true   # never on the node that runs the token proxy (see runners.yaml)
   preferences:
     - spread: node.id
 

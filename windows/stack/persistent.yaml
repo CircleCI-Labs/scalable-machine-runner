@@ -105,6 +105,7 @@ services:
         constraints:
           - node.platform.os == windows
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: a job there can read other classes' tokens
+          - node.labels.machine-runner-swarm.proxy != true   # never on the node that runs the token proxy: a job there can read every class token
           - node.labels.machine-runner-swarm.windows-ltsc2022 == true   # the image's tag: a Server 2025 node carries this label too
           - node.labels.machine-runner-swarm.class.windows-persistent == true
 

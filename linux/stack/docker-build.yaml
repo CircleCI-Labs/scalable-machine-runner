@@ -76,6 +76,7 @@ services:
           - node.role == worker
           - node.labels.machine-runner-swarm.docker-build == true
           - node.labels.machine-runner-swarm.microvm != true   # the socket cannot cross into a Kata VM (microvm.yaml)
+          - node.labels.machine-runner-swarm.proxy != true   # never on the node of the token proxy: a job there shares a host with every class token
 
 networks:
   linux-docker-build: {driver: overlay, driver_opts: {encrypted: "true"}}

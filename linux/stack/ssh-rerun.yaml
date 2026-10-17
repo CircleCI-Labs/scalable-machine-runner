@@ -84,6 +84,7 @@ services:
           - node.platform.os == linux
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node (see runners.yaml)
           - node.labels.machine-runner-swarm.microvm != true   # nor on a microVM node (see runners.yaml)
+          - node.labels.machine-runner-swarm.proxy != true   # never on the node of the token proxy: a job there shares a host with every class token
         preferences:
           - spread: node.id
 

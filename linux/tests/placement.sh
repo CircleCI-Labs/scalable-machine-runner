@@ -16,6 +16,8 @@
 #
 #   6. the token proxy runs on a manager by default, with no label; the label and MACHINE_RUNNER_SWARM_PROXY_PLACEMENT pin it to a
 #      worker (or to a labelled manager), and removing them puts it back on the manager
+#   7. no runner runs on a node labelled machine-runner-swarm.proxy=true: with the label on the manager both linux-default replicas run
+#      on the worker; with the label on every node they stay pending; without the label they return
 #
 # Usage: placement.sh        Env: TIMEOUT=120
 set -euo pipefail
@@ -135,4 +137,27 @@ deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml docker-build.yaml
 wait_for "$TIMEOUT" proxy_on "$SWARM_TEST_MGR" || fail "without the pin the token proxy did not return to the manager: '$(proxy_node)'"
 echo "RESULT test=placement step=proxy_back_on_manager node=$SWARM_TEST_MGR"
 
-pass "constraints and labels place services (pending on a mismatch, the role constraint holds, spread works, socket group for pattern A, the other classes keep off Docker-build nodes, the token proxy runs on a manager with no label and a label pins it)"
+# 7. no runner on the node of the proxy: the label machine-runner-swarm.proxy=true keeps every runner service off the node (a constraint,
+# not a preference), so a job never shares a host with the class tokens. Without the label on any node nothing changes (steps 4 and 5c).
+make_override "$work/ov.yaml" "linux-default 2 $api" "linux-docker-build 0" "token-proxy 1"
+idocker "$SWARM_TEST_MGR" node update --label-add machine-runner-swarm.proxy=true "$SWARM_TEST_MGR" >/dev/null
+DEPLOY_ENV=("MACHINE_RUNNER_SWARM_PROXY_PLACEMENT=node.labels.machine-runner-swarm.proxy == true")
+deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml docker-build.yaml
+wait_for "$TIMEOUT" proxy_on "$SWARM_TEST_MGR" || fail "the token proxy did not run on the node with the proxy label: '$(proxy_node)'"
+wait_for "$TIMEOUT" default_running_on "$SWARM_TEST_WRK" 2 ||
+  fail "linux-default ran on the node of the proxy, or did not start on the other node: $(default_tasks | paste -sd' ' -)"
+echo "RESULT test=placement step=runners_leave_proxy_node proxy_node=$SWARM_TEST_MGR runner_node=$SWARM_TEST_WRK replicas=2 (spread would have used both nodes)"
+# every node has the label: the runners have nowhere to go and stay pending (the constraint holds, the proxy still runs)
+idocker "$SWARM_TEST_MGR" node update --label-add machine-runner-swarm.proxy=true "$SWARM_TEST_WRK" >/dev/null
+wait_for "$TIMEOUT" bash -c "[ \$(docker exec $SWARM_TEST_MGR docker service ps --filter desired-state=running --format '{{.CurrentState}}|{{.Error}}' ${STACK}_linux-default | grep -c '^Pending.*no suitable node') -eq 2 ]" ||
+  fail "linux-default kept running with the proxy label on every node: $(default_tasks | paste -sd' ' -)"
+echo "RESULT test=placement step=runners_pending_when_every_node_has_the_proxy_label replicas=2 reason=no_suitable_node"
+# the labels go: the runners come back, and with no label the proxy is on a manager again
+idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.proxy "$SWARM_TEST_MGR" >/dev/null
+idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.proxy "$SWARM_TEST_WRK" >/dev/null
+DEPLOY_ENV=()
+deploy_stack "$SWARM_TEST_MGR" "$work/ov.yaml" runners.yaml docker-build.yaml
+wait_for "$TIMEOUT" default_running_on any 2 || fail "linux-default did not return after the proxy labels were removed: $(default_tasks | paste -sd' ' -)"
+echo "RESULT test=placement step=runners_return_without_proxy_label replicas=2"
+
+pass "constraints and labels place services (pending on a mismatch, the role constraint holds, spread works, socket group for pattern A, the other classes keep off Docker-build nodes, the token proxy runs on a manager with no label and a label pins it, and no runner runs on the node with the proxy label)"

@@ -1,20 +1,16 @@
 # Contributing
 
-Thank you for helping to improve the machine runner swarm. This repository is part of CircleCI Labs. Field engineering reviews issues and pull requests on a best-effort basis, with no SLA. CircleCI support does not cover this repository.
+Thank you for helping to improve machine runner swarm, a CircleCI Labs project. Field engineers review issues and pull requests on a best-effort basis, with no SLA. Report a security problem by email, not in an issue ([SECURITY.md](SECURITY.md)).
 
 ## Reporting a bug
 
 Search the [existing issues](https://github.com/CircleCI-Labs/machine-runner-swarm/issues) first, and check that you use the latest release. Then open a new issue with the bug template. Include:
 
-- The release or commit of this repository, and the runner version. On Linux, run `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node. On Windows, run `docker service logs --tail 100 runners_runner-distributor-windows`.
+- The release or commit, and the runner version. On Linux, run `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node. On Windows, run `docker service logs --tail 100 runners_runner-distributor-windows`.
 - The operating system of the node and the Docker Engine version.
-- The output of `docker service ps --no-trunc runners_<service>` and `docker service logs --tail 100 runners_<service>`.
+- The output of `docker service ps --no-trunc runners_<SERVICE>` and `docker service logs --tail 100 runners_<SERVICE>`.
 
 Remove tokens, runner config files, and internal host names from everything you paste.
-
-### Security disclosure
-
-Do not open a public issue for a security vulnerability. Email [security@circleci.com](mailto:security@circleci.com) and follow [SECURITY.md](SECURITY.md).
 
 ## Requesting a feature
 
@@ -30,7 +26,7 @@ Before you open a pull request:
 1. Write every commit message, and the pull request title, as a Conventional Commit ([Commit messages](#commit-messages)). The release notes are generated from them, so there is no changelog entry to add.
 1. Check that the diff has no tokens, host names, or customer or vendor names. The repository is public.
 
-**A pull request from a fork gets no CI.** The project builds no forked pull request and passes no secret to one ([Secrets and public logs](docs/ci.md#secrets-and-public-logs)). A maintainer reads the change and, to run CI, pushes its commits to a branch of this repository by hand. **Never push or mirror an outside branch to `main` or to a branch named `smr-swarm/*`:** those names get the e2e runner tokens and, on `main`, the publishing contexts, and a job takes its configuration from its own branch.
+**A pull request from a fork gets no CI.** The project builds no forked pull request and passes no secret to one ([Secrets and public logs](docs/ci.md#secrets-and-public-logs)). A maintainer reads the change and, to run CI, pushes its commits to a branch of the project by hand. **Never push or mirror an outside branch to `main` or to a branch named `smr-swarm/*`:** those names get the e2e runner tokens and, on `main`, the publishing contexts, and a job takes its configuration from its own branch.
 
 A pull request that changes only documentation (`docs/`, `site/`, Markdown files) runs the lint jobs and the docs site build, and skips the builds and the Swarm tests ([Documentation-only changes](docs/ci.md#documentation-only-changes)).
 
@@ -103,7 +99,7 @@ The suite needs no installed runner: the distributor of the shipped stack instal
 
 Three variables change the setup: `SWARM_TEST_DIND_IMAGE` sets the Docker-in-Docker image, `SWARM_TEST_CACHE` sets the directory that caches the real runner binary (`~/.cache/swarm-tests` by default), and `SWARM_TEST_KEEP=1` keeps the containers for debugging.
 
-The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and one `RESULT` line, and exit 0 only when every check passes. `Invoke-UnitTests.ps1` runs the Pester tests on any system with PowerShell 7. The `Test-*.ps1` scripts (`Injection`, `Ephemerality`, `Exit80`, `Placement`, `StopHandling`, `Install`, `Distributor` and `Persistent`) need a Windows host with Docker in Windows-container mode and no runner token. Each script's header says what it checks. `Test-Injection.ps1 -Online` and `Test-StopHandling.ps1 -Online` use the real runner.
+The Windows tests in `windows/tests` print `CHECK <NAME> PASS|FAIL` lines and one `RESULT` line, and exit 0 only when every check passes. `Invoke-UnitTests.ps1` runs the Pester tests on any system with PowerShell 7. The `Test-*.ps1` scripts (`Injection`, `Ephemerality`, `Exit80`, `Placement`, `StopHandling`, `Install`, `Distributor` and `Persistent`) need a Windows host with Docker in Windows-container mode and no runner token. Each script's header says what it checks. `Test-Injection.ps1 -Online` and `Test-StopHandling.ps1 -Online` use the real runner.
 
 ### Swarm config names
 
@@ -118,21 +114,13 @@ docker run --rm -v "$PWD:/input" -w /input lycheeverse/lychee:0.24.2 --config ly
 docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.18.1 '**/*.md'
 ```
 
-### Pinned versions
+### Pinned versions and releases
 
 [Renovate](https://docs.renovatebot.com/) opens a pull request every Monday for the pinned versions: images and digests, the tools that CI downloads, the Go toolchain and the docs theme ([`renovate.json`](renovate.json); [Pinned versions](docs/ci.md#pinned-versions) lists what it covers). A pull request with the label `checksum` changes a version that is pinned with a SHA-256 value. Renovate cannot compute the value, so replace it in the same branch before you merge.
 
 Pin images by tag and digest, and a new download by its version and checksum together, with a `# renovate:` comment above the version. The default runner version is pinned in three files that must stay equal (`linux/stack/runners.yaml`, `linux/stack/microvm.yaml` and `windows/stack/runners.yaml`), and each release bumps it ([how](docs/releasing.md#bump-the-runner-version)). The pinned Git and 7-Zip versions and their SHA-256 values are in `windows/stack/runner-distributor.ps1`, and a change of the script needs `ci/config-names.sh --write`.
 
-## Releases
-
-Nobody tags a release by hand or edits a changelog. A CircleCI job runs on `main` after every test job has passed. [git-cliff](https://git-cliff.org) computes the next version from the Conventional Commits since the last release tag, with the rules in [`cliff.toml`](cliff.toml): a `fix` is a patch, a `feat` is a minor, and a breaking change is a minor in `0.x`. A push with only `docs`, `test`, `ci`, `chore`, `style`, or `refactor` commits makes no release. The project follows [Semantic Versioning](https://semver.org/), and `1.0.0` is reserved for general availability or official adoption.
-
-Each release is a GitHub release with a `tar.gz` and a `zip` bundle, a `SHA256SUMS` file, and a keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of that file. A maintainer reruns a release that fails part way. [Releasing](docs/releasing.md) has the details, [CHANGELOG.md](CHANGELOG.md) points to the notes, and [Verify a release](docs/install-linux.md#verify-a-release) checks a download.
-
-### When the repository moves to CircleCI-Public
-
-Replace the Labs wording in the banner and the Support section of `README.md`, `SECURITY.md`, the support paragraph at the top of this file, `.github/ISSUE_TEMPLATE/config.yml`, and `.github/CODEOWNERS`. Decide the license, because CircleCI runner repositories use Apache-2.0 and this one uses MIT.
+Nobody tags a release or edits a changelog: a CircleCI job on `main` reads the Conventional Commits, and a push with only `docs`, `test`, `ci`, `chore`, `style`, or `refactor` commits makes no release ([Releasing](docs/releasing.md), [CHANGELOG.md](CHANGELOG.md)).
 
 ## License
 

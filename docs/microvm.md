@@ -14,7 +14,7 @@ Use it when jobs need a boundary stronger than a container, or privileges that a
 > **Status: experimental.** The classes ship and stay in the stack. Maturity:
 >
 > - **Tested by the CI** (`linux/tests/microvm.sh`): placement, DNS, the claim through the token proxy, the runner download and its verification, the rolling update, and builds with the Docker daemon in the VM. On amd64, with Kata 4.2.0, Cloud Hypervisor and QEMU, in nested virtualization on AWS, against a fake CircleCI API.
-> - **Not verified by this project:** real CircleCI jobs, with checkout, caches, workspaces and artifacts through the task agent. The CI runs an empty task only. Run a real job on a node of your own before you depend on it.
+> - **Verified by hand only:** one real CircleCI job ran. CI runs an empty task, with no checkout, caches, workspaces or artifacts through the task agent. Run a real job on a node of your own before you depend on it.
 > - **Not tested:** arm64, AMD CPUs, other clouds, Firecracker, many VMs at once, out-of-memory behavior, and Kata upgrades under load.
 >
 > Refer to [What is tested](#what-is-tested).
@@ -45,9 +45,9 @@ Swarm cannot ask for Kata per service. The Docker daemon of each node picks the 
 
 - **KVM.** The node needs `/dev/kvm`: bare metal, or a virtual machine with nested virtualization.
 - **Linux amd64.** The add-on pins the amd64 build of Kata 4.2.0.
-- **Docker Engine 24 or later**, and a Swarm that follows [Multi-Node Clusters](multi-node.md).
+- **Docker Engine 24 or later**, and a Swarm that follows [Multi-node clusters](multi-node.md).
 - **One runc node at least** for `microvm-dns` and `token-proxy`, for example a manager. A Swarm whose only node is a microVM node cannot run them ([DNS](#dns)).
-- **The base stack** `runners.yaml` with its placeholder secret ([Install on Linux](install-linux.md)). The token proxy never runs on a microVM node: label its node as [Multi-Node Clusters](multi-node.md#managers-and-quorum) says.
+- **The base stack** `runners.yaml` with its placeholder secret ([Install on Linux](install-linux.md)). The token proxy never runs on a microVM node: label its node as [Multi-node clusters](multi-node.md#managers-and-quorum) says.
 - **A node of its own.** The default runtime applies to every container, so a microVM node runs microVM classes only.
 - **Egress to `circleci-binary-releases.s3.amazonaws.com`**, the host the task agent already comes from ([Egress hosts](security.md#egress-hosts)).
 
@@ -163,7 +163,7 @@ A job can rewrite the runner binary and its record only in its own copy, which g
 
 ## Deploy the classes
 
-1. Create the resource classes `<namespace>/linux-microvm` and `<namespace>/linux-microvm-docker`, and the secrets `linux-microvm-token` and `linux-microvm-docker-token`, which go to `token-proxy` only ([Resource Classes](resource-classes.md#define-a-class)). Delete a class you do not want from your copy of the stack file, with its secret and network.
+1. Create the resource classes `<NAMESPACE>/linux-microvm` and `<NAMESPACE>/linux-microvm-docker`, and the secrets `linux-microvm-token` and `linux-microvm-docker-token`, which go to `token-proxy` only ([Resource classes](resource-classes.md#define-a-class)). Delete a class you do not want from your copy of the stack file, with its secret and network.
 2. Deploy the add-on stack file with the main file. Pass the same list of files on every later deploy ([why](concepts.md#add-on-stack-files-and-how-they-merge)).
 
    ```bash
@@ -205,7 +205,7 @@ Docker removes an overlay network from a node when its last container leaves. A 
 ## Security
 
 - **What the VM adds.** A job that escapes its container, or abuses `SYS_ADMIN`, lands in a guest kernel and its own root filesystem, not on the node, other jobs, or the tokens of other classes. The VM shares no writable state with other jobs. It does not filter egress, and replicas of a class share an overlay network.
-- **Residual risk.** A bug in virtiofs, the VMM, or the guest kernel could still reach the node, which runs `virtiofsd`, a VMM and the Kata shim for every job. Keep Kata and the node kernel current. To isolate `linux-microvm-docker` further, label nodes `machine-runner-swarm.class.linux-microvm-docker=true` ([Multi-Node Clusters](multi-node.md#labels-used-by-this-repository)), add `node.labels.machine-runner-swarm.class.linux-microvm-docker == true` to its constraints in your copy of the stack file, and `!= true` to those of `linux-microvm`.
+- **Residual risk.** A bug in virtiofs, the VMM, or the guest kernel could still reach the node, which runs `virtiofsd`, a VMM and the Kata shim for every job. Keep Kata and the node kernel current. To isolate `linux-microvm-docker` further, label nodes `machine-runner-swarm.class.linux-microvm-docker=true` ([Multi-node clusters](multi-node.md#labels-used-by-the-stack)), add `node.labels.machine-runner-swarm.class.linux-microvm-docker == true` to its constraints in your copy of the stack file, and `!= true` to those of `linux-microvm`.
 - **Why one replica.** The token proxy accepts a claim from an address that Swarm lists for the class. Other classes drop `NET_RAW`, so a job cannot send packets from another address. `linux-microvm-docker` keeps it (BuildKit needs it) and has no `NET_ADMIN`, so a job there can send raw packets but cannot take over an address. With one replica on its own overlay, no other runner is there to impersonate. The stack-config test requires `replicas: 1` and `SYS_ADMIN` as the only added capability. For more builds at once, copy the service under another name and resource class, with its own network, secret and proxy entries ([Add a class](resource-classes.md#define-a-class)). Do not raise `replicas`.
 - **The guard.** `SYS_ADMIN` on runc is a host escape. The label and constraints keep `linux-microvm-docker` on microVM nodes, and the entrypoint check keeps it off a node with the label but not the runtime. The stack-config test requires `MACHINE_RUNNER_SWARM_REQUIRE_MICROVM=true` on every service that adds `SYS_ADMIN`, in every stack file.
 
@@ -240,7 +240,7 @@ Dragonball, the built-in VMM of runtime-rs, works with the same steps but starts
 
 ### What is not tested
 
-Real jobs (checkout, caches, workspaces and artifacts over virtiofs with the real task agent: a real CircleCI job is a manual check), out-of-memory behavior against the cgroup limit, other clouds, AMD CPUs, arm64, Firecracker (it has no virtiofs), the Go shim of Kata, clusters of more than two nodes, the load of many VMs, Kata upgrades under load, and Windows (next section).
+Real jobs (checkout, caches, workspaces and artifacts over virtiofs with the real task agent: one ran by hand, none run in CI), out-of-memory behavior against the cgroup limit, other clouds, AMD CPUs, arm64, Firecracker (it has no virtiofs), the Go shim of Kata, clusters of more than two nodes, the load of many VMs, Kata upgrades under load, and Windows (next section).
 
 ## Windows: Hyper-V isolation
 

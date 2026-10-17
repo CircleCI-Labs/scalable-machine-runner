@@ -37,14 +37,14 @@ State persists: the images, containers, volumes, and build cache of the host eng
 
 ### Deploy on Linux
 
-1. Join a dedicated worker node ([Multi-Node Clusters](multi-node.md)). Nothing is installed on it: `runner-distributor` installs the runner there.
+1. Join a dedicated worker node ([Multi-node clusters](multi-node.md)). Nothing is installed on it: `runner-distributor` installs the runner there.
 2. Label the node:
 
    ```bash
    docker node update --label-add machine-runner-swarm.docker-build=true <WORKER_NODE>
    ```
 
-3. Create the resource class `<namespace>/linux-docker-build` and the secret `linux-docker-build-token` ([Resource Classes](resource-classes.md#define-a-class)).
+3. Create the resource class `<NAMESPACE>/linux-docker-build` and the secret `linux-docker-build-token` ([Resource classes](resource-classes.md#define-a-class)).
 4. Deploy the add-on stack file with the main file. Pass the same list of files on every later deploy ([why](concepts.md#add-on-stack-files-and-how-they-merge)).
 
    ```bash
@@ -71,7 +71,7 @@ The file [`examples/linux-docker-build.yml`](../examples/linux-docker-build.yml)
 
 ### Deploy on Windows
 
-`windows\stack\docker-build.yaml` defines `windows-docker-build`. It mounts the named pipe `\\.\pipe\docker_engine` and the host directory `C:\Program Files\Docker` read-only at `C:\docker`, which it appends to the `PATH`. Adjust the bind source if `docker.exe` lives elsewhere. It runs on a worker only, as on Linux, so it needs a Windows worker in the Swarm ([Multi-Node Clusters](multi-node.md)). The single-node Swarm of the Windows quickstart has only a manager, and the class stays `Pending` there.
+`windows\stack\docker-build.yaml` defines `windows-docker-build`. It mounts the named pipe `\\.\pipe\docker_engine` and the host directory `C:\Program Files\Docker` read-only at `C:\docker`, which it appends to the `PATH`. Adjust the bind source if `docker.exe` lives elsewhere. It runs on a worker only, as on Linux, so it needs a Windows worker in the Swarm ([Multi-node clusters](multi-node.md)). The single-node Swarm of the Windows quickstart has only a manager, and the class stays `Pending` there.
 
 1. Label the worker node:
 
@@ -79,7 +79,7 @@ The file [`examples/linux-docker-build.yml`](../examples/linux-docker-build.yml)
    docker node update --label-add machine-runner-swarm.docker-build=true <NODE_NAME>
    ```
 
-2. Create the resource class `<namespace>/windows-docker-build` and the secret `windows-docker-build-token`.
+2. Create the resource class `<NAMESPACE>/windows-docker-build` and the secret `windows-docker-build-token`.
 3. Deploy the add-on stack file with the main file. Pass the same list of files on every later deploy ([why](concepts.md#add-on-stack-files-and-how-they-merge)).
 
    ```powershell
@@ -90,7 +90,7 @@ Jobs can build Windows images only, because the engine runs in Windows-container
 
 ## Pattern B: rootless BuildKit on the host
 
-Run a rootless BuildKit daemon on the host under a dedicated unprivileged account, and mount only its socket into a runner service. Jobs send builds to it with a BuildKit client. The daemon exposes the build API, not the Docker API, so a job cannot start arbitrary containers or mount host paths. The risk shrinks but stays: the daemon shares the host kernel, and every job shares its build cache. This repository has no stack file, helper, or test for it.
+Run a rootless BuildKit daemon on the host under a dedicated unprivileged account, and mount only its socket into a runner service. Jobs send builds to it with a BuildKit client. The daemon exposes the build API, not the Docker API, so a job cannot start arbitrary containers or mount host paths. The risk shrinks but stays: the daemon shares the host kernel, and every job shares its build cache. Machine runner swarm has no stack file, helper, or test for it.
 
 ## Pattern C: a daemonless builder in the job
 

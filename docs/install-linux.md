@@ -6,26 +6,24 @@ page-description: Deploy CircleCI machine runner 3 as a Docker Swarm stack on Ub
 
 # Install on Linux with Docker Swarm
 
-This page deploys CircleCI machine runner 3 as a Docker Swarm stack on Linux: one service for each resource class, and a clean container for every job. The steps cover one node ([Multi-Node Clusters](multi-node.md) adds more). For a first run, [Quickstart on Linux](quickstart-linux.md) is shorter.
+This page deploys CircleCI machine runner 3 as a Docker Swarm stack on Linux: one service for each resource class, and a clean container for every job. The steps cover one node ([Multi-node clusters](multi-node.md) adds more). For a first run, [Quickstart on Linux](quickstart-linux.md) is shorter.
 
 > [!NOTE]
-> If you can run Kubernetes, CircleCI recommends [container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/) for containerized jobs, and documents a plain [machine runner 3 on Docker](https://circleci.com/docs/guides/execution-runner/install-machine-runner-3-on-docker/) setup. This page is for teams that run Docker Swarm and want a clean container for every job.
+> Tested against CircleCI cloud only ([What is tested](../README.md#what-is-tested)). Replicas are fixed: the stack does not add nodes or scale to the queue. On Kubernetes, use [container runner](https://circleci.com/docs/guides/execution-runner/container-runner-installation/).
 
-**Status.** This is a CircleCI Labs project, `0.x`, and CircleCI support does not cover it. It is tested against CircleCI cloud only: [What is tested](../README.md#what-is-tested) says how. Replicas are fixed: the stack does not add or remove nodes, and it does not scale to the queue.
-
-Nothing is installed on a node by hand: a service of the stack installs the runner on every node, so `docker stack deploy` is the whole install. The optional [setup helper](#optional-use-the-setup-helper) runs the same steps.
+A service of the stack installs the runner on every node. The optional [setup helper](#optional-use-the-setup-helper) runs the same steps.
 
 ## Prerequisites
 
 - A CircleCI cloud organization and a user who is an organization admin. CircleCI server is not tested: [CircleCI server](security.md#circleci-server) says what is known.
-- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. Pass `--org <org>` (a slug such as `gh/my-org`, or a UUID): without it the CLI uses the organization of the git remote of the current directory, which in a clone of this repository is not yours.
+- The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. Pass `--org <ORG>` (a slug such as `gh/my-org`, or a UUID): without it the CLI uses the organization of the git remote of the current directory, which in a clone of this repository is not yours.
 - Docker Engine 24 or later, running, with Swarm mode (Podman cannot run Swarm). Root access or membership of the `docker` group, which is equivalent to root: limit it to administrators.
 - A node clock synchronized with NTP. TLS to CircleCI fails silently when the clock drifts.
-- Outbound HTTPS from each node to the hosts in [Egress hosts](security.md#egress-hosts): the release bucket of CircleCI (the runner), and the registries of the `alpine` image (the distributor) and the token proxy image (Docker Hub). No inbound access is needed. [What needs internet](security.md#what-needs-internet) lists everything. Not tested without internet access: [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror).
-- CPU and memory: the shipped file reserves 4 CPUs and 8 GB in total, and replicas that do not fit stay pending ([Size the limits](resource-classes.md#size-the-limits)).
+- Outbound HTTPS from each node to the hosts in [Egress hosts](security.md#egress-hosts): the release bucket of CircleCI (the runner), and the registries of the `alpine` image (the distributor) and the token proxy image (Docker Hub). No inbound access is needed. [What needs internet](security.md#what-needs-internet) lists everything. Hosts without internet access are not tested ([mirrors](operations.md#run-the-downloads-from-a-mirror)).
+- CPU and memory: the shipped file reserves 4.1 CPUs and a little over 8 GB (two runners and the token proxy). Replicas that do not fit stay pending ([Size the limits](resource-classes.md#size-the-limits)).
 - Runner concurrency in your CircleCI plan for your replicas ([Capacity and concurrency](operations.md#capacity-and-concurrency)).
 
-| Operating system | Architecture | Status in this repository |
+| Operating system | Architecture | Status |
 |---|---|---|
 | Ubuntu LTS | amd64, arm64 | Tested in CI on Ubuntu 26.04. On arm64, every pipeline checks that the stack installs the runner and starts, and probe jobs run on a real arm64 runner on `main` and `smr-swarm/*` branches |
 | RHEL 8 and later, and compatible distributions | amd64, arm64 | Steps documented, not tested in CI |
@@ -40,118 +38,36 @@ An organization admin must agree to the [CircleCI Runner Terms](https://circleci
 Use a release (recommended) or clone the repository at a release tag. Paths on this page are relative to the root of the repository or of the extracted bundle.
 
 ```bash
-git clone --branch <release-tag> https://github.com/CircleCI-Labs/machine-runner-swarm.git
+git clone --branch <RELEASE_TAG> https://github.com/CircleCI-Labs/machine-runner-swarm.git
 cd machine-runner-swarm
 ```
 
-A release is recommended because its stack files name the token proxy image of that release by tag and digest. A clone names the tag `latest`, which is not a pin ([The token proxy image](#the-token-proxy-image)). Each [GitHub release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) carries four files, with `<version>` the release number without the `v`:
+Use a release: its stack files pin the token proxy image by tag and digest. A clone uses `latest`, which is not a pin ([The token proxy image](#the-token-proxy-image)). Each [GitHub release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) carries four files, with `<VERSION>` the release number without the `v`:
 
 | File | Content |
 |---|---|
-| `machine-runner-swarm-<version>.tar.gz` | The Linux bundle: stack files, scripts, documentation and examples, without the tests, plus `VERSION` and `CHANGELOG.md` |
-| `machine-runner-swarm-<version>.zip` | The same bundle for Windows |
+| `machine-runner-swarm-<VERSION>.tar.gz` | The Linux bundle: stack files, scripts, documentation and examples, without the tests, plus `VERSION` and `CHANGELOG.md` |
+| `machine-runner-swarm-<VERSION>.zip` | The same bundle for Windows |
 | `SHA256SUMS` | The SHA-256 checksum of both bundles |
 | `SHA256SUMS.sigstore.json` | A keyless [cosign](https://docs.sigstore.dev/cosign/overview/) signature of `SHA256SUMS` |
 
-### Verify a release
-
-CircleCI signs `SHA256SUMS` with the OIDC token of the CircleCI job that makes the release. No signing key is stored anywhere. The signature proves that a job of this CircleCI project made the file, and the checksums prove that your download is the file the job made. You need [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 3.1.3 or a later 3.x (CI signs and verifies with 3.1.3, and earlier versions are not tested), `curl`, `jq`, and GNU coreutils, in a bash shell. On Windows, refer to [Verify a release](install-windows.md#verify-a-release).
-
-Set `version` once to the number of the [latest release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases/latest) without the `v`, and read its notes. The download fails while the placeholder is unchanged.
-
-```bash
-version=X.Y.Z
-```
-
-Then paste this block. It runs in a subshell and stops at the first failing check. Only a bundle that passes the signature, the ref and the checksum is unpacked.
-
-```bash
-(
-  set -euo pipefail
-  base="https://github.com/CircleCI-Labs/machine-runner-swarm/releases/download/v${version}"
-  curl -fsSLO "${base}/machine-runner-swarm-${version}.tar.gz" \
-       -O "${base}/SHA256SUMS" \
-       -O "${base}/SHA256SUMS.sigstore.json"
-
-  # 1. the signature: the CircleCI project and pipeline definition of this repository signed SHA256SUMS
-  cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
-    --certificate-identity "https://circleci.com/api/v2/projects/7bbdbb66-6ba8-4f6c-982e-d4fb401ec257/pipeline-definitions/8b2a66db-3f28-5c80-88e4-03f4694b5b60" \
-    --certificate-oidc-issuer "https://oidc.circleci.com"
-
-  # 2. the ref: a job of any branch can sign with that identity, so the certificate must also say that the job ran for refs/heads/main
-  #    (the long string is the OID 1.3.6.1.4.1.57264.1.14 followed by the value refs/heads/main)
-  hex=$(jq -r '.verificationMaterial | (.certificate // .x509CertificateChain.certificates[0]).rawBytes' SHA256SUMS.sigstore.json \
-    | base64 -d | od -An -v -tx1 | tr -d ' \n')
-  grep -Eq '^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' <<< "${hex}" \
-    && echo "signed for refs/heads/main" || { echo "NOT signed for refs/heads/main: stop"; exit 1; }
-
-  # 3. the file: its checksum is in the signed list
-  sha256sum -c SHA256SUMS --ignore-missing
-
-  # only a verified bundle is unpacked
-  tar -xzf "machine-runner-swarm-${version}.tar.gz"
-  echo "RELEASE VERIFIED"
-)
-```
-
-Continue only when the last line is `RELEASE VERIFIED`. Anything else, an error message or no output at all, means that the release is not verified: delete the downloaded files, and start again or ask in an issue. The ref check exists because the signing identity is the same for every branch, so the block reads the certificate extension `1.3.6.1.4.1.57264.1.14` (the OID in the long string) and fails unless its value is `refs/heads/main`. The pattern starts on a byte boundary, and ASN.1 tag `0c` or `13` is the string type of the value.
-
-Then change into the bundle:
-
-```bash
-cd "machine-runner-swarm-${version}"
-```
-
-The token proxy image has its own signature: [Verify the token proxy image](security.md#verify-the-token-proxy-image) has the commands.
-
-The checks establish less than a review does. A valid signature and `refs/heads/main` mean that a job of this CircleCI project ran for the `main` branch and made these files. Whether anyone can change `main` without a review is a setting of the organization that owns the repository, which this page cannot check ([A ruleset for main](https://github.com/CircleCI-Labs/machine-runner-swarm/blob/main/docs/ci.md#a-ruleset-for-main) says what the project asks for).
-
-- The identity is the CircleCI project (`7bbdbb66-...`) and the pipeline definition (`8b2a66db-...`) that run this repository's pipeline. The issuer `https://oidc.circleci.com` is the CircleCI OIDC issuer. Sigstore records every signature in a public transparency log.
-- To see the ref of a certificate, print it. The last line ends with the ref, and a release comes from `refs/heads/main`.
-
-  ```bash
-  jq -r '.verificationMaterial.certificate.rawBytes' SHA256SUMS.sigstore.json | base64 -d \
-    | openssl x509 -inform DER -noout -text | grep -A1 '1.3.6.1.4.1.57264.1.14:'
-  ```
-
-- If the project or its pipeline definition is ever re-created, the definition ID changes, and this page gives the new value.
-
-### The token proxy image
-
-The token proxy is the one container that holds your class tokens ([The token proxy](concepts.md#the-token-proxy)). It is the image `ccilabs/machine-runner-swarm-proxy` on Docker Hub (`ccilabs` is the Docker Hub organization of CircleCI Labs), which the stack file pulls on deploy. The name is not the trust root: the signature check of [Verify the token proxy image](security.md#verify-the-token-proxy-image) is. It is a static Go binary that runs as a non-root user with a read-only root file system, and one tag covers `linux/amd64`, `linux/arm64`, `linux/ppc64le` and `linux/s390x`. Windows nodes get the Windows image from the same tag ([Windows](install-windows.md#the-token-proxy-image)).
-
-| Tag | What it is |
-|---|---|
-| `X.Y.Z` | The image of a release. It never changes: pin this one |
-| `X.Y`, `X` | The newest release of that minor or major line |
-| `latest` | The newest release. The default of the stack files in a checkout, and only a release moves it |
-| `edge` | The newest commit of the main branch that passed the end-to-end tests. For testing `main`, not for jobs that matter |
-| `sha-<12 characters>` | One commit of the main branch, published before its tests have run |
-
-The stack file reads the image from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. A release bundle defaults to `ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest>`, a checkout to `ccilabs/machine-runner-swarm-proxy:latest` (`linux/setup.sh --deploy` warns when the variable is not pinned by digest). To use another image (a digest for a pin, a registry of your own for an air gap, a local build for development), set the variable in the environment of `docker stack deploy`. The image must be on the node that runs the proxy, so build a local one there, or copy it with `docker save`.
-
-```bash
-docker build -t machine-runner-swarm-proxy:dev proxy/
-sudo env MACHINE_RUNNER_SWARM_PROXY_IMAGE=machine-runner-swarm-proxy:dev docker stack deploy -c deploy/runners.yaml runners
-```
-
-[Upgrade the token proxy](operations.md#upgrade-the-token-proxy) says how to change its tag.
+To verify the signature first, see [Verify a release](#verify-a-release).
 
 ## 1. Create the resource classes
 
 1. Create a namespace if your organization has none. An organization has one namespace, and orbs use the same one.
 
    ```bash
-   circleci namespace create <namespace> --org <org>
+   circleci namespace create <NAMESPACE> --org <ORG>
    ```
 
 2. Create one resource class for each service in the stack file. The class name must equal the service name. The shipped `linux/stack/runners.yaml` has one service, `linux-default`: keep that name for a first run.
 
    ```bash
-   circleci runner resource-class create <namespace>/linux-default --org <org> --generate-token
+   circleci runner resource-class create <NAMESPACE>/linux-default --org <ORG> --generate-token
    ```
 
-The command prints a token once: store it in your secret manager. If you lose it, run `circleci runner token create <namespace>/<class> --nickname <nickname>`. To rename the service, edit your copy of the file first ([step 5](#5-review-the-stack-file)), then create the class and the secret under the new name. More classes: [Resource Classes](resource-classes.md#define-a-class).
+The command prints a token once: store it in your secret manager. If you lose it, run `circleci runner token create <NAMESPACE>/<CLASS> --nickname <NICKNAME>`. To rename the service, edit your copy of the file first ([step 5](#5-review-the-stack-file)), then create the class and the secret under the new name. More classes: [Resource classes](resource-classes.md#define-a-class).
 
 ## 2. Prepare each node
 
@@ -180,7 +96,7 @@ Run these steps on every node that runs services. A single node needs no firewal
 3. Keep SELinux enforcing. The runner is in a Docker volume, so no host directory needs a label.
 
 > [!NOTE]
-> CI does not run on RHEL, so these steps follow Docker's documentation and have not been exercised in this repository.
+> CI does not run on RHEL, so these steps follow Docker's documentation and have not been exercised.
 
 ## 3. Start Swarm
 
@@ -196,21 +112,21 @@ The second command keeps fewer stopped containers on the node (each finished job
 The node is a manager, and the token proxy runs on a manager by default. On a single node, set no proxy label. In a cluster, label the node that runs the proxy: runner services never run on a node with this label, so a job never shares a node with the proxy.
 
 ```bash
-docker node update --label-add machine-runner-swarm.proxy=true <manager node name>
+docker node update --label-add machine-runner-swarm.proxy=true <MANAGER_NAME>
 ```
 
-With several managers, also pin the proxy to one ([Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves)). A loopback node cannot accept other nodes: for a cluster, use a routable address ([Multi-Node Clusters](multi-node.md#create-the-swarm)).
+With several managers, also pin the proxy to one ([Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves)). A loopback node cannot accept other nodes: for a cluster, use a routable address ([Multi-node clusters](multi-node.md#create-the-swarm)).
 
 ## 4. Create the secrets
 
-Create one secret for each service in the stack file, named `<service>-token`. It is a runner config file that holds only the token:
+Create one secret for each service in the stack file, named `<SERVICE>-token`. It is a runner config file that holds only the token:
 
 ```yaml
 api:
-  auth_token: <token>
+  auth_token: <TOKEN>
 ```
 
-The token proxy mounts these secrets at `/run/secrets/<service>-token` (uid 65534, mode `0400`), and the runners never see them. The runners read one more secret, `runner-placeholder-token`, with a made-up token in the same format, mounted at `/run/secrets/circleci_runner_config.yaml` (runner user, uid 2000, mode `0400`). Only the persistent class mounts its own token in the runner. Every other runner setting is a `CIRCLECI_RUNNER_*` variable in the stack file.
+The token proxy mounts these secrets at `/run/secrets/<SERVICE>-token` (uid 65534, mode `0400`), and the runners never see them. The runners read one more secret, `runner-placeholder-token`, with a dummy token in the same format, mounted at `/run/secrets/circleci_runner_config.yaml` (runner user, uid 2000, mode `0400`). Only the persistent class mounts its own token in the runner. Every other runner setting is a `CIRCLECI_RUNNER_*` variable in the stack file.
 
 Set `classes` to every class you deploy. The loop asks for each token with a hidden prompt, so the token does not reach your shell history or the process list. It works in bash, zsh and dash and stops at an empty token. Do not use `read -rsp`: zsh reads `-p` as a coprocess, which leaves `TOKEN` empty and creates a secret without a token.
 
@@ -242,9 +158,9 @@ Check that the file parses. This needs no running Swarm.
 docker stack config -c deploy/runners.yaml > /dev/null
 ```
 
-The directory holds the stack files and the two scripts that they ship as Swarm configs, `circleci-runner-entrypoint` and `runner-distributor.sh`. Keep the scripts next to the stack files, and keep the service `runner-distributor` and the top-level `configs:` and `volumes:`. A Swarm config cannot change, so its name carries the first 12 hex digits of the SHA-256 of its file: if you edit a script, rename its config the same way (`sha256sum <file> | cut -c1-12`).
+The directory holds the stack files and the two scripts that they ship as Swarm configs, `circleci-runner-entrypoint` and `runner-distributor.sh`. Keep the scripts next to the stack files, and keep the service `runner-distributor` and the top-level `configs:` and `volumes:`. A Swarm config cannot change, so its name carries the first 12 hex digits of the SHA-256 of its file: if you edit a script, rename its config the same way (`sha256sum <FILE> | cut -c1-12`).
 
-Review these settings first ([Resource Classes](resource-classes.md) has the details):
+Review these settings first ([Resource classes](resource-classes.md) has the details):
 
 | Setting | Default | Change it to |
 |---|---|---|
@@ -255,12 +171,12 @@ Review these settings first ([Resource Classes](resource-classes.md) has the det
 | `placement.constraints` | `node.platform.os == linux` | Add architecture or zone constraints |
 | `x-distributor-env` | An exact runner version (`3.1.13` in this release) with the SHA-256 values of its tarballs, major version 3, a check every 24 hours | Nothing for a first run. A newer pin, a floating version or a mirror are variables of `docker stack deploy` ([Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux)) |
 
-The optional classes are add-on files in `deploy/`. Add each with another `-c` flag, and pass the same list on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each needs its own resource class and secret `<service>-token`.
+The optional classes are add-on files in `deploy/`. Add each with another `-c` flag, and pass the same list on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each needs its own resource class and secret `<SERVICE>-token`.
 
 | File | Services | Purpose |
 |---|---|---|
 | `classes-extra.yaml` | `linux-java`, `linux-hardened` | Examples: an image swap, and a class without sudo. Reserves 6 more CPUs and 12 GB ([Define a class](resource-classes.md#define-a-class)) |
-| `docker-build.yaml` | `linux-docker-build` | Builds images with the host engine. Needs a labeled worker ([Docker Builds](docker-builds.md)) |
+| `docker-build.yaml` | `linux-docker-build` | Builds images with the host engine. Needs a labeled worker ([Docker builds](docker-builds.md)) |
 | `microvm.yaml` | `linux-microvm`, `linux-microvm-docker`, `microvm-dns` | Each job in a Kata Containers microVM. Needs KVM ([MicroVM jobs](microvm.md)) |
 | `persistent.yaml` | `linux-persistent` | A long-lived runner. Needs the node name edited in the file ([Persistent mode](resource-classes.md#persistent-mode)) |
 | `ssh-rerun.yaml` | `linux-default-ssh` | Rerun job with SSH. Publishes port 54782 ([Rerun job with SSH](resource-classes.md#rerun-job-with-ssh)) |
@@ -281,7 +197,7 @@ To add optional classes, pass your copies with more `-c` flags, and pass the sam
 docker stack deploy -c deploy/runners.yaml -c deploy/persistent.yaml runners
 ```
 
-This is the whole install. The service `runner-distributor` starts on every Linux node, also on a node that joins later (not on a microVM node: its classes download their own runner). It downloads the runner version the stack file pins (the newest that CI tests), checks its SHA-256 against the values the stack file carries, and puts it in the volume `runner-bin` of the node. The service `token-proxy` pulls its image from Docker Hub. A runner container that starts first waits up to 120 seconds for the runner.
+The `runner-distributor` service starts on every Linux node, also on a node that joins later (not on a microVM node: its classes download their own runner). It downloads the pinned runner, checks its SHA-256 and puts it in the `runner-bin` volume. A runner container that starts first waits up to 120 seconds for it. The service `token-proxy` pulls its image from Docker Hub.
 
 Other distributor settings, such as a floating version like `3.1` (weaker: the distributor trusts the manifest and ignores the default SHA-256 list), are variables of this command. `sudo` drops the environment: write `sudo env MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1 docker stack deploy ...` ([Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux)).
 
@@ -314,10 +230,10 @@ Other distributor settings, such as a floating version like `3.1` (weaker: the d
    docker service logs --tail 20 runners_runner-distributor
    ```
 
-4. Check that the runners connected. Each replica is listed as `online`, named `<node hostname>-<service>-<slot>` (for example `node1-linux-default-1`). The web app shows the same under **Runners**.
+4. Check that the runners connected. Each replica is listed as `online`, named `<NODE_HOSTNAME>-<SERVICE>-<SLOT>` (for example `node1-linux-default-1`). The web app shows the same under **Runners**.
 
    ```bash
-   circleci runner instance list --org <org> --resource-class <namespace>/linux-default
+   circleci runner instance list --org <ORG> --resource-class <NAMESPACE>/linux-default
    ```
 
 5. Run a job with [`examples/linux-hello.yml`](../examples/linux-hello.yml) (the [quickstart](quickstart-linux.md#steps) shows it), twice. After each job, Swarm shows a new task for the slot. The job `clean-check` in [`examples/linux-jobs.yml`](../examples/linux-jobs.yml) fails if anything from an earlier job is still present.
@@ -330,7 +246,7 @@ Other distributor settings, such as a floating version like `3.1` (weaker: the d
 |---|---|
 | `--check` | Preflight: Linux on amd64, arm64, ppc64le or s390x, Docker running and 24 or later, Swarm state, NTP |
 | `--swarm-init` | Runs `docker swarm init` on the loopback address unless Swarm is active, and sets the task history limit to 2 |
-| `--secret <service>` | Creates the secret `<service>-token` from a token read on stdin |
+| `--secret <SERVICE>` | Creates the secret `<SERVICE>-token` from a token read on stdin |
 | `--deploy` | Runs `docker stack deploy` with each `--stack-file`. Without one it deploys the shipped `linux/stack/runners.yaml`, so pass your copy from step 5. It warns when `MACHINE_RUNNER_SWARM_PROXY_IMAGE` is not pinned by digest |
 
 With no step it runs `--check`. Steps run in the order of the table. Options are `--stack-file` (repeatable) and `--stack-name`. Each run ends with `Next:` and the steps still to do, or `Check:` and the commands that show the runners start.
@@ -343,18 +259,23 @@ sudo linux/setup.sh --deploy --stack-file deploy/runners.yaml
 ```
 
 - `--secret` asks for the token with a hidden prompt. To script it, pipe the token (`printf %s "$TOKEN" | sudo linux/setup.sh --secret linux-default`). Several `--secret` values need a terminal. A token has only letters, digits, `.`, `_` and `-`, and an existing secret stays unchanged ([Rotate a runner token](operations.md#rotate-a-runner-token)). Create a secret for every service you deploy.
-- The helper does not label nodes. For a docker-build class, run `docker node update --label-add machine-runner-swarm.docker-build=true <worker node>`.
+- The helper does not label nodes. For a docker-build class, run `docker node update --label-add machine-runner-swarm.docker-build=true <WORKER_NODE>`.
 - The distributor reads `MACHINE_RUNNER_SWARM_RUNNER_VERSION`, `MACHINE_RUNNER_SWARM_RUNNER_MAJOR`, `MACHINE_RUNNER_SWARM_CHECK_INTERVAL`, `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` and `MACHINE_RUNNER_SWARM_RUNNER_SHA256` from the environment of `--deploy`, and the token proxy reads `MACHINE_RUNNER_SWARM_PROXY_*`. `sudo` drops the environment: use `sudo env VAR=value linux/setup.sh --deploy` ([Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux)).
 
 ## Upgrade
 
 The nodes keep the runner version that the stack file pins until you change it: [Upgrade the runner and images](operations.md#upgrade-the-runner-and-images) covers versions, images and rollback.
 
-A new release of this repository changes the shipped stack files, and your copy `deploy/` is not updated by itself. To merge:
+A new release changes the shipped stack files, and your copy `deploy/` is not updated by itself. To merge:
 
 1. Read the notes of the release and the [changelog](../CHANGELOG.md): entries marked `[BREAKING]` say what to change. This is a `0.x` project, so a minor release can change the files.
 2. Verify and unpack the new release beside the old one ([Verify a release](#verify-a-release)). The old directory is the base of the merge (for a cloned tag, use `git worktree` or a second clone).
-3. See what changed between the two releases.
+3. Set the two versions, and see what changed between the releases.
+
+   ```bash
+   old=<OLD_VERSION>
+   new=<NEW_VERSION>
+   ```
 
    ```bash
    diff -ru "machine-runner-swarm-${old}/linux/stack" "machine-runner-swarm-${new}/linux/stack"
@@ -368,7 +289,7 @@ A new release of this repository changes the shipped stack files, and your copy 
      "machine-runner-swarm-${new}/linux/stack/runners.yaml"
    ```
 
-   Repeat for the other files you copied. Take the entrypoint and the distributor script of the new release unless you edited them, and rename their Swarm configs as [Upgrade to a new release of this repository](operations.md#upgrade-to-a-new-release-of-this-repository) says.
+   Repeat for the other files you copied. Take the entrypoint and the distributor script of the new release unless you edited them, and rename their Swarm configs as [Upgrade to a new release](operations.md#upgrade-to-a-new-release-of-this-repository) says.
 5. Check `deploy.replicas`, `image`, `deploy.placement.constraints` and `deploy.resources`, the runner version pin with its SHA-256 values (a release changes them together), and the token proxy image (a release names it by digest).
 6. Check the result.
 
@@ -384,18 +305,93 @@ A new release of this repository changes the shipped stack files, and your copy 
 
 Swarm replaces the token proxy and updates the runner services one replica at a time. While the proxy is replaced, no new job is claimed, and every runner that had already claimed stays refused ([Restart the proxy](operations.md#restart-the-proxy)). To roll back, deploy the previous copy.
 
-## Stop and uninstall
+## Verify and pin
 
-Refer to [Uninstall](operations.md#uninstall).
+### Verify a release
 
-## Troubleshooting
+CircleCI signs `SHA256SUMS` with the OIDC token of the CircleCI job that makes the release. No signing key is stored anywhere. The signature proves that a job of this CircleCI project made the file, and the checksums prove that your download is the file the job made. You need [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 3.1.3 or a later 3.x (CI signs and verifies with 3.1.3, and earlier versions are not tested), `curl`, `jq`, and GNU coreutils, in a bash shell. On Windows, see [Verify a release](install-windows.md#verify-a-release).
 
-Refer to [Troubleshooting](troubleshooting.md). The most common problems on a first install are a missing secret, a node whose distributor cannot download the runner, and a task that stays pending because no node matches its constraints.
+Set `version` to the number of the latest release without the `v`, and read the [release notes](https://github.com/CircleCI-Labs/machine-runner-swarm/releases/latest).
 
-## Additional resources
+```bash
+version=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/CircleCI-Labs/machine-runner-swarm/releases/latest)
+version=${version##*/v}
+```
 
+The next block runs in a subshell and stops at the first failing check. It checks:
+
+1. The signature: this project's CircleCI pipeline signed `SHA256SUMS`.
+2. The ref: a job of any branch can sign with that identity, so the certificate must also say that the job ran for `refs/heads/main`. The long string in the block is the certificate extension `1.3.6.1.4.1.57264.1.14` followed by `refs/heads/main`.
+3. The checksum: the bundle is in the signed list.
+
+Only a bundle that passes all three is unpacked.
+
+```bash
+(
+  set -euo pipefail
+  base="https://github.com/CircleCI-Labs/machine-runner-swarm/releases/download/v${version}"
+  curl -fsSLO "${base}/machine-runner-swarm-${version}.tar.gz" \
+       -O "${base}/SHA256SUMS" \
+       -O "${base}/SHA256SUMS.sigstore.json"
+  cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+    --certificate-identity "https://circleci.com/api/v2/projects/7bbdbb66-6ba8-4f6c-982e-d4fb401ec257/pipeline-definitions/8b2a66db-3f28-5c80-88e4-03f4694b5b60" \
+    --certificate-oidc-issuer "https://oidc.circleci.com"
+  hex=$(jq -r '.verificationMaterial | (.certificate // .x509CertificateChain.certificates[0]).rawBytes' SHA256SUMS.sigstore.json \
+    | base64 -d | od -An -v -tx1 | tr -d ' \n')
+  grep -Eq '^([0-9a-f]{2})*2b0601040183bf30010e0411(0c|13)0f726566732f68656164732f6d61696e' <<< "${hex}" \
+    && echo "signed for refs/heads/main" || { echo "NOT signed for refs/heads/main: stop"; exit 1; }
+  sha256sum -c SHA256SUMS --ignore-missing
+  tar -xzf "machine-runner-swarm-${version}.tar.gz"
+  echo "RELEASE VERIFIED"
+)
+```
+
+Continue only when the last line is `RELEASE VERIFIED`. Anything else, including no output, means the release is not verified: delete the files and start again, or ask in an issue. Then change into the bundle:
+
+```bash
+cd "machine-runner-swarm-${version}"
+```
+
+The token proxy image has its own signature: [Verify the token proxy image](security.md#verify-the-token-proxy-image) has the commands.
+
+The checks establish less than a review does:
+
+- A valid signature and `refs/heads/main` mean that a job of this CircleCI project ran for `main` and made these files. Whether anyone can change `main` without a review is a setting of the organization that owns the repository ([A ruleset for main](https://github.com/CircleCI-Labs/machine-runner-swarm/blob/main/docs/ci.md#a-ruleset-for-main) says what the project asks for).
+- The identity is the CircleCI project (`7bbdbb66-...`) and the pipeline definition (`8b2a66db-3f28-5c80-88e4-03f4694b5b60`) of the pipeline of machine runner swarm, with the issuer `https://oidc.circleci.com`. Sigstore records every signature in a public transparency log. If the project or its pipeline definition is re-created, the definition ID changes, and this page gives the new value.
+- To see the ref of a certificate, print it. The last line ends with the ref, and a release comes from `refs/heads/main`.
+
+  ```bash
+  jq -r '.verificationMaterial.certificate.rawBytes' SHA256SUMS.sigstore.json | base64 -d \
+    | openssl x509 -inform DER -noout -text | grep -A1 '1.3.6.1.4.1.57264.1.14:'
+  ```
+
+### The token proxy image
+
+The token proxy is the one container that holds your class tokens ([The token proxy](concepts.md#the-token-proxy)). It is the image `ccilabs/machine-runner-swarm-proxy` on Docker Hub (`ccilabs` is the Docker Hub organization of CircleCI Labs), which the stack file pulls on deploy. The name is not the trust root: the signature check of [Verify the token proxy image](security.md#verify-the-token-proxy-image) is. It is a static Go binary that runs as a non-root user with a read-only root file system, and one tag covers `linux/amd64`, `linux/arm64`, `linux/ppc64le` and `linux/s390x`. Windows nodes get the Windows image from the same tag ([Windows](install-windows.md#the-token-proxy-image)).
+
+| Tag | What it is |
+|---|---|
+| `X.Y.Z` | The image of a release. It never changes: pin this one |
+| `X.Y`, `X` | The newest release of that minor or major line |
+| `latest` | The newest release. The default of the stack files in a checkout, and only a release moves it |
+| `edge` | The newest commit of the main branch that passed the end-to-end tests. For testing `main`, not for jobs that matter |
+| `sha-<12 characters>` | One commit of the main branch, published before its tests have run |
+
+The stack file reads the image from `MACHINE_RUNNER_SWARM_PROXY_IMAGE`. A release bundle defaults to `ccilabs/machine-runner-swarm-proxy:<VERSION>@sha256:<DIGEST>`, a checkout to `ccilabs/machine-runner-swarm-proxy:latest` (`linux/setup.sh --deploy` warns when the variable is not pinned by digest). To use another image (a digest for a pin, a registry of your own for an air gap, a local build for development), set the variable in the environment of `docker stack deploy`. The image must be on the node that runs the proxy, so build a local one there, or copy it with `docker save`.
+
+```bash
+docker build -t machine-runner-swarm-proxy:dev proxy/
+sudo env MACHINE_RUNNER_SWARM_PROXY_IMAGE=machine-runner-swarm-proxy:dev docker stack deploy -c deploy/runners.yaml runners
+```
+
+[Upgrade the token proxy](operations.md#upgrade-the-token-proxy) says how to change its tag.
+
+## Next
+
+- [Uninstall](operations.md#uninstall)
+- [Troubleshooting](troubleshooting.md): the most common problems on a first install are a missing secret, a node whose distributor cannot download the runner, and a task that stays pending because no node matches its constraints
 - [Concepts](concepts.md)
-- [Resource Classes](resource-classes.md)
+- [Resource classes](resource-classes.md)
 - [Security](security.md)
 - [Operations](operations.md)
 - [Machine runner 3 configuration reference](https://circleci.com/docs/guides/execution-runner/machine-runner-3-configuration-reference/)

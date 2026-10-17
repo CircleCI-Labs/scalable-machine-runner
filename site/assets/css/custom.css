@@ -1139,27 +1139,6 @@ body {
   margin-top: 2.25rem;
 }
 
-.cci-notice {
-  max-width: 36rem;
-  margin: 2rem 0 0;
-  padding-left: 1rem;
-  border-left: 3px solid var(--cci-green);
-  color: var(--cci-fg);
-  font-size: 0.9375rem;
-  line-height: 1.6;
-}
-
-.cci-notice strong {
-  color: var(--cci-heading);
-  font-weight: 600;
-}
-
-.cci-notice a {
-  color: var(--cci-link-color);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
 .cci-hero-art {
   position: relative;
   padding: 2.5rem 0 1.5rem 1.5rem;

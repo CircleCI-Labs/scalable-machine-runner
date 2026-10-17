@@ -283,3 +283,7 @@ To check that the release job requires every job of the workflow, as `lint-circl
 circleci config process .circleci/continue.yml \
   --pipeline-parameters '{full-suite: true, e2e-linux: true, e2e-windows: true, release: true, publish: true}'
 ```
+
+## Move the project to CircleCI-Public
+
+Replace the Labs wording in the banner and the Support section of `README.md`, `SECURITY.md`, the support paragraph at the top of `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/config.yml`, and `.github/CODEOWNERS`. Decide the license, because CircleCI runner repositories use Apache-2.0 and this one uses MIT.

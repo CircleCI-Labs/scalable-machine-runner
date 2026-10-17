@@ -6,7 +6,7 @@ page-description: Run the runner in stock Linux and Windows images with a read-o
 
 # Images
 
-The stack files run stock images and mount the runner into them, so the image of a class is the environment its jobs see. This repository publishes no class image. Its one image, the token proxy, holds the class tokens and is no environment for a job ([The token proxy image](install-linux.md#the-token-proxy-image)). This page covers the stock images and how to bring your own on each OS.
+The stack files run stock images and mount the runner into them, so the image of a class is the environment its jobs see. Machine runner swarm publishes no class image. Its one image, the token proxy, holds the class tokens and is no environment for a job ([The token proxy image](install-linux.md#the-token-proxy-image)). This page covers the stock images and how to bring your own on each OS.
 
 ## Linux: stock images with the mounted runner
 
@@ -85,7 +85,7 @@ The default Windows service runs the unmodified Microsoft Server Core image, for
 | `current` | `C:\machine-runner-swarm` | `bin\circleci-runner.exe`, the record `SHA256`, and `VERSION` |
 | `git\current` | `C:\Program Files\Git` | Portable Git for Windows: `git`, `bash`, `sh`, `tar`, `gzip`, `ssh` |
 
-`current` and `git\current` are relative directory symbolic links, to `versions\<version>` and to the pinned Git, which the distributor moves. Docker resolves a link when it creates a container, so a new runner version reaches the next container only, and a running job keeps its version. Docker refuses a junction or an absolute link in a subpath ([Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows)).
+`current` and `git\current` are relative directory symbolic links, to `versions\<VERSION>` and to the pinned Git, which the distributor moves. Docker resolves a link when it creates a container, so a new runner version reaches the next container only, and a running job keeps its version. Docker refuses a junction or an absolute link in a subpath ([Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows)).
 
 The runner is the main process: the service sets `entrypoint` to `C:\machine-runner-swarm\bin\circleci-runner.exe machine --config C:\ProgramData\Docker\secrets\circleci_runner_config.yaml`. It also sets the full `PATH`, because a `PATH` in the service environment replaces the one of the image. Git for Windows comes after the Windows directories, so the Windows `find`, `sort`, and `tar` stay first.
 
@@ -119,8 +119,6 @@ docker build -f windows/images/example/Dockerfile --build-arg WINDOWS_TAG=ltsc20
 ```
 
 Push the result to a registry that every Windows node can pull from, because Swarm does not share local images. Then set the image of the `windows-custom` service in the add-on stack file `windows\stack\custom-image.yaml`, create the resource class and the secret `windows-custom-token`, and deploy with `-c windows\stack\runners.yaml -c windows\stack\custom-image.yaml`. The file [`examples/windows-custom-image.yml`](../examples/windows-custom-image.yml) has a job on that class. Rebuild when the base image or a tool changes.
-
-A stop of a busy Windows container kills its job after about 5 seconds ([Stop a busy Windows container](operations.md#stop-a-busy-windows-container)).
 
 ## Private certificate authorities
 

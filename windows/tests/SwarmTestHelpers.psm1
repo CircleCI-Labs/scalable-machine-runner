@@ -289,7 +289,25 @@ function Install-SwarmDistributor {
         ($script:distLog -match '\[ ok \] current -> versions') -and ($script:distLog -match '\[ ok \] git\\current -> git')
     }
     $log = $script:distLog
-    return @{ Ok = $ok; Detail = "the distributor did not install the runner and Git within ${TimeoutSeconds}s"; Log = $log }
+    $detail = "the distributor did not install the runner and Git within ${TimeoutSeconds}s"
+    if (-not $ok) {
+        $stockRef = 'mcr.microsoft.com/windows/servercore'
+        $sections = @()
+        if ($log) { $sections += '--- distributor logs (last poll) ---'; $sections += $log }
+        $ps = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('service', 'ps', '--no-trunc', $service)
+        $sections += '--- docker service ps --no-trunc ---'
+        $sections += $ps.Output
+        $raw = @(Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('service', 'logs', '--raw', $service)).Output
+        $tail = @($raw | Select-Object -Last 50)
+        $sections += '--- docker service logs (last 50 lines) ---'
+        $sections += $tail
+        $imgs = Invoke-SwarmDocker -DockerCommand $DockerCommand -ArgumentList @('image', 'ls', '--filter', "reference=$stockRef")
+        $sections += "--- docker image ls (reference=$stockRef) ---"
+        $sections += $imgs.Output
+        $log = ($sections | ForEach-Object { if ($_ -is [string]) { $_ } else { "$_" } }) -join "`n"
+        $detail = "$detail`n$log"
+    }
+    return @{ Ok = $ok; Detail = $detail; Log = $log }
 }
 
 function Initialize-SwarmFakeRunner {

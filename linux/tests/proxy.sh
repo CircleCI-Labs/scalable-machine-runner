@@ -317,20 +317,40 @@ wait_for 120 idle "$lip_def" "$lip_java" || fail "the replacement runners do not
 echo "RESULT test=proxy phase=savefail idle_runners_present=2"
 tasks_before=$(($(tasks_run linux-default) + $(tasks_run linux-java)))
 claims_before=$(upstream_claims)
+got_before=$(count "$(plog_now)" "upstream status 200")
 vol sh -c "mkdir -p $state_dir/state.json.tmp && touch $state_dir/state.json.tmp/x"
 release
-# the first claim reaches the API, and its latch cannot be saved: it fails, and the task is not handed to the runner. The other claim is
-# refused without reaching the API (503), because no task is handed out while the state cannot be written
-not_saved() {
-  local log failed gated
-  log=$(plog_now)
-  failed=$(count "$log" "the task is not handed to the runner")
-  gated=$(count "$log" "refused: the state cannot be written")
-  [[ $failed -ge 1 && $((failed + gated)) -ge 2 ]]
+# Which write fails first is not fixed: the poll of the proxy (released addresses, every second) or the first claim that gets a task.
+#  - a claim that gets a task and then cannot be latched is failed (503, "the task is not handed to the runner"), and its address stays
+#    latched in memory, so its next claim is refused as one that has already claimed;
+#  - once any write has failed, every other claim is refused (503, "refused: the state cannot be written") without reaching the API.
+# Either way no runner gets a task. Each idle runner must end up in one of the two states, judged from the log of the proxy (polled with a
+# deadline, whatever the order of the lines), and after that no claim may reach the API.
+not_saved_ip() { # IP: this runner's claim was failed or refused because of the state, in the log snapshot $slog
+  [[ $(count "$slog" "claim from $1 refused: the state cannot be written") -ge 1 ||
+    ($(grep -acE "claim from ${1//./\\.} \(.*the task is not handed to the runner" <<< "$slog" || true) -ge 1 &&
+      $(count "$slog" "claim from $1 refused: this runner has already claimed") -ge 1) ]]
 }
-wait_for 60 not_saved || fail "the claims of the idle runners were not failed although the state could not be written"
+not_saved() {
+  slog=$(plog_now)
+  not_saved_ip "$lip_def" && not_saved_ip "$lip_java"
+}
+wait_for 90 not_saved || fail "the claims of the idle runners were not failed although the state could not be written (default $lip_def, java $lip_java): $(plog_now | grep -aE "claim from ($lip_def|$lip_java)|state: cannot" | tail -n 8 | cut -c1-200)"
+refusals_now() { count "$(plog_now)" "claim from $lip_def refused"; }
+refusals_java_now() { count "$(plog_now)" "claim from $lip_java refused"; }
+claims_gated=$(upstream_claims)
+r_def=$(refusals_now)
+r_java=$(refusals_java_now)
+# both runners are refused again, and nothing of that reached the API
+refused_again() { [[ $(refusals_now) -gt $r_def && $(refusals_java_now) -gt $r_java ]]; }
+wait_for 60 refused_again || fail "the idle runners did not claim again while the state could not be written: the phase tests nothing"
+[[ $(upstream_claims) -eq $claims_gated ]] || fail "a claim reached the API while the state could not be written ($claims_gated before, $(upstream_claims) after)"
 hold
-[[ $(upstream_claims) -ge $((claims_before + 1)) ]] || fail "the claim did not reach the API: the phase tests nothing"
+slog=$(plog_now)
+got=$(($(count "$slog" "upstream status 200") - got_before))
+not_handed=$(count "$slog" "the task is not handed to the runner")
+[[ $got -eq $not_handed ]] || fail "$got claims got a task from the API in this phase and $not_handed were failed: a runner may have got its task"
+echo "RESULT test=proxy phase=savefail claims_that_got_a_task=$got claims_failed_at_the_latch=$not_handed claims_at_the_api_in_the_phase=$((claims_gated - claims_before)) claims_at_the_api_once_both_were_refused=0"
 vol test ! -e "$state_dir/state.json" || fail "a failed save left state.json, which is behind the latches in memory"
 vol test -e "$state_dir/.initialized" || fail "a failed save removed the state marker"
 unhealthy() { [[ $(probe "$i_def" curl -s -m 5 -o /dev/null -w '%{http_code}' http://token-proxy:8080/healthz || true) == 503 ]]; }

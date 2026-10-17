@@ -5,17 +5,32 @@
 #   run-all.sh              stack-config, helper, ephemerality, exit80, token, task, proxy (the token proxy), placement, persistent, drain,
 #                           limits, network, distributor (install, upgrade, rollback, auto, pruning), then the bats unit tests on cimg,
 #                           Alpine and UBI
-#   run-all.sh token drain  only these tests ("bats" is the unit-test matrix)
+#   run-all.sh token drain  only these tests ("bats" is the unit-test matrix). CI runs the suite as four jobs, each with its own list
+#                           (.circleci/continue.yml, the job linux-swarm); an unknown name fails before anything starts
+#   run-all.sh --list       the names of all tests, one per line (lint-circleci checks that the CI jobs together run every one)
 #
 # Needs: Docker (the host's engine is not switched to Swarm mode), network access for images and the
 # runner download. Env: see lib.sh (SWARM_TEST_DIND_IMAGE, SWARM_TEST_CIMG_IMAGE, SWARM_TEST_CACHE, SWARM_TEST_KEEP).
 set -uo pipefail
+
+all=(stack-config helper ephemerality exit80 token task proxy placement persistent drain limits network distributor bats)
+if [[ ${1:-} == --list ]]; then
+  printf '%s\n' "${all[@]}"
+  exit 0
+fi
+
 # shellcheck source=linux/tests/lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-all=(stack-config helper ephemerality exit80 token task proxy placement persistent drain limits network distributor bats)
 tests=("$@")
 [[ ${#tests[@]} -gt 0 ]] || tests=("${all[@]}")
+
+# a typo in a list of CI would otherwise fail after the other tests have run
+for t in "${tests[@]}"; do
+  script=$tests_dir/$t.sh
+  [[ $t == bats ]] && script=$tests_dir/bats/run.sh
+  [[ -x $script ]] || { echo "unknown test: $t" >&2; exit 2; }
+done
 
 needs_session=false
 for t in "${tests[@]}"; do

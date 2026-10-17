@@ -334,8 +334,21 @@ claim_log=$(idocker "$MGR" logs fake-api 2>&1 | grep -a 'REQ POST /api/v3/runner
 echo "RESULT test=microvm step=proxy_claims api_saw=\"$claim_log\""
 [[ $claim_log == *"auth=CLASS:linux-microvm"* ]] || fail "the claim from the VM did not reach the API with the class token (the proxy did not add it): $claim_log"
 service_logs "$MGR" token-proxy | grep -aq 'claim from .* (tasks.linux-microvm): upstream status 200' || fail "the token proxy did not log a claim of linux-microvm from the VM: $(service_logs "$MGR" token-proxy | tail -n 3)"
-node_of=$(idocker "$MGR" service ps --format '{{.Node}}' "${STACK}_linux-microvm" | head -n 1)
-[[ $node_of == "$KN" ]] || fail "the task ran on $node_of, not on the Kata node"
+# The node of the task that ran the job. The single-task container has exited by now and Swarm has queued its replacement, so the newest line of
+# `service ps` is the replacement, which may have no node yet. Each log line carries the node and task IDs of the task that wrote it (--details), so
+# the TASK line names the node that ran the job. Poll until it is known, up to the deadline.
+# shellcheck disable=SC2329  # called through wait_for
+task_node_known() {
+  task_node_id=$(idocker "$MGR" service logs --raw --details "${STACK}_linux-microvm" 2>&1 | grep -a ' TASK ' | head -n 1 |
+    sed -n 's/^.*com\.docker\.swarm\.node\.id=\([0-9a-z]*\).*$/\1/p') || true
+  [[ -n $task_node_id ]]
+}
+task_node_id=
+wait_for "$TIMEOUT" task_node_known || fail "the node that ran the task is unknown after ${TIMEOUT}s: the TASK line of the service log has no node ID"
+kata_node_id=$(idocker "$KN" info --format '{{.Swarm.NodeID}}')
+node_of=$(idocker "$MGR" node inspect --format '{{.Description.Hostname}}' "$task_node_id" 2>/dev/null || echo "node $task_node_id")
+echo "RESULT test=microvm step=task_node node_id=$task_node_id node=$node_of kata_node_id=$kata_node_id"
+[[ $task_node_id == "$kata_node_id" ]] || fail "the task ran on $node_of, not on the Kata node ($KN)"
 
 # ---------------------------------------------------------------------------------------------
 # 4. linux-microvm-docker: dockerd in the VM, then the runner of each VM

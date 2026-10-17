@@ -2,6 +2,8 @@
 # Cross-platform (Linux pwsh or Windows); Docker, the network and the volume are never touched. Test-Distributor.ps1 runs the
 # script itself against a mirror on a Windows host.
 
+$script:onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+
 BeforeAll {
     $script:script = Join-Path $PSScriptRoot '..\stack\runner-distributor.ps1'
     . $script:script
@@ -288,7 +290,7 @@ Describe 'a volume without current' {
         { Invoke-RunnerPruning } | Should -Not -Throw
     }
 
-    It 'names the directory of a link that exists' -Skip:(-not $IsLinux) {
+    It 'names the directory of a link that exists' -Skip:$script:onWindows {
         New-Item -ItemType Directory -Force -Path (Join-Path $script:Root 'versions/3.1.13') | Out-Null
         New-Item -ItemType SymbolicLink -Path (Join-Path $script:Root 'current') -Target 'versions/3.1.13' | Out-Null
         Get-ActiveName | Should -BeExactly '3.1.13'
@@ -346,7 +348,7 @@ Describe 'the script as a process' {
             try {
                 foreach ($n in 'TEMP', 'TMP') { [Environment]::SetEnvironmentVariable($n, $null) }
                 foreach ($k in $Environment.Keys) { [Environment]::SetEnvironmentVariable($k, $Environment[$k]) }
-                if ($IsLinux) {   # no cmd.exe: a stand-in for "cmd /c rmdir /s /q <path>"
+                if (-not $script:onWindows) {   # no cmd.exe: a stand-in for "cmd /c rmdir /s /q <path>"
                     $fake = Join-Path $TestDrive 'fake-cmd.sh'
                     Set-Content -LiteralPath $fake -Value @('#!/bin/sh', 'for a; do last=$a; done', 'rm -rf "$last"')
                     chmod +x $fake
@@ -378,12 +380,23 @@ Describe 'the script as a process' {
 
     It 'logs the line and the statement of a failure of the check' {
         Use-DistributorEnvironment
-        $tooLong = Join-Path $TestDrive ('v' * 300)   # New-Item cannot create it
-        $r = Invoke-Distributor $tooLong @{
+        if ($script:onWindows) {
+            # A file at F blocks creating the volume root F\sub: New-Item throws inside Invoke-Check ($ErrorActionPreference is Stop).
+            $f = Join-Path $TestDrive "file-root-$([guid]::NewGuid().ToString('N'))"
+            Set-Content -LiteralPath $f -Value 'x' -NoNewline
+            $volume = Join-Path $f 'sub'
+            $expect = '(?m)^runner-distributor: error: .+ \(line [0-9]+: New-Item -ItemType Directory -Force -Path \$script:Root \| Out-Null\)$'
+        } else {
+            # pwsh on Linux does not treat New-Item under a file path as terminating; an over-long root still fails the check in Invoke-Check.
+            $volume = Join-Path $TestDrive ('v' * 300)
+            $expect = '(?m)^runner-distributor: error: .+ too long.* \(line [0-9]+: [^ ].+\)$'
+        }
+        $r = Invoke-Distributor $volume @{
             MACHINE_RUNNER_SWARM_RUNNER_VERSION = '3.1.13'
             MACHINE_RUNNER_SWARM_RUNNER_SHA256  = 'a' * 64
         }
-        $r.Output | Should -Match '(?m)^runner-distributor: error: .+ too long.* \(line [0-9]+: [^ ].*\)$'
+        $r.Output | Should -Not -Match 'cannot download'
+        $r.Output | Should -Match $expect
         $r.ExitCode | Should -Be 1
     }
 

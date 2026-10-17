@@ -63,7 +63,7 @@ params:
     tagline: CircleCI machine runners on Docker Swarm, in containers
     notice: >-
       Not an official CircleCI product and not supported by CircleCI Support.
-      Field engineers at CircleCI created it and maintain it on a best-effort basis.
+      Pre-release 0.x: a minor release can change stack files. Field engineers maintain it on a best-effort basis.
     lead: For platform teams that run Docker hosts or Windows Server and want a clean container for every job, without Kubernetes.
     features:
       - icon: layers

@@ -1,5 +1,2 @@
-{{- /* The banner: the Labs disclaimer (it cannot be dismissed: the close button is hidden by custom.css, and it links to the support notice), and the
-       version of what the site documents. The site is built from main on every merge, so a reader on a release reads a page that may describe a
-       later change. The documentation of a release is the docs/ folder of its bundle. One span: the banner is a flex row, and every child of it
-       would be a flex item of its own, without the spaces between the words. */ -}}
-<span><a class="cci-banner-link" href="{{ site.Home.RelPermalink }}#support"><strong>CircleCI Labs project.</strong> Not an official CircleCI product and not supported by CircleCI Support.</a> These pages follow <strong>main</strong>: the pages of a release are in <code class="cci-banner-code">docs/</code> of its <a class="cci-banner-link" href="https://github.com/CircleCI-Labs/scalable-machine-runner/releases">bundle</a>.</span>
+{{- $repo := partial "repo-url.html" . -}}
+<span><a class="cci-banner-link" href="{{ site.Home.RelPermalink }}#support"><strong>CircleCI Labs project, pre-1.0.</strong> Not an official CircleCI product and not supported by CircleCI Support.</a> These pages track <strong>main</strong>. Each <a class="cci-banner-link" href="{{ $repo }}/releases">release bundle</a> includes the docs for that release.</span>

@@ -125,7 +125,7 @@ No. Runners connect outbound over HTTPS, and the shipped classes publish no port
 
 ## Can I run a long-lived runner with warm caches?
 
-Yes, with a persistent class. It gives up the clean environment, so use it only for trusted projects. Refer to [Persistent mode](resource-classes.md#persistent-mode).
+Yes, with a persistent class. It gives up the clean environment, so use it only for trusted projects. The shipped Linux persistent class gives jobs no sudo by default. Refer to [Persistent mode](resource-classes.md#persistent-mode).
 
 ## Can I use Rerun job with SSH?
 
@@ -133,7 +133,7 @@ Yes, with the add-on stack file `ssh-rerun.yaml`. It defines the class `linux-de
 
 ## Can a job read the runner token?
 
-Not in a single-task class, on Linux or on Windows, with or without sudo: the runner container holds only a made-up placeholder, and the [token proxy](security.md#the-token-proxy) holds the class token. In a persistent class the container holds the token: a job that uses sudo can read it on Linux, and every job can on Windows. Swarm also stores a Windows secret in clear text on the container disk, so use BitLocker and one token for each class and host. Refer to [Token model on each OS](security.md#token-model-on-each-os) and to the [comparison with the official installs](security.md#compared-with-the-official-runner-installs). A holder of a token can run a rogue runner on that class and claim its jobs, so rotate tokens ([how](operations.md#rotate-a-runner-token)).
+Not in a single-task class, on Linux or on Windows, with or without sudo: the runner container holds only a made-up placeholder, and the [token proxy](security.md#the-token-proxy) holds the class token. In a persistent class the container holds the token: on Linux a job that uses sudo can read it (the shipped persistent class disables sudo by default), and every job can on Windows. Swarm also stores a Windows secret in clear text on the container disk, so use BitLocker and one token for each class and host. Refer to [Token model on each OS](security.md#token-model-on-each-os) and to the [comparison with the official installs](security.md#compared-with-the-official-runner-installs). A holder of a token can run a rogue runner on that class and claim its jobs, so rotate tokens ([how](operations.md#rotate-a-runner-token)).
 
 ## What is the token proxy, and what happens when it is down?
 
@@ -147,7 +147,7 @@ Stopping a busy stock Server Core container from outside kills its job after abo
 
 ## Which runner version do the nodes run?
 
-The `runner-distributor` service of the stack decides, and the setup helper installs nothing. The default is an exact pin: the newest runner version that the CI of this repository tests, which each release of this repository bumps. The nodes keep it until you change it, and the distributor verifies the SHA-256 of every download. To follow CircleCI's manifest instead, set `MACHINE_RUNNER_SWARM_RUNNER_VERSION` to `3.1` (the newest `3.1.x`), `3` (the newest `3.x.y`) or `current` (CircleCI's current release); the distributor then looks again every 24 hours. To go back, pin an older version. Refer to [The version policy](operations.md#the-version-policy).
+The `runner-distributor` service of the stack decides, and the setup helper installs nothing. The default is an exact pin with the tarball SHA-256 values in the stack file: the newest runner version that the CI of this repository tests, which each release of this repository bumps. The nodes keep it until you change it. To float instead, set `MACHINE_RUNNER_SWARM_RUNNER_VERSION` to `3.1` (the newest `3.1.x`), `3` (the newest `3.x.y`) or `current` (CircleCI's current release); the distributor then trusts the manifest's hash (weaker), and looks again every 24 hours. No second setting is needed to float. To go back, pin an older version. Refer to [The version policy](operations.md#the-version-policy).
 
 On Windows, `runner-distributor-windows` decides in the same way, with the same variables. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 
@@ -157,7 +157,7 @@ It follows them. Machine runner 3 on a host has no auto-update: you update the p
 
 ## How do I verify a release?
 
-Each release has a `SHA256SUMS` file and a keyless cosign signature that was made with the CircleCI OIDC token. Refer to [Verify a release](install-linux.md#verify-a-release), or [Verify a release](install-windows.md#verify-a-release) on Windows. The runner binary is a separate download. On Linux, the distributor verifies its SHA-256 and the entrypoint checks it at every container start. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux).
+Each release has a `SHA256SUMS` file and a keyless cosign signature that was made with the CircleCI OIDC token. Refer to [Verify a release](install-linux.md#verify-a-release), or [Verify a release](install-windows.md#verify-a-release) on Windows. Those pages run the signature check, the ref check (`refs/heads/main` in the certificate), and the checksum check. The runner binary is a separate download. On Linux, the distributor verifies its SHA-256 and the entrypoint checks it at every container start. Refer to [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux).
 
 ## Can a fork pull request use these runners?
 

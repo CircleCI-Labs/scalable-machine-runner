@@ -24,7 +24,7 @@ The [FAQ](docs/faq.md#why-swarm-and-not-container-runner-or-another-runner) has 
 
 ## How it works
 
-One stack file for each operating system defines one service for each resource class, and add-on stack files add the persistent, docker-build, and microVM classes, and on Windows a class with your own image. The replicas of a service are runner containers that poll `runner.circleci.com` for jobs over outbound HTTPS. The runner is in single-task mode, so a container claims one job and exits, and Swarm creates a new container. Nodes carry labels, and services carry constraints, so you decide where each class runs.
+The main stack file for each operating system ships one default resource class (`linux-default` on Linux, `windows-default` on Windows), the token proxy, and the runner distributor. Add-on stack files add the persistent, docker-build, and microVM classes, on Linux `linux-java` and `linux-hardened` in `linux/stack/classes-extra.yaml`, and on Windows a class with your own image. The replicas of a service are runner containers that poll `runner.circleci.com` for jobs over outbound HTTPS. The runner is in single-task mode, so a container claims one job and exits, and Swarm creates a new container. Nodes carry labels, and services carry constraints, so you decide where each class runs.
 
 ```mermaid
 flowchart TB
@@ -33,29 +33,26 @@ flowchart TB
   subgraph services["Swarm services: one for each resource class"]
     direction LR
     s1["linux-default<br/>replicas: 2"]
-    s2["linux-hardened<br/>replicas: 1"]
-    s3["windows-default<br/>replicas: 2"]
+    s2["windows-default<br/>replicas: 2"]
   end
 
   r1["container 1"]
   r2["container 2"]
   r3["container 1"]
-  r4["container 1"]
-  r5["container 2"]
+  r4["container 2"]
   api["runner.circleci.com<br/>Runners connect outbound over HTTPS 443 only"]
 
   nodes --> services
   s1 --> r1 & r2
-  s2 --> r3
-  s3 --> r4 & r5
-  r1 & r2 & r3 & r4 & r5 --> api
+  s2 --> r3 & r4
+  r1 & r2 & r3 & r4 --> api
 ```
 
 You build nothing. The one image that the project publishes is the token proxy, `ccilabs/machine-runner-swarm-proxy` on Docker Hub, which holds the class tokens: the stack pulls it, and a release bundle names the image of that release by digest. On Linux, the global service `runner-distributor` keeps the runner in a volume on every node, and the stack mounts it into stock images such as `cimg/base`, so `docker stack deploy` is the whole install. On Windows, the global service `runner-distributor-windows` does the same for the runner and portable Git, which the stack mounts into stock Windows Server Core. Refer to [Concepts](docs/concepts.md) for the model, the job lifecycle, and what a clean environment covers.
 
 ## Quickstart
 
-You need Docker Engine 24 or later, the [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, root access to the node, and an organization admin who agreed to the [CircleCI Runner Terms](https://circleci.com/legal/runner-terms/). The quickstarts take you from nothing to a first job in a dozen commands:
+You need the [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, root access to the node, and an organization admin who agreed to the [CircleCI Runner Terms](https://circleci.com/legal/runner-terms/). Linux needs Docker Engine 24 or later; Windows Server needs Docker Engine and CLI 28.0 or later ([why](docs/install-windows.md#prerequisites)). The quickstarts take you from nothing to a first job in a dozen commands:
 
 - [Quickstart on Linux](docs/quickstart-linux.md): one node as a trial, or the start of a cluster. Start Swarm, create the secrets, and deploy. Nothing is installed on a node by hand.
 - [Quickstart on Windows Server](docs/quickstart-windows.md): Server 2022 or 2025, in six steps.

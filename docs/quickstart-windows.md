@@ -10,7 +10,7 @@ This page takes you from nothing to a first job on one Windows Server node with 
 
 ## Before you start
 
-- A Windows Server 2022 or 2025 host that is not a domain controller, with Docker Engine in Windows-container mode, a clock on NTP, and outbound HTTPS. Refer to [Prerequisites](install-windows.md#prerequisites) for the details, and to [Sizing](#sizing-and-pending-replicas) for the CPU and memory.
+- A Windows Server 2022 or 2025 host that is not a domain controller, with Docker Engine and CLI 28.0 or later in Windows-container mode (the stack files mount a subpath of a volume; `.\windows\Setup.ps1` checks the version), a clock on NTP, and outbound HTTPS. Refer to [Prerequisites](install-windows.md#prerequisites) for the details, and to [Sizing](#sizing-and-pending-replicas) for the CPU and memory.
 - Your organization's runner namespace, and an organization admin who agreed to the [CircleCI Runner Terms](https://circleci.com/legal/runner-terms/).
 - The [CircleCI CLI](https://circleci.com/docs/guides/toolkit/circleci-cli/) 1.4.0 or later, signed in. It can run on your workstation.
 - [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) 2.4 or later on the host, to verify the release. [Verify a release](install-windows.md#verify-a-release) says how to install it.

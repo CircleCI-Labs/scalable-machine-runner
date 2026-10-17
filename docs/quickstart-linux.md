@@ -60,7 +60,7 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
      sudo linux/setup.sh --check --swarm-init
      ```
 
-   - **Cluster.** Check every node, create the Swarm on the first one with an address that the others can reach, and join the rest. Open the [inter-node ports](multi-node.md#inter-node-ports) first. A first cluster of one manager and two workers is enough. A node needs nothing else: the stack installs the runner on each node that joins.
+   - **Cluster.** Check every node, create the Swarm on the first one with an address that the others can reach, and join the rest. Open the [inter-node ports](multi-node.md#inter-node-ports) first. The shipped Linux class overlays are encrypted, so a multi-node cluster also needs IP protocol 50 (ESP) between nodes ([Encrypted class networks](multi-node.md#encrypted-class-networks)). A first cluster of one manager and two workers is enough. A node needs nothing else: the stack installs the runner on each node that joins.
 
      ```bash
      sudo linux/setup.sh --check                             # on every node
@@ -70,7 +70,7 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
      sudo docker node ls                                     # on the manager: every node is Ready
      ```
 
-     Run steps 4 to 6 on the manager. Refer to [Multi-Node Clusters](multi-node.md) for labels, zones, and quorum.
+     Run steps 4 to 6 on the manager. Refer to [Multi-Node Clusters](multi-node.md) for labels, zones, quorum, and encrypted overlays.
 
 4. Create the Swarm secret for the token. The helper asks for it with hidden input and never prints it. The token goes to the token proxy only. Then create the placeholder that the runners read instead of a token: any value works.
 
@@ -139,6 +139,6 @@ The helper checks the node, starts Swarm, creates the secrets, and deploys the s
 ## Next
 
 - [Install on Linux with Docker Swarm](install-linux.md): the same steps by hand, RHEL, and the release verification.
-- [Resource Classes](resource-classes.md): add classes, and change sizes and replica counts. `linux-java` and `linux-hardened` are in `linux/stack/classes-extra.yaml`. A class is a service, its token secret `<service>-token` and its network, and the secret and the network are also listed on `token-proxy`, which finds its classes in its secrets: there is no variable to set.
+- [Resource Classes](resource-classes.md): add classes, and change sizes and replica counts. `linux-java` and `linux-hardened` are in `linux/stack/classes-extra.yaml`; deploy that file with an extra `-c` together with `runners.yaml`. A class is a service, its token secret `<service>-token` and its network, and the secret and the network are also listed on `token-proxy`, which finds its classes in its secrets: there is no variable to set.
 - [Security](security.md): choose between the default and the hardened class before you give a class to a team.
 - [Operations](operations.md): pin or roll back the runner version, rotate tokens, and run the cluster.

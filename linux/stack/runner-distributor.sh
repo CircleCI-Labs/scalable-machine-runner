@@ -84,6 +84,11 @@ for h in $hashes; do
   case $h in *[!0-9a-f]*) die "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h (or the word manifest)" ;; esac
   [ ${#h} -eq 64 ] || die "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h (or the word manifest)"
 done
+# The list is for an exact version (the default is the pin's own). A floating version changes, and its hashes with it: the manifest's hash.
+if [ "$kind" != exact ] && [ -n "$hashes" ]; then
+  hashes=
+  log "version $want floats: the SHA-256 list is for an exact version, so the hash of each version comes from the manifest"
+fi
 case $base in
   https://* | file://*) ;;   # file:// is a local directory: nobody on the path
   http://*) [ -n "$hashes" ] || [ "${MACHINE_RUNNER_SWARM_ALLOW_HTTP:-false}" = true ] ||

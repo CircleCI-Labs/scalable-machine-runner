@@ -145,6 +145,11 @@ function Get-DistributorSetting {
     foreach ($h in $hashes) {
         if ($h -notmatch '^[0-9a-f]{64}$') { throw "MACHINE_RUNNER_SWARM_RUNNER_SHA256 holds a value that is not a SHA-256: $h (or the word manifest)" }
     }
+    # The list is for an exact version (the default is the pin's own). A floating version changes, and its hashes with it: the manifest's hash.
+    if ($kind -ne 'exact' -and $hashes.Count -gt 0) {
+        $hashes = @()
+        Write-DistributorLog "version $want floats: the SHA-256 list is for an exact version, so the hash of each version comes from the manifest"
+    }
     if ($base -notmatch '^(https|file)://') {   # file:// is a local directory (a share that is mounted): nobody on the path
         if ($base -notmatch '^http://') { throw "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL must be an https:// URL, got '$base'" }
         if ($hashes.Count -eq 0 -and "$env:MACHINE_RUNNER_SWARM_ALLOW_HTTP" -ne 'true') {

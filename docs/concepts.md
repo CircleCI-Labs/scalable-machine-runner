@@ -6,7 +6,7 @@ page-description: How Swarm services map to resource classes, what the token pro
 
 # Concepts
 
-The stack runs CircleCI machine runner 3 as Docker Swarm services. Swarm handles replicas, restarts, secrets, and placement. This repository adds a stack file for each operating system, a small entrypoint and a runner distributor service for Linux, and optional setup helpers. Read this page before you change a stack file or choose between the default and the hardened class.
+Machine runner swarm runs CircleCI machine runner 3 as Docker Swarm services. Swarm handles replicas, restarts, secrets, and placement. Read this page before you change a stack file or choose between the default and the hardened class.
 
 ## Services are resource classes
 
@@ -37,7 +37,7 @@ flowchart TB
   r3["container 1"]
   r4["container 1"]
   r5["container 2"]
-  api["runner.circleci.com<br/>Runners connect outbound over HTTPS 443 only"]
+  api["runner.circleci.com<br/>Outbound HTTPS 443 only, through the token proxy for single-task classes"]
 
   nodes --> services
   s1 --> r1 & r2
@@ -46,7 +46,7 @@ flowchart TB
   r1 & r2 & r3 & r4 & r5 --> api
 ```
 
-The runner containers poll CircleCI for work. Nothing connects to a runner, so the stack publishes no ports.
+The runner containers poll CircleCI for work, through the token proxy in the single-task classes. Nothing connects to a runner, so the main stack files publish no ports.
 
 `deploy.replicas` is the number of runners in the class, and so the number of jobs it runs at the same time. A replica that fits on no node stays `Pending` until capacity is free. [Resource classes](resource-classes.md) covers sizing.
 
@@ -70,7 +70,7 @@ flowchart LR
 
 The network decides who may claim, not what a runner says. The proxy allows a claim only from an address that Swarm DNS lists now for `tasks.<SERVICE>` of a class, once for each container. A container that is not a runner, or a runner that claims a second time, gets 403. A claim whose outcome is unknown counts as a claim, so the proxy fails closed. [The token proxy](security.md#the-token-proxy) lists what it protects and what it does not, and [Monitor the token proxy](operations.md#monitor-the-token-proxy) covers what happens when it is down.
 
-What it changes for you:
+What the proxy changes for you:
 
 - **Secrets.** You create the class secrets `<SERVICE>-token`, and one more, `runner-placeholder-token`, with a dummy token. Only the proxy mounts the class secrets. Every runner mounts the placeholder.
 - **Classes.** A new single-task class needs two lines in the proxy: its network (Linux) and its secret `<SERVICE>-token`. See [Resource classes](resource-classes.md#define-a-class). The persistent classes do not use the proxy.
@@ -83,18 +83,19 @@ Each operating system has one main stack file, `runners.yaml`, that defines the 
 
 | File | System | Adds |
 |---|---|---|
+| `classes-extra.yaml` | Linux | `linux-java` and the hardened `linux-hardened` |
 | `persistent.yaml`, `docker-build.yaml`, `ssh-rerun.yaml` | Linux and Windows | Persistent, Docker-build and SSH-rerun classes |
 | `custom-image.yaml` | Windows | A class with your own image |
 | `microvm.yaml` | Linux | MicroVM classes ([MicroVM jobs](microvm.md)) |
 | `container-mode.yaml` | Linux | The prototype container agent for Docker-executor jobs ([Container mode](container-mode.md)) |
 
-An add-on stack file is not a patch of the main file. It defines services of its own, and each service needs its own resource class and `<SERVICE>-token` secret. On Linux, `docker-build.yaml`, `ssh-rerun.yaml`, and `microvm.yaml` also add their classes to the `token-proxy` service, so deploy them together with `runners.yaml`. `persistent.yaml` and `container-mode.yaml` keep their own tokens and do not touch the proxy.
+An add-on stack file is not a patch of the main file. It defines services of its own, and each service needs its own resource class and `<SERVICE>-token` secret. On Linux, `classes-extra.yaml`, `docker-build.yaml`, `ssh-rerun.yaml`, and `microvm.yaml` also add their classes to the `token-proxy` service, so deploy them together with `runners.yaml`. `persistent.yaml` and `container-mode.yaml` keep their own tokens and do not touch the proxy.
 
 `docker stack deploy -c runners.yaml -c persistent.yaml runners` merges the files in the order given, as Docker Compose does for several `-f` files. A service, network, secret, or volume that only one file defines is added, and a key that several files set takes the value of the later file. YAML anchors work inside one file only, so each add-on stack file repeats the common service settings.
 
 Pass the same files, in the same order, on every deploy: the services of a file you leave out stay as they are and stop following your edits, and `--prune` removes them. Check a merge without a Swarm with `docker stack config -c runners.yaml -c persistent.yaml`.
 
-## Single-task and continuous mode
+## Single-task or continuous mode
 
 The stack files set the runner mode with `CIRCLECI_RUNNER_MODE`.
 
@@ -134,7 +135,7 @@ On Linux the entrypoint checks the runner, sets up the users, and starts it, and
 
 Stopping a service sends SIGTERM to the runner. The runner drains: it accepts no new job and lets the running job finish. The stack sets `stop_grace_period: 5h5m`, the runner `max_run_time` of 5 hours plus 5 minutes.
 
-On Windows, `stop_grace_period` does not hold a busy container: a stop from outside kills its job after about 5 seconds. An update, a scale-down, or a node drain is affected, so change a Windows service while its class is idle ([Stop a busy Windows container](operations.md#stop-a-busy-windows-container)).
+On Windows, change a class only while it is idle ([why](operations.md#stop-a-busy-windows-container)).
 
 ## What a clean environment covers
 
@@ -154,7 +155,7 @@ Containers are not a virtual machine boundary. Read [Security](security.md) befo
 
 ## The runner distributor on Linux
 
-The Linux services use stock images such as `cimg/base`, and the image holds none of the runner. The service `runner-distributor` puts the runner on every Linux node that runs the classes of `runners.yaml`. `docker stack deploy` is the whole install, and the only upgrade path.
+The Linux services use stock images such as `cimg/base`, and the image holds none of the runner. The service `runner-distributor` puts the runner on every Linux node that runs the classes of `runners.yaml`. `docker stack deploy` is the only upgrade path.
 
 - **The service.** `runner-distributor` is a `global` service from the stock `alpine:3` image (pinned by digest), so it runs on every Linux node, also a Docker-build node and a node that joins later. A microVM node (`machine-runner-swarm.microvm=true`) is the exception: the microVM classes download their own runner into each VM ([MicroVM jobs](microvm.md#the-runner-in-a-vm)). Its script, `linux/stack/runner-distributor.sh`, is a Swarm config.
 - **The volume.** It writes to `runner-bin`, one named volume on every node. Each version has a directory `versions/<VERSION>` with `bin/circleci-runner`, `SHA256`, `VERSION`, and `TARBALL`. The link `current` points to the active version and moves with one atomic rename. The file `history` lists the versions in the order they were active.
@@ -165,11 +166,11 @@ A container resolves `current` once, so a running job keeps its version and the 
 
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | Behavior |
 |---|---|
-| `3.1.13` (an exact version, the default: the newest that CI tests) | A pin. The tarball is checked against the SHA-256 values that the stack file carries for it, not the manifest. It never changes by itself, makes no request once installed, and switches to an installed version without network, so a rollback needs no download. A release of this repository bumps the version and its SHA-256 values together |
+| `3.1.13` (an exact version, the default: the newest that CI tests) | A pin. The tarball is checked against the SHA-256 values that the stack file carries for it, not the manifest. It never changes by itself, makes no request once installed, and switches to an installed version without network, so a rollback needs no download. A release bumps the version and its SHA-256 values together |
 | `3.1` or `3` | A floating line: the newest `3.1.x`, or the newest `3.x.y`, of CircleCI's manifest. Checked again every 24 hours. It ignores the default SHA-256 list and trusts the hash of the manifest, which is weaker |
 | `current` | CircleCI's current release, within major version 3. Checked again every 24 hours, and trusts the manifest hash like the floating lines |
 
-See [The version policy](operations.md#the-version-policy) for the rules, [how this compares with machine runner 3, container runner and the orchestrator](operations.md#how-this-compares-with-machine-runner-3-container-runner-and-the-orchestrator), [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux) for the settings, and [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) for the checks.
+See [The version policy](operations.md#the-version-policy) for the rules, [Upgrade the runner on Linux](operations.md#upgrade-the-runner-on-linux) for the settings, and [Runner binary integrity on Linux](security.md#runner-binary-integrity-on-linux) for the checks.
 
 ## The runner distributor on Windows
 
@@ -229,9 +230,9 @@ Windows containers have no step-down: the runner and the jobs run as `ContainerA
 
 Treat each Windows resource class as a trust boundary: one token for each class, restricted users, rotated tokens. `MACHINE_RUNNER_SWARM_JOB_SUDO` and `MACHINE_RUNNER_SWARM_JOB_USER` do not exist on Windows. See [Token model on each OS](security.md#token-model-on-each-os).
 
-## Placement
+## Placement labels
 
-Services carry constraints and nodes advertise capabilities. The built-in properties are `node.platform.os` and `node.platform.arch`. This repository adds the node labels `machine-runner-swarm.zone`, `machine-runner-swarm.docker-build`, `machine-runner-swarm.microvm`, `machine-runner-swarm.windows-ltsc2022`, `machine-runner-swarm.windows-ltsc2025`, and `machine-runner-swarm.class.<SERVICE>`. See [Multi-node clusters](multi-node.md).
+Services carry constraints and nodes advertise capabilities. The built-in properties are `node.platform.os` and `node.platform.arch`. Machine runner swarm adds the node labels `machine-runner-swarm.zone`, `machine-runner-swarm.proxy`, `machine-runner-swarm.docker-build`, `machine-runner-swarm.container-mode`, `machine-runner-swarm.microvm`, `machine-runner-swarm.windows-ltsc2022`, `machine-runner-swarm.windows-ltsc2025`, and `machine-runner-swarm.class.<SERVICE>`. See [Multi-node clusters](multi-node.md).
 
 ## Why Swarm and not plain Compose
 
@@ -241,9 +242,9 @@ A plain `docker compose up` restarts the same container, so the environment is n
 
 | Term | Meaning |
 |---|---|
-| Stack file | A Compose-format YAML file that `docker stack deploy` reads: a main file (`runners.yaml`) for each OS and optional add-on stack files. This documentation never calls an add-on stack file an overlay, because an overlay network is a different thing |
+| Stack file | A Compose-format YAML file that `docker stack deploy` reads: a main file (`runners.yaml`) for each OS and optional add-on stack files. An add-on stack file is not a Docker overlay network |
 | Stack | The services that one `docker stack deploy` creates, named `runners` here, so the service `linux-default` is `runners_linux-default` in Swarm commands |
 | Resource class, service | A resource class is the CircleCI name, `<NAMESPACE>/<NAME>`, that a job selects with `resource_class`. A service is the Swarm object that runs it, named like the class without the namespace |
 | `runner-bin`, `current`, record | `runner-bin` is the named volume, one on every node, that holds the runner versions under `versions/<VERSION>`. `current` is the link to the active version, which a container resolves once at start. The record is `versions/<VERSION>/SHA256`, the SHA-256 of the binary in `sha256sum -c` format, which the entrypoint checks at every container start |
 | Runner distributor | The `global` service `runner-distributor` (Linux) or `runner-distributor-windows` (it installs portable Git too) that downloads, verifies, and installs the runner into `runner-bin`, moves `current`, and looks again every `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` |
-| Drain | A **runner drain** happens when the runner gets SIGTERM: it takes no new job and finishes the running one. A **node drain** is `docker node update --availability drain`: Swarm stops the tasks of that node, which starts a runner drain in each, and starts replacements on other nodes. This documentation always says which one |
+| Drain | A **runner drain** happens when the runner gets SIGTERM: it takes no new job and finishes the running one. A **node drain** is `docker node update --availability drain`: Swarm stops the tasks of that node, which starts a runner drain in each, and starts replacements on other nodes. |

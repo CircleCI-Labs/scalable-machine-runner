@@ -83,7 +83,8 @@ The runner log contains `403 (Forbidden)` for the claim, and the log of `runners
 **Fix.**
 
 - `not a runner of any class`: the class is not in the proxy (a new class needs its secret `<service>-token` and, on Linux, its network under `token-proxy`; refer to [Define a class](resource-classes.md#define-a-class)), the proxy is not on the network of the class, or the claim comes from a container that is not a runner.
-- `this runner has already claimed a task`: the proxy restarted while the runner was idle, or the proxy moved to another node and started with the state `latch` or a lost state. The runner retries every 5 seconds until it is replaced, at its idle timeout. Replace it now with `docker service update --force --update-parallelism 0 runners_<service>`. Refer to [Restart the proxy](operations.md#restart-the-proxy) and [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves).
+- `this runner has already claimed a task`: the proxy restarted while the runner was idle, the proxy moved to another node and started with a lost state, or a claim of this runner had an unknown outcome and the proxy latched the runner to fail closed. The runner retries every 5 seconds until it is replaced, at its idle timeout. On Linux, replace the idle runners now with `docker service update --force --update-parallelism 0 runners_<service>`. **On Windows, do not**: it kills the busy jobs. Remove only the refused containers instead. Refer to [Replace refused runners on Windows](operations.md#replace-refused-runners-on-windows), [A claim whose outcome is unknown](operations.md#a-claim-whose-outcome-is-unknown), [Restart the proxy](operations.md#restart-the-proxy) and [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves).
+- `too many claims` (429), or a 503 with `Retry-After`: the proxy limits each client IP, and serves at most 512 requests at once. A runner stays far below the limits, so look for a client that polls in a loop, or for a proxy that is overloaded. Refer to [Monitor the token proxy](operations.md#monitor-the-token-proxy) and [Capacity and concurrency](operations.md#capacity-and-concurrency).
 
 ### The runner log shows x509 certificate errors
 
@@ -91,7 +92,7 @@ The log contains `x509: certificate has expired or is not yet valid`, or `x509: 
 
 **Cause.** The clock of the node drifted, so TLS to CircleCI fails silently as far as the job is concerned. Or an inspecting proxy re-signs the traffic with a CA that the container does not trust.
 
-**Fix.** Check the clock with `timedatectl show -p NTPSynchronized --value`, which must print `yes`, and fix NTP on the node. For a proxy CA, add the CA to your image. Refer to [Do proxies and custom certificate authorities work?](faq.md#do-proxies-and-custom-certificate-authorities-work).
+**Fix.** Check the clock with `timedatectl show -p NTPSynchronized --value`, which must print `yes`, and fix NTP on the node. For the CA of an inspecting proxy or of your CircleCI server, add the CA to your image for the runner and the jobs. The token proxy and the distributors read other stores, so they need their own step. Refer to [Proxies and certificate authorities, component by component](operations.md#proxies-and-certificate-authorities-component-by-component), [Private certificate authorities](images.md#private-certificate-authorities), and [Do proxies and custom certificate authorities work?](faq.md#do-proxies-and-custom-certificate-authorities-work).
 
 ### Jobs queue but no runner claims them
 
@@ -112,8 +113,9 @@ The runner inventory shows idle runners, and jobs stay queued.
 **Fix.** Ask the runner API how many tasks wait, and compare it with the replicas:
 
 ```console
+$ RUNNER_API=https://runner.circleci.com   # the runner API of your installation, for CircleCI server
 $ curl -s -H "Circle-Token: $CIRCLECI_API_TOKEN" \
-    "https://runner.circleci.com/api/v3/runner/tasks?resource-class=<namespace>/<class>"
+    "$RUNNER_API/api/v3/runner/tasks?resource-class=<namespace>/<class>"
 ```
 
 A count above 0 with idle replicas points at a limit or at a class name that no service serves. Cancel the tasks of a class that no longer has runners, and ask CircleCI support to raise `maxConcurrentTasks`. Refer to [Capacity and concurrency](operations.md#capacity-and-concurrency).
@@ -132,7 +134,7 @@ A Swarm command fails with `The swarm does not have a leader. It's possible that
 
 **Cause.** The managers lost their quorum. A majority of them must be online: two of three, or three of five. Without it, running jobs finish, but no replacement task starts, so the capacity of the cluster drops to zero.
 
-**Fix.** Bring the managers back, starting with the ones that were stopped last, and check `docker node ls` on a reachable manager. A manager that is locked needs `docker swarm unlock`. If the managers are lost for good, recover the cluster from one surviving manager with `docker swarm init --force-new-cluster`. Refer to [Back up the managers, and recover](operations.md#back-up-the-managers-and-recover) and [Managers and quorum](multi-node.md#managers-and-quorum).
+**Fix.** Bring the managers back, starting with the ones that were stopped last, and check `docker node ls` on a reachable manager. A manager that is locked needs `docker swarm unlock`. If the managers are lost for good, recover the cluster from one surviving manager with `docker swarm init --force-new-cluster --advertise-addr <manager IP address>`. Refer to [Back up the managers, and recover](operations.md#back-up-the-managers-and-recover) and [Managers and quorum](multi-node.md#managers-and-quorum).
 
 ### Error: Swarm is encrypted and needs to be unlocked
 
@@ -166,13 +168,50 @@ The job ends with a message that points at an issue with your infrastructure, an
 
 **Fix.** Find the container that ran the job with `docker service ps --no-trunc runners_<service>`: a task that ended with `non-zero exit` or on a node that is `Down` names the cause. Self-hosted runners do not retry a job, so rerun it. Refer to [Node death](operations.md#node-death) and [Stop a busy Windows container](operations.md#stop-a-busy-windows-container).
 
+### Many jobs fail within seconds on one node
+
+Jobs of a class fail within seconds, or end with no work done, and `docker stack ps runners` lists many tasks of one node that ended seconds after they started. The node is `Ready`, and the other nodes are fine.
+
+**Cause.** A node that is `Ready` can still fail every job it claims: a full disk, a runner volume whose link `current` is wrong, a Docker engine in a bad state, a clock that is far off, or a broken route to the registry or to CircleCI after the claim. A failed task is replaced at once, and the replacement claims again, so the broken node takes a large share of the jobs of the class and fails them one after another. Swarm does not see it, because the node answers its heartbeats.
+
+**Fix.**
+
+1. Count the tasks that ended in the last minute for each node. A node far above the others is the one:
+
+   ```console
+   $ docker stack ps runners --format '{{.Node}} {{.CurrentState}}' | grep -E ' (Complete|Failed) [0-9]+ seconds? ago' | cut -d' ' -f1 | sort | uniq -c | sort -rn
+   $ docker stack ps runners --no-trunc --format '{{.Node}} {{.Name}} {{.CurrentState}} {{.Error}}' | grep '<node name>' | head -20
+   ```
+
+2. Stop it from taking jobs. On Linux, drain it. On Windows, pause it: jobs that fail in seconds free the node quickly, and a drain would kill a good job after about 5 seconds ([A Windows node](operations.md#a-windows-node)).
+
+   ```console
+   $ docker node update --availability drain <node name>
+   ```
+
+3. Find the cause on the node:
+
+   ```console
+   $ df -h /var/lib/docker
+   $ docker run --rm alpine true
+   $ docker run --rm -v runners_runner-bin:/v:ro alpine ls -l /v/current
+   $ docker ps -a --filter 'name=runners_' --format '{{.Names}} {{.Status}}' | head
+   $ timedatectl show -p NTPSynchronized --value
+   ```
+
+   Read the log of the newest failed container (`docker logs <container>`) and, on Linux, `journalctl -u docker -n 100`. A full disk is in [Free disk space](operations.md#free-disk-space). A missing `current` means that the distributor has not installed a runner on this node: read its log ([The runner waits for the distributor, and then exits with code 80](#the-runner-waits-for-the-distributor-and-then-exits-with-code-80)).
+4. Fix the cause and set the node `active`. If the cause is not clear, take the node out for good: run `docker swarm leave` on it, then `docker node rm <node name>` on a manager, and rebuild it.
+5. Rerun the jobs that failed. Self-hosted runners do not retry a job by themselves.
+
+To see it early, alert on the count in step 1 and keep a [canary job](operations.md#monitor-the-cluster) for each class.
+
 ### A task is rejected because the image cannot be pulled
 
 `docker service ps` shows `rejected` with `No such image` or an authentication error.
 
 **Cause.** The node cannot pull the image: the registry is not reachable, the image is private, or the registry rate limit applies.
 
-**Fix.** Check egress to the registry, deploy with `docker stack deploy --with-registry-auth` for a private registry, and use a mirror or authenticated pulls. Refer to [Registry needs](multi-node.md#registry-needs).
+**Fix.** Check egress to the registry, deploy with `docker stack deploy --with-registry-auth` for a private registry, and use a mirror or authenticated pulls. Refer to [Registry needs](multi-node.md#registry-needs), and, for a site without a route to the registries, [What needs the internet](operations.md#what-needs-the-internet).
 
 ### Error: This node is not a swarm manager
 
@@ -223,7 +262,7 @@ If the binary changes again, find out what writes to the volume: a privileged co
 
 A line of `docker service logs runners_runner-distributor` reads `runner-distributor: cannot download <address>`, for the file `manifest.json` or for a tarball such as `<version>/circleci-runner_linux_amd64.tar.gz`. The distributor keeps the runner that it has and tries again in 5 minutes. Without a runner, the runner containers of the node end in the entry above.
 
-**Cause.** The node cannot reach `circleci-binary-releases.s3.amazonaws.com` or your mirror: an egress rule, a proxy, DNS, or the clock. Or the file is not on the mirror, for example the version that you pinned. An `https` mirror needs a certificate from a public certificate authority, because the distributor uses the CA bundle of the stock Alpine image.
+**Cause.** The node cannot reach `circleci-binary-releases.s3.amazonaws.com` or your mirror: an egress rule, a proxy, DNS, or the clock. Or the file is not on the mirror, for example the version that you pinned. An `https` mirror needs a certificate from a public certificate authority, because the distributor uses the CA bundle of the stock Alpine image. A proxy rarely helps: the `wget` of the distributor reads only the lowercase `http_proxy`, sends an `https://` URL to the proxy as a plain `GET` and not as a `CONNECT`, and ignores `no_proxy`.
 
 **Fix.** Download the same file from the node with the same tool:
 
@@ -231,7 +270,7 @@ A line of `docker service logs runners_runner-distributor` reads `runner-distrib
 $ docker run --rm alpine wget -q -O /dev/null https://circleci-binary-releases.s3.amazonaws.com/circleci-runner/manifest.json && echo reachable
 ```
 
-Open the host in [Egress hosts](security.md#egress-hosts), or fix the mirror. Refer to [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror).
+Open the host in [Egress hosts](security.md#egress-hosts), or fix the mirror. A mirror that the node reaches without a proxy is the dependable setup. Refer to [Run the downloads from a mirror](operations.md#run-the-downloads-from-a-mirror) and [Proxies and certificate authorities, component by component](operations.md#proxies-and-certificate-authorities-component-by-component).
 
 ### The distributor log shows SHA-256 mismatch
 
@@ -335,9 +374,11 @@ A job on a docker-build class fails with `permission denied while trying to conn
 
 ### The disk fills up
 
-**Cause.** Each finished job leaves a stopped container, and Swarm keeps the last five tasks of every slot by default.
+A task fails with `no space left on device`, Docker commands on the node fail, or the node stops taking jobs.
 
-**Fix.** Lower the history and prune. Refer to [Free disk space](operations.md#free-disk-space).
+**Cause.** Each finished job leaves a stopped container, and Swarm keeps the last five tasks of every slot by default. Images, build cache, and logs add to it.
+
+**Fix.** Stop the node from taking jobs, free the space, and set the history limit. The steps, and the schedule that keeps it from happening again, are in [Free disk space](operations.md#free-disk-space). A node that fails jobs because its disk is full can also look like [Many jobs fail within seconds on one node](#many-jobs-fail-within-seconds-on-one-node).
 
 ## Windows
 
@@ -363,7 +404,7 @@ The container runs and logs the start-up lines, but the runner never claims a jo
 
 **Cause.** The service `runner-distributor-windows` has not flipped the links `current` and `git\current` of the volume on this node yet. This is normal on a new node, because the first download of the runner and of portable Git takes a few minutes. It lasts when the distributor cannot install.
 
-**Fix.** Read the log of the distributor: `docker service logs runners_runner-distributor-windows`. A `SHA-256 mismatch`, a `cannot download` line, or `not adopting it` names the cause. The service must run on the node: `docker service ps runners_runner-distributor-windows` needs a task there, so the node must carry the label `machine-runner-swarm.windows-ltsc2022=true`, and the base image must be pulled. On a host behind a proxy, set `HTTPS_PROXY` on the distributor service. For a site without internet access, refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
+**Fix.** Read the log of the distributor: `docker service logs runners_runner-distributor-windows`. A `SHA-256 mismatch`, a `cannot download` line, or `not adopting it` names the cause. The service must run on the node: `docker service ps runners_runner-distributor-windows` needs a task there, so the node must carry the label `machine-runner-swarm.windows-ltsc2022=true`, and the base image must be pulled. On a host behind a proxy, set `HTTPS_PROXY` on the distributor service (it reads `HTTPS_PROXY` only, and no `NO_PROXY`). For a site without internet access, refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 
 ### The distributor of Windows keeps a version that should be gone
 
@@ -444,6 +485,7 @@ $ docker version
 $ docker node ls
 $ docker stack ps runners --no-trunc
 $ docker service logs --tail 200 runners_<service>
+$ docker service logs --tail 200 runners_token-proxy
 ```
 
 On Linux, include the runner version and the log of the distributor: `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node, and `docker service logs --tail 100 runners_runner-distributor`. On Windows, include the log of `runner-distributor-windows`: `docker service logs --tail 100 runners_runner-distributor-windows`. Then open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).

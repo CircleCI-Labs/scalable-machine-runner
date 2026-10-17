@@ -123,3 +123,29 @@ docker build -f windows/images/example/Dockerfile --build-arg WINDOWS_TAG=ltsc20
 Push the result to a registry that every Windows node can pull from, because Swarm does not share local images. Then set the image of the `windows-custom` service in `windows\stack\custom-image.yaml`, an add-on stack file, and create the resource class and the secret `windows-custom-token` for it. Deploy it with `-c windows\stack\runners.yaml -c windows\stack\custom-image.yaml`. The file [`examples/windows-custom-image.yml`](../examples/windows-custom-image.yml) shows a job on that class. Rebuild the image when the base image or a tool changes.
 
 A stop of a busy Windows container kills its job after about 5 seconds, with stock images and with your own. Refer to [Stop a busy Windows container](operations.md#stop-a-busy-windows-container), which also shows an optional image that lifts the limit.
+
+## Private certificate authorities
+
+The runner, its task agent, and the steps of a job read the certificate store of the image of their class. To trust a private authority for them (an inspecting proxy, your CircleCI server, a private registry, or a package host), put the authority in an image of your own. The stack files need no change for that. This repository does not test it.
+
+On Linux, add the certificate to the system store, in a Dockerfile on top of the image that you use:
+
+```dockerfile
+FROM cimg/base:2026.10@sha256:<digest>
+USER root
+COPY my-ca.crt /usr/local/share/ca-certificates/my-ca.crt
+RUN update-ca-certificates
+USER circleci
+```
+
+On Windows, add it to the `Root` store of the image, on top of stock Server Core. Go reads the Windows certificate store, so the runner needs the authority there:
+
+```dockerfile
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+COPY my-ca.cer C:/ca/my-ca.cer
+RUN certutil -addstore -f Root C:\ca\my-ca.cer
+```
+
+Some tools keep their own bundle, so set what they read in the image as well: `NODE_EXTRA_CA_CERTS` for Node.js, `REQUESTS_CA_BUNDLE` for Python `requests`, and the keystore of Java. On Unix, `SSL_CERT_FILE` replaces the roots of a Go program instead of adding to them, so point it at a bundle that holds the public roots and yours.
+
+The image does not reach the other components that make TLS calls: the Docker engine of the node (for image pulls), the token proxy, and the two runner distributors each use another store. [Proxies and certificate authorities, component by component](operations.md#proxies-and-certificate-authorities-component-by-component) lists what each one needs, and what does not work.

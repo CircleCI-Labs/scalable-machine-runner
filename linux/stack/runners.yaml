@@ -7,9 +7,9 @@
 # That is the whole install: nothing is installed on the nodes by hand. The service runner-distributor runs on every Linux node, also
 # on a node that joins later, and keeps the circleci-runner of that node in the per-node volume runner-bin. The
 # runner version is an exact pin by default (the newest one that this repository's CI tests, which a release of this repository
-# bumps), so the nodes never change version by themselves. 3.1, 3 or current make it float (with MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest:
-# a floating version has no list of its own, so the manifest's hash is trusted, which is weaker): the distributor then follows CircleCI's
-# manifest and checks again every 24 hours. Every class mounts the volume read-only into a STOCK
+# bumps), so the nodes never change version by themselves. 3.1, 3 or current make it float (the manifest's hash is trusted, which is
+# weaker, and the default SHA-256 list of the pin is ignored): the distributor then follows CircleCI's manifest and checks again every
+# 24 hours. Every class mounts the volume read-only into a STOCK
 # image (cimg/*, Alpine, UBI); its entrypoint (a Swarm config) waits for the runner, checks its SHA-256 and starts it. Which version
 # the nodes run is a setting of the distributor service only (MACHINE_RUNNER_SWARM_RUNNER_VERSION below): an upgrade, a pin and a
 # rollback change that one service, and the runner services never restart. docs/operations.md
@@ -76,7 +76,7 @@ x-placement: &placement
 x-distributor-env: &distributor-env
   # An exact version is a pin, and the default: the newest runner version that this repository's CI tests (docs/releasing.md says how a
   # release bumps it). The nodes keep it until you change it. A floating value follows CircleCI's manifest and is looked at again every
-  # CHECK_INTERVAL: 3.1 (the newest 3.1.x), 3 (the newest 3.x.y) or current (CircleCI's current release). Set RUNNER_SHA256=manifest with it.
+  # CHECK_INTERVAL: 3.1 (the newest 3.1.x), 3 (the newest 3.x.y) or current (CircleCI's current release).
   MACHINE_RUNNER_SWARM_RUNNER_VERSION: ${MACHINE_RUNNER_SWARM_RUNNER_VERSION:-3.1.13}
   MACHINE_RUNNER_SWARM_RUNNER_MAJOR: ${MACHINE_RUNNER_SWARM_RUNNER_MAJOR:-3}   # current is adopted only within this major version
   MACHINE_RUNNER_SWARM_CHECK_INTERVAL: ${MACHINE_RUNNER_SWARM_CHECK_INTERVAL:-24h}   # how often a floating version asks the manifest again; a pin never does
@@ -85,8 +85,9 @@ x-distributor-env: &distributor-env
   # The SHA-256 of the tarballs that may be installed (comma-separated, every architecture of the fleet). The default is the pin's own, amd64,
   # arm64, ppc64le and s390x of the version above, so the pinned install does not rest on the hash of CircleCI's manifest, which comes from
   # the same bucket as the tarball. A release of this repository bumps the version and these four values together (ci/release.sh: check_runner_pin;
-  # docs/releasing.md). Another version needs its own values from the checksums.txt of its release, or the word manifest, which trusts the
-  # manifest's hash (weaker: a floating 3.1, 3 or current has no other choice). An http:// mirror needs this list, or MACHINE_RUNNER_SWARM_ALLOW_HTTP.
+  # docs/releasing.md). Another exact version needs its own values from the checksums.txt of its release, or the word manifest, which trusts
+  # the manifest's hash (weaker). A floating 3.1, 3 or current ignores any list. An http:// mirror needs a usable list for an exact pin, or
+  # MACHINE_RUNNER_SWARM_ALLOW_HTTP (a floating value has no list).
   MACHINE_RUNNER_SWARM_RUNNER_SHA256: ${MACHINE_RUNNER_SWARM_RUNNER_SHA256:-cc02803cc8367b404a7ceb7810afea23a22526ebc478ac4e8de7c585c9fbfe77,2763ff1d7241ce380cdf88130d60a8a12610811356d5cd7f948e6e853b0daaf3,980b9099a2af792c2cef3e9629907811cf269d12a7a3152464d1c72b619f3f51,743bc959480cf5e172944a29d99425863b8cadfd256c6553f332952393d5f4e8}
 
 # A class of another stack file needs the same five keys: the entrypoint and its config, user "0", the placeholder secret, and the volume.
@@ -231,7 +232,7 @@ configs:
   # renames them after a change of the file, and CI checks it. "docker stack deploy" then creates the new config and updates the
   # services that use it.
   entrypoint: {name: machine-runner-swarm-entrypoint-219dd9e6972a, file: circleci-runner-entrypoint}
-  distributor: {name: machine-runner-swarm-distributor-eb5990697314, file: runner-distributor.sh}
+  distributor: {name: machine-runner-swarm-distributor-56ce91e33a59, file: runner-distributor.sh}
 
 volumes:
   runner-bin: {}   # one per node: the runner of that node

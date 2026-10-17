@@ -66,19 +66,24 @@ Describe 'Get-DistributorSetting' {
         @($s.Hashes) | Should -Be @(('a' * 64), ('b' * 64))
     }
 
-    It 'reads the word manifest as no list, so that the hash of the manifest is trusted (the way to float)' {
-        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = 'manifest' }
+    It 'reads the word manifest as no list, so that the hash of the manifest is trusted for an exact pin' {
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; RUNNER_SHA256 = 'manifest' }
         @((Get-DistributorSetting).Hashes).Count | Should -Be 0
-        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = 'Manifest' }
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; RUNNER_SHA256 = 'Manifest' }
         @((Get-DistributorSetting).Hashes).Count | Should -Be 0
-        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = ('a' * 64) + ',manifest' }
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; RUNNER_SHA256 = ('a' * 64) + ',manifest' }
         { Get-DistributorSetting } | Should -Throw '*not a SHA-256*'
     }
 
-    It 'wants an https download base, unless a SHA-256 list is set (or http is allowed on purpose)' {
+    It 'ignores a SHA-256 list for a floating value, so the hash comes from the manifest' {
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = ('a' * 64) }
+        @((Get-DistributorSetting).Hashes).Count | Should -Be 0
+    }
+
+    It 'wants an https download base, unless a SHA-256 list is set for an exact pin (or http is allowed on purpose)' {
         Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; DOWNLOAD_BASE_URL = 'http://mirror.example.com/runner' }
         { Get-DistributorSetting } | Should -Throw '*must be https://*'
-        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = 'manifest'; DOWNLOAD_BASE_URL = 'http://mirror.example.com/runner' }
+        Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = ('a' * 64); DOWNLOAD_BASE_URL = 'http://mirror.example.com/runner' }
         { Get-DistributorSetting } | Should -Throw '*must be https://*'
         Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1.13'; RUNNER_SHA256 = ('a' * 64); DOWNLOAD_BASE_URL = 'http://mirror.example.com/runner' }
         (Get-DistributorSetting).Base | Should -Be 'http://mirror.example.com/runner'
@@ -197,11 +202,11 @@ Describe 'Resolve-Runner' {
         @($r.Accept) | Should -Be @('e' * 64)
     }
 
-    It 'resolves a floating line with an explicit SHA-256 list, and gives up on a line that the manifest does not have' {
+    It 'resolves a floating line from the manifest even when a SHA-256 list is set, and gives up on a line that the manifest does not have' {
         Use-DistributorEnvironment @{ RUNNER_VERSION = '3.1'; RUNNER_SHA256 = ('f' * 64) }
         $r = Resolve-Runner (Get-DistributorSetting)
         $r.Version | Should -Be '3.1.10'
-        @($r.Accept) | Should -Be @('f' * 64)
+        @($r.Accept) | Should -Be @('c' * 64)
         Use-DistributorEnvironment @{ RUNNER_VERSION = '5' }
         Resolve-Runner (Get-DistributorSetting) | Should -BeNullOrEmpty
         Use-DistributorEnvironment @{ RUNNER_VERSION = '3.3' }

@@ -239,7 +239,7 @@ The directory holds the stack files and `runner-distributor.ps1`, the script tha
 | `windows-default-ssh` | `ssh-rerun.yaml` | Supports Rerun job with SSH and publishes port 54782. Untested on Windows. Refer to [Rerun job with SSH](resource-classes.md#rerun-job-with-ssh) |
 
 - `runners.yaml` needs the secrets `windows-default-token` and `runner-placeholder-token`. Each add-on stack file needs its own `<service>-token` secret, and `custom-image.yaml` has a placeholder image that you replace with yours.
-- The distributor settings are variables of `docker stack deploy` and need no edit: the runner version (an exact pin by default, with the SHA-256 values of its tarballs, or `3.1`, `3` or `current` with `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest`, which follow CircleCI's manifest and are checked every 24 hours), a mirror and an explicit SHA-256 list. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
+- The distributor settings are variables of `docker stack deploy` and need no edit: the runner version (an exact pin by default, with the SHA-256 values of its tarballs, or `3.1`, `3` or `current`, which follow CircleCI's manifest and are checked every 24 hours), a mirror and an explicit SHA-256 list for an exact pin. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 - A Server 2025 node runs the shipped `ltsc2022` services. For a class on the `ltsc2025` image, copy a service under a new name and resource class, use the `ltsc2025` image tag, and set the constraint `node.labels.machine-runner-swarm.windows-ltsc2025 == true`.
 
 The optional classes are add-on stack files. Add each with another `-c` flag, and pass the same list of files on every deploy ([how the files merge](concepts.md#add-on-stack-files-and-how-they-merge)). Each add-on stack file repeats the anchors of `runners.yaml`, because an anchor does not reach into another file, and declares the volume `runner-bin` too, so that it also loads alone. When you change a common setting, change it in every file that you use.
@@ -331,7 +331,7 @@ The first example is a first run: it deploys the shipped `runners.yaml` unchange
 
 ## Upgrade
 
-Nothing to stage. By default the distributor pins the exact runner version that this release of the repository tests, with the SHA-256 values of its tarballs, and the nodes keep it until you change it. `3.1`, `3` or `current` (with `MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest`, which trusts the hash of the manifest and is weaker) make it follow CircleCI's manifest and check every 24 hours. A pin or a rollback is two variables of `docker stack deploy`: the version and its SHA-256 values (or `manifest`). Running jobs keep the version they started with, and the runner services never restart. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
+Nothing to stage. By default the distributor pins the exact runner version that this release of the repository tests, with the SHA-256 values of its tarballs, and the nodes keep it until you change it. `3.1`, `3` or `current` (weaker: they trust the hash of the manifest) make it follow CircleCI's manifest and check every 24 hours. A pin of your own is two variables of `docker stack deploy`: the version and its SHA-256 values (or `manifest` for an exact version without a list). Running jobs keep the version they started with, and the runner services never restart. Refer to [Upgrade the runner on Windows](operations.md#upgrade-the-runner-on-windows).
 
 ## Stop and uninstall
 

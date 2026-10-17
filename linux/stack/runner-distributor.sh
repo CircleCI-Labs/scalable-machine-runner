@@ -15,7 +15,8 @@
 #                                                    of the fleet). The stack file sets the values of the pinned version, so the default
 #                                                    install does not rest on the hash of the manifest, which comes from the same bucket as the
 #                                                    tarball. The word manifest means no list: the hash of the manifest is trusted, which is
-#                                                    weaker, and the way to float (3.1, 3, current) or to move to a version of your own
+#                                                    weaker, and the way to install an exact version that is not the pin without its hashes.
+#                                                    A floating value (3.1, 3, current) ignores any list and takes the hash from the manifest
 #   MACHINE_RUNNER_SWARM_ALLOW_HTTP                  true accepts an http:// download base without a SHA-256 list (a lab or a test mirror: the
 #                                                    manifest hash then protects nothing against someone on the path)
 # It resolves the version, downloads the tarball when versions/<version> is missing or does not match its record, verifies the

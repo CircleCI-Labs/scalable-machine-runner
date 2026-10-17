@@ -341,12 +341,17 @@ echo "RESULT test=distributor phase=http-mirror exit=$dist_rc without_a_list_or_
 dist_once http-list "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "MACHINE_RUNNER_SWARM_RUNNER_SHA256=${PUBLISHED_SHA[$OLD]}" MACHINE_RUNNER_SWARM_ALLOW_HTTP=false
 echo "RESULT test=distributor phase=http-mirror with_a_list=$([[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] && echo installed || echo refused)"
 [[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] || fail "an http:// mirror with a SHA-256 list was refused: $dist_log"
-dist_once http-floating "MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1" MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest MACHINE_RUNNER_SWARM_ALLOW_HTTP=false
+dist_once http-floating "MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1" MACHINE_RUNNER_SWARM_ALLOW_HTTP=false
 [[ $dist_rc -ne 0 && $dist_log == *"the URL must be https://"* ]] || fail "a floating version over http:// was accepted: $dist_log"
+# floating with the default pin list still takes the manifest hash (not the list)
+dist_once float-list "MACHINE_RUNNER_SWARM_RUNNER_VERSION=3.1" "MACHINE_RUNNER_SWARM_RUNNER_SHA256=${PUBLISHED_SHA[$OLD]}"
+[[ $dist_log == *"the SHA-256 list is for an exact version"* && $dist_log == *"[ ok ] current -> versions/$NEW"* ]] ||
+  fail "floating with the pin list did not install from the manifest hash: $dist_log"
+echo "RESULT test=distributor phase=floating-pin-list ignored_list=yes installed=$NEW"
 dist_once ftp-refused "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" "MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL=ftp://mirror.example.com/runner"
 [[ $dist_rc -ne 0 && $dist_log == *"must be an https:// URL"* ]] || fail "an ftp:// mirror was accepted: $dist_log"
 echo "RESULT test=distributor phase=http-mirror floating_over_http=refused ftp=refused"
-# the word manifest is no list: the hash of the manifest is trusted (the way to float), and a stray word is no SHA-256
+# the word manifest is no list: the hash of the manifest is trusted for an exact pin, and a stray word is no SHA-256
 dist_once manifest-word "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest
 [[ $dist_log == *"[ ok ] current -> versions/$OLD"* ]] || fail "the word manifest did not select the hash of the manifest: $dist_log"
 dist_once bad-word "MACHINE_RUNNER_SWARM_RUNNER_VERSION=$OLD" MACHINE_RUNNER_SWARM_RUNNER_SHA256=$zeros,manifest

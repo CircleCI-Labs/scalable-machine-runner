@@ -34,8 +34,9 @@
       MACHINE_RUNNER_SWARM_RUNNER_SHA256      the tarball SHA-256 values that may be installed, separated by commas (amd64 and arm64). The
                                               stack file sets the values of the pinned version, so the default install does not rest on the
                                               hash of the manifest, which comes from the same bucket as the tarball. The word manifest
-                                              means no list: the hash of the manifest is trusted, which is weaker, and the way to float
-                                              (3.1, 3, current) or to move to a version of your own
+                                              means no list: the hash of the manifest is trusted, which is weaker, and the way to install
+                                              an exact version that is not the pin without its hashes. A floating value (3.1, 3, current)
+                                              ignores any list and takes the hash from the manifest
       MACHINE_RUNNER_SWARM_ALLOW_HTTP         true accepts an http:// download base without a SHA-256 list (a lab or a test mirror: the
                                               manifest hash then protects nothing against someone on the path)
       MACHINE_RUNNER_SWARM_TOOLS_BASE_URL     optional: a directory with PortableGit-<version>-64-bit.7z.exe (arm64: -arm64.7z.exe) and 7zr.exe

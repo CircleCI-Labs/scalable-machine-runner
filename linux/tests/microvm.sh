@@ -193,10 +193,8 @@ phase_deploy() {
     case " $spec " in *" MACHINE_RUNNER_SWARM_RUNNER_VERSION="*) vset=${spec#*MACHINE_RUNNER_SWARM_RUNNER_VERSION=}; vset=${vset%% *} ;; esac
     case " $spec " in *" MACHINE_RUNNER_SWARM_RUNNER_SHA256="*) ;;
       *)
-        case $vset in
-          current|[0-9]|[0-9]*.[0-9]) ;;   # floating: the manifest hash, no manifest= setting
-          *) given[-1]="${given[-1]} MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest" ;;
-        esac
+        # floating (current, 3, 3.1): the manifest hash, no manifest= setting; an exact version gets manifest
+        grep -Eqx 'current|[0-9]+|[0-9]+\.[0-9]+' <<< "$vset" || given[-1]="${given[-1]} MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest"
         ;;
     esac
     given[-1]="${given[-1]} MACHINE_RUNNER_SWARM_ALLOW_HTTP=true"

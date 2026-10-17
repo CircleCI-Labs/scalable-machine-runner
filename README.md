@@ -10,16 +10,16 @@ Self-hosted CircleCI runners that give every job a clean container, on the Docke
 ## Why use it
 
 - **A clean container for every job.** Each Swarm service is one resource class. A runner claims one job and exits, and Swarm starts a new container, so no job inherits files from the last one.
-- **VM-grade isolation when you need it.** Kata Containers microVM classes run each job in its own microVM, on Swarm (experimental).
-- **Linux and Windows in one cluster.** Linux amd64 and arm64, and Windows Server 2022 and 2025, with labels that decide where each class runs.
-- **Jobs never see the class token.** A token proxy holds it, and the runners hold a placeholder (the persistent classes are the exception).
+- **A microVM per job, experimental.** Kata Containers classes run each job in its own microVM on Linux amd64 nodes with KVM. CI runs them against a fake API only ([MicroVM jobs](docs/microvm.md)).
+- **Linux and Windows.** Linux amd64 and arm64, and Windows Server 2022 and 2025, with labels that decide where each class runs. A mixed Linux and Windows cluster was verified by hand.
+- **Class tokens stay out of runner containers.** A token proxy holds them, and the runners hold a placeholder. The persistent classes are the exception, and a job that escapes onto the proxy's node can reach the tokens ([Security](docs/security.md#the-token-proxy)).
 - **No runner install on your hosts.** A distributor service installs the runner on every node, pins a tested version and checks its SHA-256. An update changes one service and interrupts no job on Linux.
 - **Scale by setting replicas.** `deploy.replicas` is the number of concurrent jobs of a class.
 - **Signed releases.** Each release bundle carries a keyless cosign signature, and the token proxy image is pinned by digest.
 
 ## Who it is for
 
-Teams that run Docker hosts or Windows Server and want something as simple as Docker Compose, without Kubernetes. `docker stack deploy` is the whole install. It sits between a single machine runner (jobs share a host) and a Kubernetes container runner.
+Teams that run Docker hosts or Windows Server and do not want Kubernetes. Setup is a resource class, a token, two secrets and one `docker stack deploy`. It sits between a single machine runner (jobs share a host) and a Kubernetes container runner.
 
 Use something else when:
 
@@ -42,13 +42,20 @@ Follow [Quickstart on Linux](docs/quickstart-linux.md) or [Quickstart on Windows
 
 ## Documentation
 
-**Read the docs for everything else: [circleci-labs.github.io/machine-runner-swarm](https://circleci-labs.github.io/machine-runner-swarm/).**
+Read the docs at [circleci-labs.github.io/machine-runner-swarm](https://circleci-labs.github.io/machine-runner-swarm/). They follow `main`. The `docs/` folder of a release bundle matches that release.
 
-The site follows `main`. The `docs/` folder of a release bundle is the documentation of that release. Start with [Concepts](docs/concepts.md), then [Install on Linux](docs/install-linux.md) or [on Windows Server](docs/install-windows.md), [Multi-Node Clusters](docs/multi-node.md), [Resource Classes](docs/resource-classes.md), [Security](docs/security.md), [Operations](docs/operations.md), and the [FAQ](docs/faq.md). [Examples](examples) has a job config for every class.
+| You want to | Read |
+|---|---|
+| Understand the design | [Concepts](docs/concepts.md) |
+| Install for production | [Linux](docs/install-linux.md), [Windows Server](docs/install-windows.md), [multi-node clusters](docs/multi-node.md) |
+| Add or size a class | [Resource classes](docs/resource-classes.md) |
+| Judge the risk | [Security](docs/security.md) |
+| Run it | [Operations](docs/operations.md), [FAQ](docs/faq.md) |
+| Copy a job config | [Examples](examples) |
 
 ## What is tested
 
-The project is pre-release `0.x`: a minor release can change stack files, so read the [release notes](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) before you upgrade. [CI/CD](docs/ci.md#what-is-tested) lists every test and every gap. A statement in these pages that the table does not support is an overclaim, so please report it.
+The project is pre-release (0.x): a minor release can change stack files, so read the [release notes](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) before you upgrade. [CI/CD](docs/ci.md#what-is-tested) lists every test and every gap. If a page claims more than this table shows, please open an issue.
 
 | What | Status | How it is checked |
 |---|---|---|
@@ -60,15 +67,22 @@ The project is pre-release `0.x`: a minor release can change stack files, so rea
 | RHEL 8 or later | Documented, not tested | The steps follow Docker's documentation |
 | ppc64le and s390x | Emulated start only | No job runs |
 | CircleCI server, hosts without internet, proxies, private certificate authorities | Not tested | CircleCI cloud only |
-| MicroVM classes (Kata Containers) | Experimental | A fake CircleCI API on nested KVM. One real job ran by hand |
-| Container mode, docker-build, persistent, and Rerun job with SSH classes | Experimental | Config and contract checks. No real job in CI |
+| MicroVM classes (Kata Containers) | Experimental | A fake CircleCI API on nested KVM, amd64 on one cloud. No real job in CI. One real job ran by hand |
+| Docker-build, persistent, and Rerun job with SSH classes | Experimental | Config and contract checks. No real job in CI |
+| Container mode | Prototype | Unit tests and a Swarm test against a fake API. Never run against CircleCI |
 | Windows Server 2019, Hyper-V isolation, `add_ssh_keys` | Not tested | Not exercised |
 
-Known limits: capacity is fixed (no autoscaling, no node creation), one token proxy runs on a manager (not high availability, use three managers in production), and containers share the host kernel. The [FAQ](docs/faq.md#what-is-not-in-this-release) lists what is not in this release.
+Known limits:
+
+- Capacity is fixed: no autoscaling, no node creation.
+- One token proxy runs on a manager. It is not highly available, so use three managers in production.
+- Containers share the host kernel.
+
+The [FAQ](docs/faq.md#what-is-not-in-this-release) lists what is not in this release.
 
 ## Support
 
-This is a CircleCI Labs project: a solution that field engineers at CircleCI built with customers. It is **not** an official CircleCI product, and CircleCI support does not cover it. Field engineering handles issues on a best-effort basis, without an SLA.
+This is a CircleCI Labs project: a solution that field engineers at CircleCI built with customers. It is **not** an official CircleCI product, and CircleCI support does not cover it. Field engineers handle issues on a best-effort basis, without an SLA.
 
 - Open a [GitHub issue](https://github.com/CircleCI-Labs/machine-runner-swarm/issues) for a bug or a feature request. Search [Troubleshooting](docs/troubleshooting.md) first, and include the output of [Collect information for a bug report](docs/troubleshooting.md#collect-information-for-a-bug-report).
 - Ask the community on [CircleCI Discuss](https://discuss.circleci.com/).

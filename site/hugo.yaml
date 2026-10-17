@@ -1,12 +1,15 @@
 # Hugo configuration of the docs site (docs/ci.md, "Docs site"). Run site/stage.sh first: it writes content/.
 #
-# The repository name appears in these two places only: baseURL (the GitHub Pages address) and the GitHub
-# link of the menu below. Change both when the repository is renamed to machine-runner-swarm. stage.sh derives
-# its GitHub links from baseURL, and the publish job follows the repository it runs in.
+# The GitHub Pages URL uses the repository name (scalable-machine-runner today; machine-runner-swarm after v0.1.0).
+# baseURL and the GitHub menu link below must match that name. GitHub redirects repository URLs after a rename,
+# but not the old Pages path. stage.sh derives blob/tree links from the GitHub menu URL.
 baseURL: https://circleci-labs.github.io/scalable-machine-runner/
 title: Machine runner swarm
 locale: en-US
 enableRobotsTXT: true
+disableKinds:
+  - taxonomy
+  - term
 
 module:
   hugoVersion:
@@ -56,6 +59,7 @@ menu:
 params:
   description: Run CircleCI machine runner 3 as Docker Swarm services, one service for each resource class.
   externalLinkDecoration: false
+  repo: https://github.com/CircleCI-Labs/scalable-machine-runner
 
   # The landing page (layouts/home.html). "When to use it" comes from README.md; the rest is in the template.
   home:
@@ -90,10 +94,10 @@ params:
   banner:
     # The banner cannot be dismissed: custom.css hides the close button, and custom/banner.html renders the text.
     # A new key shows the banner again to visitors who closed an old one.
-    key: labs-disclaimer-main
+    key: labs-disclaimer-pre-1-0
     message: >-
-      **CircleCI Labs project.** Not an official CircleCI product and not supported by CircleCI Support.
-      These pages follow main: the pages of a release are in docs/ of its bundle.
+      **CircleCI Labs project, pre-1.0.** Not an official CircleCI product and not supported by CircleCI Support.
+      These pages track main. Each release bundle includes the docs for that release.
 
   navbar:
     displayTitle: true

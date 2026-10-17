@@ -3,7 +3,7 @@
 # the large images are loaded once. Prints one RESULT line per test and exits non-zero if any fails.
 #
 #   run-all.sh              stack-config, helper, ephemerality, exit80, token, task, proxy (the token proxy), placement, persistent, drain,
-#                           limits, network, distributor (install, upgrade, rollback, auto, pruning), then the bats unit tests on cimg,
+#                           limits, network, distributor (install, upgrade, rollback, auto, pruning), container-mode, then the bats unit tests on cimg,
 #                           Alpine and UBI
 #   run-all.sh token drain  only these tests ("bats" is the unit-test matrix). CI runs the suite as four jobs, each with its own list
 #                           (.circleci/continue.yml, the job linux-swarm); an unknown name fails before anything starts
@@ -13,7 +13,7 @@
 # runner download. Env: see lib.sh (SWARM_TEST_DIND_IMAGE, SWARM_TEST_CIMG_IMAGE, SWARM_TEST_CACHE, SWARM_TEST_KEEP).
 set -uo pipefail
 
-all=(stack-config helper ephemerality exit80 token task proxy placement persistent drain limits network distributor bats)
+all=(stack-config helper ephemerality exit80 token task proxy placement persistent drain limits network distributor container-mode bats)
 if [[ ${1:-} == --list ]]; then
   printf '%s\n' "${all[@]}"
   exit 0

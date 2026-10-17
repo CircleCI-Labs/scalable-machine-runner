@@ -222,6 +222,7 @@ services:
           - node.platform.os == linux
           - node.labels.machine-runner-swarm.docker-build != true   # never on a Docker-build node: the tokens must not sit next to the Docker socket
           - node.labels.machine-runner-swarm.microvm != true   # Docker's DNS, which finds tasks.<service>, does not work in a Kata VM
+          - node.labels.machine-runner-swarm.container-mode != true   # never next to the container agent (container-mode.yaml): it holds the Docker socket
           - "${MACHINE_RUNNER_SWARM_PROXY_PLACEMENT:-node.role == manager}"   # the node that keeps proxy-state; with the label above, no runner runs there
 
 networks:

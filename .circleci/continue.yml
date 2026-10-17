@@ -345,6 +345,23 @@ jobs:
             ci/config-names.sh || rc=1
             exit $rc
 
+  test-container-mode:
+    description: >
+      The container agent (linux/stack/container-agent, a prototype): gofmt, go vet and the unit tests with the race
+      detector, against a fake runner API and a fake Docker engine. The Swarm test is linux/tests/container-mode.sh.
+    docker:
+      - image: cimg/go:1.27@sha256:d370371192063607c1237351759d8ab0c49f5e37ab7c3bd7553b09c8b62247d5
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: gofmt, go vet, go test -race (linux/stack/container-agent)
+          working_directory: linux/stack/container-agent
+          command: |
+            test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+            go vet ./...
+            go test -race -count=1 ./...
+
   lint-powershell:
     docker:
       - image: mcr.microsoft.com/powershell:7.5-ubuntu-24.04@sha256:042240d57ec9e47e511033b92625a8d95875ee5860af3015992c248b58a8be81
@@ -1613,6 +1630,8 @@ workflows:
       - lint-dockerfiles
       - lint-yaml
       - lint-stack
+      - test-container-mode:
+          filters: not pipeline.parameters.docs-only
       - lint-powershell
       - lint-markdown
       - lint-docs-links
@@ -1706,7 +1725,7 @@ workflows:
           filters: not pipeline.parameters.docs-only
       - linux-swarm:
           name: linux-swarm-b
-          groups: placement persistent drain limits network bats
+          groups: placement persistent drain limits network container-mode bats
           filters: not pipeline.parameters.docs-only
       - linux-image-example:
           filters: not pipeline.parameters.docs-only
@@ -1759,6 +1778,7 @@ workflows:
             - lint-dockerfiles
             - lint-yaml
             - lint-stack
+            - test-container-mode
             - lint-powershell
             - lint-markdown
             - lint-docs-links

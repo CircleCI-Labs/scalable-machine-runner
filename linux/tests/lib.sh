@@ -158,7 +158,8 @@ session_begin() {
       idocker "$SWARM_TEST_WRK" volume ls -q | xargs -r docker exec -i "$SWARM_TEST_WRK" docker volume rm >/dev/null 2>&1 || true
       # only the placement test wants the worker; the others must not schedule tasks onto it
       idocker "$SWARM_TEST_MGR" node update --availability "$([[ $want_worker == true ]] && echo active || echo drain)" "$SWARM_TEST_WRK" >/dev/null
-      idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.docker-build "$SWARM_TEST_WRK" >/dev/null 2>&1 || true
+      idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.docker-build --label-rm machine-runner-swarm.container-mode \
+        --label-rm machine-runner-swarm.proxy --label-rm machine-runner-swarm.microvm "$SWARM_TEST_WRK" >/dev/null 2>&1 || true
     fi
     idocker "$SWARM_TEST_MGR" node update --label-rm machine-runner-swarm.docker-build "$SWARM_TEST_MGR" >/dev/null 2>&1 || true
     return 0

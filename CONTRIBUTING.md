@@ -99,6 +99,7 @@ CI runs the groups as four parallel jobs, each with its own list of groups (`lin
 | `drain.sh` | SIGTERM during a job: the job finishes |
 | `limits.sh` | `init`, `ulimits`, pids, memory, CPU, reservations, and the capability sets take effect |
 | `network.sh` | Network isolation between classes, and between the replicas of a class |
+| `container-mode.sh` | The prototype container agent in a Swarm, against a fake API: no agent on a proxy or microVM node, a Docker-executor job with a service on `localhost`, the limits, no socket or token in the job, the cap, the cleanup, and the orphans. Needs the Go and pause images |
 | `bats/run.sh` | The unit tests of the entrypoint on `cimg/base`, Alpine, and UBI minimal |
 
 The suite needs no installed runner. The distributor of the shipped stack installs it, as it does for a user, from a small HTTP mirror in the harness: a `manifest.json` and the tarballs of the versions that a test publishes (`publish_runner` in `lib.sh`). `ephemerality.sh`, `persistent.sh`, `limits.sh`, `network.sh`, and `drain.sh` publish `fake-runner.sh`, a stand-in for `circleci-runner` that runs a fake job through the step-down and exits, as a single-task runner does. `task.sh`, `token.sh`, `exit80.sh`, `placement.sh`, `distributor.sh`, and the idle case of `drain.sh` publish the real runner binary, which the harness downloads once and checks against the SHA-256 of CircleCI's manifest.
@@ -120,7 +121,7 @@ The Windows tests in `windows/tests` print `CHECK <name> PASS|FAIL` lines and on
 
 ### Swarm config names
 
-The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change `linux/stack/circleci-runner-entrypoint`, `linux/stack/runner-distributor.sh`, or `windows/runner-distributor.ps1`, run `ci/config-names.sh --write` and commit the new names with the change. `lint-stack`, `linux/tests/stack-config.sh`, and the release job run `ci/config-names.sh` and fail on a stale name. Nobody decides when to bump a number.
+The entrypoint and the distributor scripts reach the nodes as Swarm configs. A Swarm config cannot change, and a service keeps the old file when the name stays, so the name of each config in the stack files carries the first 12 hex digits of the SHA-256 of its file. After you change `linux/stack/circleci-runner-entrypoint`, `linux/stack/runner-distributor.sh`, `windows/runner-distributor.ps1`, or a file of `linux/stack/container-agent` (the sources of the prototype container agent, which `container-mode.yaml` carries as configs), run `ci/config-names.sh --write` and commit the new names with the change. `lint-stack`, `linux/tests/stack-config.sh`, and the release job run `ci/config-names.sh` and fail on a stale name. Nobody decides when to bump a number.
 
 ### Documentation checks
 

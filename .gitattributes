@@ -3,3 +3,5 @@
 *.sh text eol=lf
 linux/stack/circleci-runner-entrypoint text eol=lf
 windows/stack/runner-distributor.ps1 text eol=lf
+linux/stack/container-agent/*.go text eol=lf
+linux/stack/container-agent/go.mod text eol=lf

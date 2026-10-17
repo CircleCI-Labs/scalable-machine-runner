@@ -1,0 +1,35 @@
+# A Docker-executor job for a container-mode class (docs/container-mode.md, a prototype): a primary container and a
+# PostgreSQL service. The containers share one network namespace, so the service listens on localhost:5432.
+#
+# 1. Replace my-namespace with your organization's runner namespace. docker-default is the class that
+#    MACHINE_RUNNER_SWARM_CONTAINER_CLASSES names in linux/stack/container-mode.yaml, and its resource class must exist with that name.
+#    A class serves one mode: do not use a machine class here, and do not use this class with machine: true.
+# 2. Save the file as .circleci/config.yml in a project of the organization, commit it and push.
+#
+# The job has no checkout, so it does not depend on a project's files.
+version: 2.1
+
+jobs:
+  db:
+    docker:
+      - image: cimg/base:stable
+      - image: cimg/postgres:16.4
+        environment:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+    resource_class: my-namespace/docker-default
+    steps:
+      - run:
+          name: Wait for the service on localhost
+          command: |
+            for i in $(seq 1 30); do
+              (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null && { echo "postgres answers on localhost:5432"; exit 0; }
+              sleep 1
+            done
+            echo "no service on localhost:5432"; exit 1
+
+workflows:
+  db:
+    jobs:
+      - db

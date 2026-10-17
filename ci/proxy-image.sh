@@ -10,6 +10,8 @@
 #                                     credentials). The last job of the pipeline of main runs it, after every test has passed
 #   ci/proxy-image.sh rehearse        sign and verify a throwaway image in a registry of its own (no credential, no Docker Hub), with the OIDC token of
 #                                     this job, for the ref of this branch. Every pipeline runs it, so that main is not the first real run of the signing
+#   ci/proxy-image.sh verify DIGEST   verify the signature of REPO@DIGEST as assemble, edge and the release do (identity, issuer, and the ref on every signature),
+#                                     with the tries described at verify_signature (needs the OIDC project and definition IDs, no Docker Hub credential)
 #   ci/proxy-image.sh credentials     check the credentials at once: fails when REQUIRE_CREDENTIALS is set and they are missing, says so otherwise
 #   ci/proxy-image.sh digest          print the digest of REPO:sha-<12>, the image of this commit (no credentials; exit 1 when there is none)
 #   ci/proxy-image.sh release-tags vX.Y.Z   verify the signature of that digest and give it the release tags (needs the credentials):
@@ -35,6 +37,7 @@
 #   PROXY_IMAGE_MAIN_REF   the ref of main that edge is compared with (default origin/main, fetched; the test names a local one)
 #   SIGN_EXPECT_REF        the ref that the certificate of a signature must name (default refs/heads/main; the signing rehearsal of any
 #                          other branch names its own)
+#   SIGN_VERIFY_DELAYS     the seconds to wait between the tries of verify_signature (default "5 10 15 25 35": six tries over 90 s; the test uses zeros)
 #   REHEARSAL_REGISTRY     the registry of the rehearsal (default localhost:5000, the registry:2 container of the job; plain HTTP)
 #   PROXY_IMAGE_RELEASE_TAGS   the release tags that exist, one per line (default: the vX.Y.Z tags of this repository)
 #
@@ -200,12 +203,27 @@ push() {
 
 digest_of() { craned digest "$1"; }
 
+# How the signature is stored and read back: one mode for the signing, the verification and the signing rehearsal (cosign 3.1.3).
+# cosign 3 packs a keyless signature into a Sigstore bundle and pushes it as a manifest with a subject, an OCI 1.1 referrer of the signed digest.
+# `cosign verify` and `cosign download signature` list the referrers of the digest. Only when they find no bundle do they read the legacy tag
+# sha256-<hex>.sig, and that is where the message "no signatures found" comes from. How the referrers are listed is the registry's, not a setting:
+# when it pushes, the client asks GET /v2/<repo>/referrers/<digest>. A registry that answers 200 keeps the list itself. One that answers 404
+# (registry:2) gets the list as the index tag sha256-<hex>, which the client updates (the referrers tag schema). Reads follow the same two ways,
+# so one code path serves both kinds of registry. --registry-referrers-mode cannot choose between them: in 3.1.3 it applies to the legacy .sig
+# signatures and to `cosign tree` only, and `cosign verify` has no such flag. The legacy .sig scheme is not used: it needs the public Fulcio and
+# Rekor addresses instead of the signing config, and signed_only_on (ci/tools.sh) reads bundles. What is pinned here is the format. It is the
+# default of 3.1.3 and deprecated, but still accepted, so a cosign that drops the flag fails the signing rehearsal of the pull request that
+# updates it, and not main.
+# The first main run, on Docker Hub, found nothing right after the push. A referrer that was just pushed need not be listed at once (or its list
+# is eventually consistent), so verify_signature tries again before it fails.
+cosign_storage=(--new-bundle-format=true)
+
 sign_all() { # DIGEST...: keyless cosign of each digest, the way ci/release.sh signs
   local d
   [ "${PROXY_IMAGE_SIGN:-oidc}" != none ] || { say "signing skipped (PROXY_IMAGE_SIGN=none)"; return 0; }
   for d in "$@"; do
     say "sign ${image_repo}@${d} (keyless, CircleCI OIDC token)"
-    SIGSTORE_ID_TOKEN="$(circleci run oidc get --claims '{"aud":"sigstore"}' --root-issuer)" cosign sign --yes "${image_repo}@${d}" > /dev/null
+    SIGSTORE_ID_TOKEN="$(circleci run oidc get --claims '{"aud":"sigstore"}' --root-issuer)" cosign sign --yes "${cosign_storage[@]}" "${image_repo}@${d}" > /dev/null
     verify_signature "${d}"
   done
 }
@@ -308,17 +326,68 @@ rehearse() {
   say "the same signature is refused for ${other}: the ref check works"
 }
 
+# The seconds between the tries of verify_signature: six tries over 90 s. A referrer that was pushed a moment ago may not be listed yet.
+verify_delays=${SIGN_VERIFY_DELAYS:-5 10 15 25 35}
+
+# verify_once DIGEST REF ID: one try of every check. 0: the signature verifies and every signature names REF. 1: a signature that was read names
+# another ref, which no later read changes. 2: nothing verified or nothing could be read, which a registry that is slow to list may cause, so the
+# caller tries again. verify_step names the check that failed.
+verify_step=
+verify_once() {
+  local d=$1 ref=$2 id=$3 bundles
+  verify_step=verify
+  cosign verify "${cosign_storage[@]}" --certificate-identity "${id}" --certificate-oidc-issuer "${oidc_issuer}" "${image_repo}@${d}" > /dev/null || return 2
+  verify_step=download
+  bundles=$(cosign download signature "${image_repo}@${d}") || return 2
+  [ -n "${bundles}" ] || return 2
+  verify_step=ref
+  signed_only_on "${ref}" <<< "${bundles}" || return 1
+}
+
+# signature_diagnostics DIGEST: what the registry shows of the signatures of a digest, for the log of a failure (stderr; it never fails)
+signature_diagnostics() {
+  local r=${image_repo}@$1 tags
+  local -a flag=()
+  [ "${PROXY_IMAGE_REGISTRY_INSECURE:-}" != 1 ] || flag=(--insecure)
+  {
+    printf '%s\n' "--- cosign tree ${r}"
+    timeout 60 cosign tree "${r}" 2>&1 || true
+    printf '%s\n' "--- tags of ${image_repo} that start with sha256- (referrers tag schema, legacy .sig)"
+    if tags=$(timeout 60 crane ls "${flag[@]}" "${image_repo}" 2>&1); then
+      grep '^sha256-' <<< "${tags}" || printf '(none)\n'
+    else
+      printf 'crane ls failed: %s\n' "${tags}"
+    fi
+  } >&2
+}
+
 # verify_signature DIGEST: keyless, against the pipeline definition that signed it (the release job and the publication are jobs of one pipeline
 # definition), and for the ref SIGN_EXPECT_REF (default refs/heads/main). The identity is the same for every branch, so the ref in the certificate
 # is what tells the image of main from one that a job of another branch signed. Every signature of the digest must name it (ci/tools.sh).
+# A signature that was pushed a moment ago may not be listed yet (docs/releasing.md, "The signing rehearsal"): when nothing verifies or nothing can
+# be read, it tries again after each of verify_delays, and on the last failure shows what the registry holds. A signature of another ref fails at once.
 verify_signature() {
-  local id ref=${SIGN_EXPECT_REF:-refs/heads/main}
+  local d=$1 id ref=${SIGN_EXPECT_REF:-refs/heads/main} delay n=1 rc tries total=0
   [ "${PROXY_IMAGE_SIGN:-oidc}" != none ] || return 0
   id="https://circleci.com/api/v2/projects/${CIRCLE_PROJECT_ID:?}/pipeline-definitions/${PIPELINE_DEFINITION_ID:?}"
-  cosign verify --certificate-identity "${id}" --certificate-oidc-issuer "${oidc_issuer}" "${image_repo}@$1" > /dev/null ||
-    die "the signature of ${image_repo}@$1 does not verify against ${id}"
-  cosign download signature "${image_repo}@$1" | signed_only_on "${ref}" ||
-    die "a signature of ${image_repo}@$1 does not name ${ref} as its source repository ref (OID 1.3.6.1.4.1.57264.1.14), or the certificate cannot be read"
+  tries=$(wc -w <<< "${verify_delays}")
+  tries=$((tries + 1))
+  for delay in ${verify_delays}; do total=$((total + delay)); done
+  for delay in ${verify_delays} stop; do
+    rc=0
+    verify_once "${d}" "${ref}" "${id}" || rc=$?
+    [ "${rc}" -ne 0 ] || return 0
+    [ "${rc}" -eq 2 ] && [ "${delay}" != stop ] || break
+    say "try ${n} of ${tries} failed (${verify_step}): trying again in ${delay} s"
+    sleep "${delay}"
+    n=$((n + 1))
+  done
+  signature_diagnostics "${d}"
+  case ${verify_step} in
+    verify) die "the signature of ${image_repo}@${d} does not verify against ${id} after ${n} tries and ${total} s of waiting)" ;;
+    download) die "cosign download signature reads no signature of ${image_repo}@${d} after ${n} tries and ${total} s of waiting)" ;;
+    *) die "a signature of ${image_repo}@${d} does not name ${ref} as its source repository ref (OID 1.3.6.1.4.1.57264.1.14), or the certificate cannot be read" ;;
+  esac
 }
 
 release_tags() {
@@ -350,6 +419,7 @@ release_tags() {
 
 case "${1:-}" in
   digest) image_digest ;;
+  verify) verify_signature "${2:?usage: ci/proxy-image.sh verify DIGEST}" ;;
   release-tags) release_tags "${2:-}" ;;
   setup) setup ;;
   test) setup; test_images ;;
@@ -359,5 +429,5 @@ case "${1:-}" in
   rehearse) rehearse ;;
   credentials) have_credentials && say "the Docker Hub credentials are set" || no_credentials ;;
   install-tools) install_cosign; install_crane; crane version; cosign version 2>&1 | grep -E '^GitVersion' ;;
-  *) die "usage: ci/proxy-image.sh setup | test | push | assemble | edge | rehearse | credentials | digest | release-tags vX.Y.Z | install-tools" ;;
+  *) die "usage: ci/proxy-image.sh setup | test | push | assemble | edge | rehearse | verify DIGEST | credentials | digest | release-tags vX.Y.Z | install-tools" ;;
 esac

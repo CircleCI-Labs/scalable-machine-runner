@@ -14,7 +14,7 @@
 #             container that is not a runner (either network); the proxy is hardened (non-root, read-only, no capabilities), healthy through the
 #             healthcheck of its image, and logs no token
 #   restart   idle runners are present at a restart WITH state: they may claim afterwards (only an address that claimed stays refused, and it is
-#             released once DNS has not listed it for 30 s)
+#             released once DNS has not listed it for 30 polls in a row: the test waits up to 180 s, until the state file no longer holds it)
 #   endjob    the proxy is down when the jobs end, and for a while after it: whether the runner reports the end of the job once the proxy is back
 #   savefail  the proxy cannot write its state when an idle runner claims: the runner does not get its task (503), the proxy removes state.json
 #             and keeps the marker, and the start after that is the fail-safe one: the API says that tasks run, so every runner present is refused
@@ -254,8 +254,11 @@ echo "RESULT test=proxy phase=claims proxy health_endpoint=$health swarm_health=
 for t in "$TOKEN_DEFAULT" "$TOKEN_JAVA" "$TOKEN_HARDENED"; do
   [[ $(plog) != *"$t"* ]] || fail "the proxy logged a class token"
 done
-[[ -n $(vol sh -c "cat $state_dir/state.json") ]] || fail "the proxy keeps no state"
-echo "RESULT test=proxy phase=claims state=$(vol cat "$state_dir/state.json")"
+state_json=$(vol sh -c "cat $state_dir/state.json")
+[[ -n $state_json ]] || fail "the proxy keeps no state"
+# the state names the addresses of the two runners that claimed (the phase restart waits for their release, so they must be there first)
+[[ $state_json == *"\"$ip_def\""* && $state_json == *"\"$ip_java\""* ]] || fail "the state does not hold the addresses of the runners that claimed ($ip_def, $ip_java): $state_json"
+echo "RESULT test=proxy phase=claims state=$state_json"
 
 # the jobs end on their own; the API gets the end of both, and the runners report success
 ended() { [[ $(jobs_ended step/end) -ge $((end0 + 2)) && $(jobs_ended task/event/cleanup) -ge $((clean0 + 2)) ]]; }
@@ -298,9 +301,20 @@ wait_for "$TIMEOUT" claimed_both "$nip_def" "$nip_java" || fail "the idle runner
 hold
 echo "RESULT test=proxy phase=restart idle_runners_claimed_after_the_restart=yes"
 if [[ $nip_def != "$ip_def" && $nip_java != "$ip_java" ]]; then   # the addresses of the old containers are released after 30 s without DNS
-  old_released() { [[ $(count "$(plog_now)" "released $ip_def (tasks.linux-default)") -ge 1 && $(count "$(plog_now)" "released $ip_java (tasks.linux-java)") -ge 1 ]]; }
-  wait_for 90 old_released || fail "the addresses of the containers that left were not released"
-  echo "RESULT test=proxy phase=restart addresses_of_the_old_containers_released=yes"
+  # The proxy releases an address when 30 polls in a row (one a second, counted from the restart) have not found it in DNS, and Swarm DNS can list a
+  # container that has exited for a while longer: in one run the releases came more than a minute after the restart. So the wait has a deadline of
+  # 180 s, and what it waits for is the condition that matters: neither old address is latched in the state file of the proxy (every release
+  # saves it). It does not wait for the log line "released ...": the proxy limits the lines about single requests (eventf: 2 a second, a burst of
+  # 20) and the state does not depend on any line, and the log of a container that was replaced is gone. An address that is still latched is
+  # refused (403), so the state is also what lets a new container have it.
+  old_released() {
+    local s
+    s=$(vol sh -c "cat $state_dir/state.json" 2> /dev/null) || return 1
+    [[ -n $s && $s != *"\"$ip_def\""* && $s != *"\"$ip_java\""* ]]
+  }
+  released_after=$SECONDS
+  wait_for 180 old_released || fail "the addresses of the containers that left ($ip_def, $ip_java) are still latched after 180 s (the proxy releases an address after 30 s of polls without it in DNS): state $(vol sh -c "cat $state_dir/state.json" 2>&1 | cut -c1-300); $(plog_now | grep -a 'released' | tail -n 4 | cut -c1-120)"
+  echo "RESULT test=proxy phase=restart addresses_of_the_old_containers_released=yes seconds_waited=$((SECONDS - released_after))"
 fi
 [[ $(claim_code "$n_def") == 403 ]] || fail "a runner that claimed after the restart could claim twice"
 

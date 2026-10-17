@@ -87,7 +87,7 @@ has "guide: a test from docs/"                "${guide}" "](${gh}/linux/tests/a.
 has "guide: a directory from docs/"           "${guide}" "](${tree}/linux/tests/)"
 has "guide: an image that ships is kept"      "${guide}" "](img/x.png)"
 hasnt "guide: no link to a page that is left out is relative" "${guide}" "](ci.md)"
-[ "$(sort "${work}/changed" | tr '\n' ' ')" = "README.md docs/guide.md " ] && ok "the changed files are listed" || bad "the changed files: $(tr '\n' ' ' < "${work}/changed")"
+[ "$(LC_ALL=C sort "${work}/changed" | paste -sd' ' -)" = "README.md docs/guide.md" ] && ok "the changed files are listed" || bad "the changed files: $(LC_ALL=C sort "${work}/changed" | paste -sd' ' -)"
 # a file with nothing to change is not written
 rm -rf "${work}/out"
 echo '# plain' > "${fx}/docs/plain.md"; git add -A; git commit -q -m plain

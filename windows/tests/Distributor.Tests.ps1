@@ -5,6 +5,7 @@
 $script:onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
 
 BeforeAll {
+    $script:onWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
     $script:script = Join-Path $PSScriptRoot '..\stack\runner-distributor.ps1'
     . $script:script
     $script:Root = Join-Path $TestDrive 'runner-bin'

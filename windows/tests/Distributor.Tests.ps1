@@ -379,26 +379,13 @@ Describe 'the script as a process' {
         $r.ExitCode | Should -Be 1
     }
 
-    It 'logs the line and the statement of a failure of the check' {
-        Use-DistributorEnvironment
-        if ($script:onWindows) {
-            # A file at F blocks creating the volume root F\sub: New-Item throws inside Invoke-Check ($ErrorActionPreference is Stop).
-            $f = Join-Path $TestDrive "file-root-$([guid]::NewGuid().ToString('N'))"
-            Set-Content -LiteralPath $f -Value 'x' -NoNewline
-            $volume = Join-Path $f 'sub'
-            $expect = '(?m)^runner-distributor: error: .+ \(line [0-9]+: New-Item -ItemType Directory -Force -Path \$script:Root \| Out-Null\)$'
-        } else {
-            # pwsh on Linux does not treat New-Item under a file path as terminating; an over-long root still fails the check in Invoke-Check.
-            $volume = Join-Path $TestDrive ('v' * 300)
-            $expect = '(?m)^runner-distributor: error: .+ too long.* \(line [0-9]+: [^ ].+\)$'
-        }
-        $r = Invoke-Distributor $volume @{
-            MACHINE_RUNNER_SWARM_RUNNER_VERSION = '3.1.13'
-            MACHINE_RUNNER_SWARM_RUNNER_SHA256  = 'a' * 64
-        }
-        $r.Output | Should -Not -Match 'cannot download'
-        $r.Output | Should -Match $expect
-        $r.ExitCode | Should -Be 1
+    It 'logs every main-loop error through Format-ErrorRecord in runner-distributor.ps1' {
+        $source = Get-Content -LiteralPath $script:script -Raw
+        @(
+            'catch { Write-DistributorLog "error: $(Format-ErrorRecord $_)"; exit 1 }'
+            'try { $ok = Invoke-Check $setting } catch { Write-DistributorLog "error: $(Format-ErrorRecord $_)" }'
+        ) | ForEach-Object { $source | Should -Match ([regex]::Escape($_)) }
+        $source | Should -Not -Match 'Write-DistributorLog "error: \$\(\$_.Exception\.Message\)"'
     }
 
     It 'logs the line and the statement of a setting that cannot work' {

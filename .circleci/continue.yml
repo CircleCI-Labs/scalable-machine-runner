@@ -870,12 +870,14 @@ jobs:
             exit $LASTEXITCODE
       - run:
           name: Pull the stock image before the swarm exists (DNS fails for seconds after swarm init)
+          when: always
           no_output_timeout: 30m
           command: |
             docker pull mcr.microsoft.com/windows/servercore:$env:WINDOWS_TAG
             exit $LASTEXITCODE
       - run:
           name: docker swarm init and the machine-runner-swarm.windows-ltsc* node labels (windows\Setup.ps1 -InitSwarm -AdvertiseAddr)
+          when: always
           command: |
             # `docker swarm init` alone fails here: "could not find the system's IP address".
             $ip = (Get-NetIPAddress -AddressFamily IPv4 |

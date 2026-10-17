@@ -15,6 +15,9 @@
 #
 # Usage: ci/tests/proxy-image.sh      Needs Docker (buildx, QEMU for the other platforms: ci/proxy-image.sh setup), crane, and a git history.
 set -euo pipefail
+# The publish jobs of main run this test with REQUIRE_CREDENTIALS=true (fail closed without Docker Hub credentials). This test drives the
+# credential handling itself, row by row (ci/tests/require-credentials.sh covers the strict mode), so it must not inherit that setting.
+unset REQUIRE_CREDENTIALS
 
 here=$(cd "$(dirname "$0")" && pwd)
 export PATH="${CI_TOOLS_BIN:-${RELEASE_BIN:-${HOME}/.local/bin}}:${PATH}"

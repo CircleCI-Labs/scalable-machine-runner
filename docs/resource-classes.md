@@ -142,7 +142,7 @@ To limit the risk:
 - Use a separate class restricted to named projects with a config policy ([CircleCI-side controls](security.md#circleci-side-controls)), and keep production contexts away from it.
 - Put cleanup steps at the start of its jobs. The runner does not clean the working directory on Linux.
 - Recycle the runner on a schedule.
-- On Linux this class is weaker than the single-task classes: it does not use the token proxy, so the runner holds the real token ([The persistent class](security.md#the-persistent-class)).
+- This class is weaker than the single-task classes: it does not use the token proxy, so the runner holds the real token, and on Windows every job can read it ([The persistent class](security.md#the-persistent-class)).
 
 ### Linux
 
@@ -241,7 +241,7 @@ These are `docker stack deploy` variables. `x-distributor-env` in `linux/stack/r
 |---|---|---|
 | `MACHINE_RUNNER_SWARM_RUNNER_VERSION` | An exact version, the newest that CI tests | An exact version pins it. `3.1`, `3` and `current` follow the manifest of CircleCI ([the version policy](operations.md#the-version-policy)) |
 | `MACHINE_RUNNER_SWARM_RUNNER_MAJOR` | `3` | The major version that `current` may adopt |
-| `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often a floating version looks at the manifest again: seconds, or a number with `s`, `m`, `h`, or `d` |
+| `MACHINE_RUNNER_SWARM_CHECK_INTERVAL` | `24h` | How often a floating version asks the manifest again, and how often an installed pin is checked against its record: seconds, or a number with `s`, `m`, `h`, or `d` |
 | `MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL` | `https://circleci-binary-releases.s3.amazonaws.com/circleci-runner` | Where `manifest.json` and the tarballs are, for example a mirror. It must be `https://`, unless a SHA-256 list is set |
 | `MACHINE_RUNNER_SWARM_RUNNER_SHA256` | The tarball SHA-256 values of the pinned version | A comma-separated list for an exact pin. `manifest` means no list: the hash of the manifest is trusted, which is weaker. A floating value ignores any list |
 | `MACHINE_RUNNER_SWARM_ALLOW_HTTP` | Not set | `true` accepts an `http://` download base without a SHA-256 list, for a lab |

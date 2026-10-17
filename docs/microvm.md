@@ -14,7 +14,7 @@ Use it when jobs need a boundary stronger than a container, or privileges that a
 > **Status: experimental.** The classes ship and stay in the stack. Maturity:
 >
 > - **Tested by the CI** (`linux/tests/microvm.sh`): placement, DNS, the claim through the token proxy, the runner download and its verification, the rolling update, and builds with the Docker daemon in the VM. On amd64, with Kata 4.2.0, Cloud Hypervisor and QEMU, in nested virtualization on AWS, against a fake CircleCI API.
-> - **Not verified by this project:** real CircleCI jobs, with checkout, caches, workspaces and artifacts through the task agent. The CI runs an empty task only. Run a real job on a node of your own before you depend on it.
+> - **Verified by hand only:** one real CircleCI job ran. CI runs an empty task, with no checkout, caches, workspaces or artifacts through the task agent. Run a real job on a node of your own before you depend on it.
 > - **Not tested:** arm64, AMD CPUs, other clouds, Firecracker, many VMs at once, out-of-memory behavior, and Kata upgrades under load.
 >
 > Refer to [What is tested](#what-is-tested).
@@ -240,7 +240,7 @@ Dragonball, the built-in VMM of runtime-rs, works with the same steps but starts
 
 ### What is not tested
 
-Real jobs (checkout, caches, workspaces and artifacts over virtiofs with the real task agent: a real CircleCI job is a manual check), out-of-memory behavior against the cgroup limit, other clouds, AMD CPUs, arm64, Firecracker (it has no virtiofs), the Go shim of Kata, clusters of more than two nodes, the load of many VMs, Kata upgrades under load, and Windows (next section).
+Real jobs (checkout, caches, workspaces and artifacts over virtiofs with the real task agent: one ran by hand, none run in CI), out-of-memory behavior against the cgroup limit, other clouds, AMD CPUs, arm64, Firecracker (it has no virtiofs), the Go shim of Kata, clusters of more than two nodes, the load of many VMs, Kata upgrades under load, and Windows (next section).
 
 ## Windows: Hyper-V isolation
 

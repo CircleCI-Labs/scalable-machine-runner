@@ -23,6 +23,7 @@ docs/resource-classes.md
 docs/images.md
 docs/docker-builds.md
 docs/microvm.md | MicroVM jobs
+docs/container-mode.md | Container mode
 
 == Operate
 docs/operations.md

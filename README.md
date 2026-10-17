@@ -40,6 +40,7 @@ The table is the short answer. [CI/CD](docs/ci.md#what-is-tested) lists every te
 | ppc64le and s390x | Emulated start only | CI starts the distributor and the token proxy image under emulation. No job runs |
 | CircleCI server, hosts without internet access, proxies and private certificate authorities | Not tested | The stack is tested against CircleCI cloud only. Refer to [What needs internet](docs/security.md#what-needs-internet) |
 | MicroVM classes (Kata Containers) | Experimental | A fake CircleCI API on nested KVM on one cloud and one CPU architecture. No real job runs in CI. One real CircleCI job ran by hand on a Kata Cloud Hypervisor class |
+| Container mode (`docker:` executor jobs, a prototype agent) | Experimental | A Docker-in-Docker Swarm test in CI, with a fake CircleCI API and the real stack file, plus unit tests of the agent. No real job runs in CI, and the agent has not run against the real CircleCI API. Not supported by CircleCI. Refer to [Container mode](docs/container-mode.md) |
 | Docker-build, persistent, and Rerun job with SSH classes | Experimental | CI checks that the files merge and keep their contract. The persistent classes run with a fake or idle runner. The Swarm side of SSH was proven once by hand, and the Windows file is untested |
 | Windows Server 2019, Hyper-V isolation, `add_ssh_keys` | Not tested | Not exercised, and the pages say so |
 
@@ -102,6 +103,7 @@ Linux runs on Ubuntu LTS. Tested in CI: Ubuntu 26.04 on amd64, and the start of 
 | [Images](docs/images.md) | Stock images with the mounted runner, and your own images |
 | [Docker Builds](docs/docker-builds.md) | Experimental: the opt-in host engine pattern and the alternatives |
 | [MicroVM jobs](docs/microvm.md) | Experimental: the opt-in add-on that runs each job in a Kata Containers microVM, with Docker inside the VM, and the Windows counterpart |
+| [Container mode](docs/container-mode.md) | Experimental: `docker:` executor jobs on Swarm with no Kubernetes: the agent, security model, and limits |
 | [Security](docs/security.md) | Threat model, token model, a comparison with the official installs, hardening, egress, and what needs internet |
 | [Operations](docs/operations.md) | Status, running the cluster, runner upgrades and rollbacks, token rotation, node drain, and uninstall |
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms, causes, and fixes |

@@ -57,41 +57,51 @@ menu:
       weight: 7
 
 params:
-  description: Run CircleCI machine runner 3 as Docker Swarm services, one service for each resource class.
+  description: Self-hosted CircleCI runners with a clean container or microVM for every job, on Docker Swarm, for Linux and Windows Server.
   externalLinkDecoration: false
   repo: https://github.com/CircleCI-Labs/machine-runner-swarm
 
-  # The landing page (layouts/home.html). "When to use it" comes from README.md; the rest is in the template.
+  # The landing page (layouts/home.html). "Who it is for" and "What is tested" come from README.md; the rest is in the template.
   home:
     title: Machine runner swarm
-    tagline: CircleCI machine runners on Docker Swarm, in containers
+    tagline: A clean container for every job, on the Docker hosts you already run
     notice: >-
       Not an official CircleCI product and not supported by CircleCI Support.
       Pre-release 0.x: a minor release can change stack files. Field engineers maintain it on a best-effort basis.
-    lead: For platform teams that run Docker hosts or Windows Server and want a clean container for every job, without Kubernetes.
+    lead: >-
+      Self-hosted CircleCI machine runner 3 on Docker Swarm, for Linux and Windows Server, with Kata microVMs for VM-grade isolation.
+      No Kubernetes. Releases are signed.
     features:
-      - icon: layers
-        title: One service for each resource class
-        text: A Swarm service is a resource class, and deploy.replicas sets how many runners it has. Labels and constraints decide which nodes run it.
-        link: docs/get-started/concepts/#services-are-resource-classes
-        linkText: How a class maps to a service
-      - icon: refresh-cw
-        title: A clean environment for every job
-        text: By default a runner claims one job and exits, and Swarm starts a new one, so no job inherits files from an earlier job.
+      - icon: box
+        title: A clean container for every job
+        text: A runner claims one job and exits, and Swarm starts a new container. No job inherits files from the last one.
         link: docs/get-started/concepts/#what-a-clean-environment-covers
         linkText: What a clean environment covers
+      - icon: cpu
+        title: MicroVMs for VM-grade isolation
+        text: Kata Containers classes run each job in its own microVM, with its own kernel, on Swarm. Experimental.
+        link: docs/configure/microvm/
+        linkText: MicroVM jobs
       - icon: server
-        title: Linux and Windows Server
-        text: >-
-          Linux amd64 and arm64 and Windows Server 2022 and 2025 are tested with real jobs.
-          Multi-node clusters are tested in CI on two-node Swarms; ppc64le and s390x only under emulation.
+        title: Linux and Windows in one cluster
+        text: Linux amd64 and arm64, and Windows Server 2022 and 2025. Labels decide where each class runs.
         link: docs/install/multi-node/
         linkText: Multi-node clusters
       - icon: shield-check
-        title: Hardening and a threat model
-        text: A documented threat model and token model, a hardened class without sudo, and guidance on egress.
-        link: docs/security/#threat-model
-        linkText: Threat model
+        title: Jobs never see the class token
+        text: A token proxy holds the token, and the runners hold a placeholder. A hardened class removes sudo.
+        link: docs/get-started/concepts/#the-token-proxy
+        linkText: The token proxy
+      - icon: refresh-cw
+        title: Runners that install and update themselves
+        text: A distributor service installs the runner on every node, pins a tested version, and checks its SHA-256. Nothing to install on the hosts.
+        link: docs/get-started/concepts/#the-runner-distributor-on-linux
+        linkText: The runner distributor
+      - icon: layers
+        title: Scale by setting replicas
+        text: A Swarm service is a resource class, and deploy.replicas sets how many jobs it runs at once.
+        link: docs/get-started/concepts/#services-are-resource-classes
+        linkText: How a class maps to a service
 
   banner:
     # The banner cannot be dismissed: custom.css hides the close button, and custom/banner.html renders the text.

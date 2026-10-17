@@ -406,6 +406,30 @@ if ! out=$("$dir/../../ci/config-names.sh" 2>&1); then
   problems=$((problems + 1))
 fi
 
+# setup.sh --deploy warns when the token proxy image is not pinned by digest (it holds every class token). The function is tested alone: it
+# reads the stack files and the environment and prints to stderr.
+digest=$(printf '0123456789abcdef%.0s' 1 2 3 4)
+warns() { # WARN? [VAR=VALUE...] -- FILE: does the function warn?
+  local want=$1 out
+  shift
+  out=$(env -u MACHINE_RUNNER_SWARM_PROXY_IMAGE "${@:1:$#-1}" bash -c 'source "$1"; warn_unpinned_proxy_image "${@:2}"' _ "$dir/../setup.sh" "${@: -1}" 2>&1)
+  if [[ $want == yes && $out != *"[WARN] the token proxy image is not pinned by digest"* ]] || [[ $want == no && -n $out ]]; then
+    echo "  setup.sh: wanted a warning: $want; got '$out' ($*)"
+    problems=$((problems + 1))
+  fi
+}
+warns yes "$dir/runners.yaml"   # a checkout: the default is the tag latest
+warns yes MACHINE_RUNNER_SWARM_PROXY_IMAGE= "$dir/runners.yaml"   # empty is unset
+warns yes MACHINE_RUNNER_SWARM_PROXY_IMAGE=registry.example.com/team/proxy:1.2.3 "$dir/runners.yaml"
+warns yes MACHINE_RUNNER_SWARM_PROXY_IMAGE=registry.example.com/team/proxy@sha256:0123 "$dir/runners.yaml"   # not a whole digest
+warns no MACHINE_RUNNER_SWARM_PROXY_IMAGE=registry.example.com/team/proxy:1.2.3@sha256:$digest "$dir/runners.yaml"
+bundle=$(mktemp -d)/runners.yaml   # what ci/release.sh makes of runners.yaml: the digest of the release is the default
+sed "s|\(MACHINE_RUNNER_SWARM_PROXY_IMAGE:-ccilabs/machine-runner-swarm-proxy:\)latest}|\10.1.0@sha256:$digest}|" "$dir/runners.yaml" > "$bundle"
+grep -q "@sha256:$digest}" "$bundle" || { echo "  setup.sh: the test cannot make a bundle file"; problems=$((problems + 1)); }
+warns no "$bundle"
+rm -rf "$(dirname "$bundle")"
+warns no "$dir/ssh-rerun.yaml"   # a stack file that does not read the variable is not judged
+
 echo "RESULT test=stack-config files=runners.yaml,classes-extra.yaml,docker-build.yaml,persistent.yaml,ssh-rerun.yaml,microvm.yaml services=${#services[@]} proxied_classes=${#proxied[@]} problems=$problems"
 if [[ $problems -eq 0 ]]; then
   echo "PASS (docker stack config accepts every file combination; every service meets the contract)"

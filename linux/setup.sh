@@ -24,7 +24,8 @@ Options:
 The distributor reads MACHINE_RUNNER_SWARM_RUNNER_VERSION (an exact pin by default, or 3.1, 3, current), _RUNNER_MAJOR, _CHECK_INTERVAL,
 _DOWNLOAD_BASE_URL and _RUNNER_SHA256 from the environment of --deploy (docs/operations.md). The token proxy is an image:
 MACHINE_RUNNER_SWARM_PROXY_IMAGE names another one than the published default (docs/install-linux.md). It runs on a manager;
-MACHINE_RUNNER_SWARM_PROXY_PLACEMENT pins it (docs/multi-node.md).
+MACHINE_RUNNER_SWARM_PROXY_PLACEMENT pins it (docs/multi-node.md). --deploy prints a warning when the proxy image is not named by digest
+(@sha256:...): a checkout names the tag latest, a release bundle names the digest of its release.
 Every runner reads the placeholder secret: printf %s machine-runner-swarm-placeholder | setup.sh --secret runner-placeholder
 EOF
 }
@@ -71,6 +72,26 @@ swarm_create_secret() {
   [[ $token =~ ^[A-Za-z0-9._-]+$ ]] || die "no token on stdin, or it has unexpected characters"
   printf 'api:\n  auth_token: %s\n' "$token" | docker secret create "$name" - >/dev/null
   info "[ ok ] created secret $name"
+}
+
+# warn_unpinned_proxy_image FILE...: warn when the token proxy image that --deploy is about to use is not named by digest. The proxy holds
+# every class token, and a tag can be moved to another image. The image is MACHINE_RUNNER_SWARM_PROXY_IMAGE or, when that is unset or
+# empty, the default that the stack files name (a checkout: the tag latest; a release bundle: a version and a digest, so no warning). The
+# warning does not stop the deploy. A stack file that does not read the variable is the operator's own, and is not judged.
+warn_unpinned_proxy_image() {
+  local image=${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-} f
+  if [[ -z $image ]]; then
+    for f in "$@"; do
+      image=$(sed -n 's/^[[:space:]]*image:[[:space:]]*\${MACHINE_RUNNER_SWARM_PROXY_IMAGE:-\([^}]*\)}.*$/\1/p' "$f" 2>/dev/null | head -n 1)
+      [[ -z $image ]] || break
+    done
+    [[ -n $image ]] || return 0
+  fi
+  [[ $image =~ @sha256:[0-9a-f]{64}$ ]] && return 0
+  info "[WARN] the token proxy image is not pinned by digest: $image"
+  info "       The proxy holds every class token, and a tag can be moved to another image. Name the image you have checked, with its digest:"
+  info "       MACHINE_RUNNER_SWARM_PROXY_IMAGE=ccilabs/machine-runner-swarm-proxy:<version>@sha256:<digest> $0 --deploy (docs/install-linux.md)."
+  info "       A release bundle names the digest of its release in its stack file."
 }
 
 # next_steps STACK: the hint after every run names only what is still to do, from what Docker says now (swarm, secrets, stack)
@@ -126,6 +147,7 @@ main() {
   if [[ $deploy == true ]]; then
     local -a args=()
     for f in "${files[@]}"; do args+=(-c "$f"); done
+    warn_unpinned_proxy_image "${files[@]}"
     docker stack deploy "${args[@]}" "$stack"
   fi
   next_steps "$stack"

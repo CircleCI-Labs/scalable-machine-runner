@@ -34,7 +34,7 @@
 &lt;/tr&gt;
 &lt;/tbody&gt;
 &lt;/table&gt;
-&lt;p&gt;On Windows, a stop, drain or forced update of a busy container kills its job after about 5 seconds (&lt;a href="#stop-a-busy-windows-container"&gt;Stop a busy Windows container&lt;/a&gt;).&lt;/p&gt;
+&lt;p&gt;On Windows, change a class only while it is idle (&lt;a href="#stop-a-busy-windows-container"&gt;why&lt;/a&gt;).&lt;/p&gt;
 &lt;h2 data-hextra-search-id="check-status-and-logs"&gt;Check status and logs&lt;span class="hx:absolute hx:-mt-20" id="check-status-and-logs"&gt;&lt;/span&gt;
 &lt;a href="#check-status-and-logs" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ol&gt;
 &lt;li&gt;
@@ -116,7 +116,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;Scale, then set the same &lt;code&gt;replicas&lt;/code&gt; in your stack file, because the next deploy returns the stack to its files:&lt;/p&gt;
+&lt;p&gt;Scale, then set the same &lt;code&gt;replicas&lt;/code&gt; in your stack file:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service scale runners_linux-default&lt;span class="o"&gt;=&lt;/span&gt;&amp;lt;REPLICAS&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
 &lt;button
@@ -148,12 +148,17 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/li&gt;
 &lt;/ol&gt;
-&lt;p&gt;Do not scale a Windows class down while it runs jobs.&lt;/p&gt;
 &lt;p&gt;Two limits sit above the replicas, both on the CircleCI side: the &lt;strong&gt;runner concurrency of your plan&lt;/strong&gt; (shared by all self-hosted runner jobs of the organization) and &lt;strong&gt;&lt;code&gt;maxConcurrentTasks&lt;/code&gt; of the resource class&lt;/strong&gt; (20 by default, raised by CircleCI support). Queued tasks count against concurrency, and the inventory shows running tasks only, so runners can look idle while jobs wait. A job for a class with no runner queues indefinitely and holds concurrency: cancel it (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/troubleshooting/#jobs-wait-while-the-runners-are-idle"&gt;Jobs wait while the runners are idle&lt;/a&gt;).&lt;/p&gt;
-&lt;p&gt;The stack has no autoscaling and no cloud integration, and a dead node is not replaced. Plan for one node less than you have. A labelled node of the token proxy carries no replicas (&lt;a href="#where-the-proxy-runs-and-when-it-moves"&gt;Where the proxy runs, and when it moves&lt;/a&gt;).&lt;/p&gt;
-&lt;p&gt;One &lt;code&gt;token-proxy&lt;/code&gt; replica serves all classes of an OS, because a second would not share the list of runners that have claimed. 100 idle runners are 20 claims a second, plus the calls of running jobs. Its shipped limits are 0.5 CPU and 128 MB on Linux, 1 CPU and 512 MB on Windows. This project has not load-tested it and states no tested fleet size (the CI runs a few replicas). Before more than a few dozen replicas, test with your own load and watch &lt;code&gt;docker stats --no-stream &amp;lt;CONTAINER&amp;gt;&lt;/code&gt; on its node, 503 answers with &lt;code&gt;Retry-After&lt;/code&gt; in runner logs, and a rising claim count in its summary line. Raise its &lt;code&gt;limits&lt;/code&gt; in your copy of the stack file if it is the bottleneck. A second stack (own name, proxy, classes and tokens) is the structure to try beyond that, and it is not tested.&lt;/p&gt;
+&lt;p&gt;The stack has no autoscaling and no cloud integration, and a dead node is not replaced. Plan for one node less than you have. A labeled node of the token proxy carries no replicas (&lt;a href="#where-the-proxy-runs-and-when-it-moves"&gt;Where the proxy runs, and when it moves&lt;/a&gt;).&lt;/p&gt;
+&lt;p&gt;One &lt;code&gt;token-proxy&lt;/code&gt; replica serves all classes of an OS, because a second would not share the list of runners that have claimed.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;Limits: 0.5 CPU and 128 MB on Linux, 1 CPU and 512 MB on Windows.&lt;/li&gt;
+&lt;li&gt;Load: 100 idle runners make 20 claims a second, plus the calls of running jobs. No fleet size is load-tested (CI runs a few replicas).&lt;/li&gt;
+&lt;li&gt;Before more than a few dozen replicas, test with your load. Watch &lt;code&gt;docker stats --no-stream &amp;lt;CONTAINER&amp;gt;&lt;/code&gt; on its node, 503 answers with &lt;code&gt;Retry-After&lt;/code&gt; in runner logs, and the claim count in its summary line.&lt;/li&gt;
+&lt;li&gt;If the proxy is the bottleneck, raise its &lt;code&gt;limits&lt;/code&gt; in your copy of the stack file. A second stack (own name, proxy, classes and tokens) is untested.&lt;/li&gt;
+&lt;/ul&gt;
 &lt;h2 data-hextra-search-id="upgrade-the-runner-and-images"&gt;Upgrade the runner and images&lt;span class="hx:absolute hx:-mt-20" id="upgrade-the-runner-and-images"&gt;&lt;/span&gt;
-&lt;a href="#upgrade-the-runner-and-images" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Swarm replaces containers one at a time (&lt;code&gt;order: stop-first&lt;/code&gt;, &lt;code&gt;parallelism: 1&lt;/code&gt;). A busy replica gets SIGTERM, drains (finishes its job, takes no new one), and is then replaced. An idle replica stops within about 5 seconds with exit code 0. A busy one exits 0 when its job ends, so an update can take as long as your longest job, up to the &lt;code&gt;stop_grace_period&lt;/code&gt; of 5 hours and 5 minutes. &lt;code&gt;docker service update&lt;/code&gt; waits unless you add &lt;code&gt;--detach&lt;/code&gt;. On Windows, a stop kills a busy container after about 5 seconds.&lt;/p&gt;
+&lt;a href="#upgrade-the-runner-and-images" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Swarm replaces containers one at a time (&lt;code&gt;order: stop-first&lt;/code&gt;, &lt;code&gt;parallelism: 1&lt;/code&gt;). A busy replica gets SIGTERM, drains (finishes its job, takes no new one), and is then replaced. An idle replica stops within about 5 seconds with exit code 0. A busy one exits 0 when its job ends, so an update can take as long as your longest job, up to the &lt;code&gt;stop_grace_period&lt;/code&gt; of 5 hours and 5 minutes. &lt;code&gt;docker service update&lt;/code&gt; waits unless you add &lt;code&gt;--detach&lt;/code&gt;.&lt;/p&gt;
 &lt;table&gt;
 &lt;thead&gt;
 &lt;tr&gt;
@@ -163,8 +168,8 @@ data-copied-label="Copied!"
 &lt;/thead&gt;
 &lt;tbody&gt;
 &lt;tr&gt;
-&lt;td&gt;Take a new release of this repository&lt;/td&gt;
-&lt;td&gt;&lt;a href="#upgrade-to-a-new-release-of-this-repository"&gt;Upgrade to a new release of this repository&lt;/a&gt;&lt;/td&gt;
+&lt;td&gt;Take a new release&lt;/td&gt;
+&lt;td&gt;&lt;a href="#upgrade-to-a-new-release-of-this-repository"&gt;Upgrade to a new release&lt;/a&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;Change the runner version only&lt;/td&gt;
@@ -189,7 +194,7 @@ data-copied-label="Copied!"
 &lt;p&gt;Merge the differences between your stack file and the new release. Start with the defaults of &lt;code&gt;x-distributor-env&lt;/code&gt;: a release bumps the runner version and its &lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_SHA256&lt;/code&gt; values together.&lt;/p&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;Record what the nodes run in &lt;code&gt;deploy/deploy.env&lt;/code&gt; (&lt;a href="#keep-the-deploy-variables-in-version-control"&gt;Keep the deploy variables in version control&lt;/a&gt;): the new pin (both defaults merged), or your own pin with its two values. A pin, freeze or rollback made only with &lt;code&gt;docker service update&lt;/code&gt; is not in the file, and the next deploy undoes it silently.&lt;/p&gt;
+&lt;p&gt;Record the new pin (both defaults merged), or your own pin with its two values, in &lt;code&gt;deploy/deploy.env&lt;/code&gt; (&lt;a href="#keep-the-deploy-variables-in-version-control"&gt;why&lt;/a&gt;).&lt;/p&gt;
 &lt;/li&gt;
 &lt;li&gt;
 &lt;p&gt;Deploy with the same &lt;code&gt;-c&lt;/code&gt; files and variables as before:&lt;/p&gt;
@@ -321,8 +326,6 @@ data-copied-label="Copied!"
 &lt;/table&gt;
 &lt;p&gt;An exact pin takes the tarball SHA-256 from the stack file, so it asks no manifest. Once verified, each interval it only compares the active binary with its record, and reinstalls if the binary changed. A floating value reads &lt;code&gt;manifest.json&lt;/code&gt; at start and every interval. &lt;code&gt;current&lt;/code&gt; is matched to a versioned manifest entry by SHA-256 and adopted only within &lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_MAJOR&lt;/code&gt;; another major logs &lt;code&gt;not adopting it&lt;/code&gt; and keeps what is installed. A release reaches every node within one interval, with no redeploy. In a stack file, quote a floating value (&lt;code&gt;&amp;quot;3.1&amp;quot;&lt;/code&gt;): YAML reads &lt;code&gt;3.1&lt;/code&gt; as a number and &lt;code&gt;3.10&lt;/code&gt; as &lt;code&gt;3.1&lt;/code&gt;.&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Floating is weaker.&lt;/strong&gt; A floating value cannot keep a SHA-256 list, so the distributor ignores the default list and takes each tarball&amp;rsquo;s SHA-256 from CircleCI&amp;rsquo;s &lt;code&gt;manifest.json&lt;/code&gt;. That file comes from the same bucket as the tarball, so whoever can change one can change both, and the check proves only that the download is whole. Use it only for a class that may run whatever CircleCI releases. It can also bring a runner this release has not been tested with (&lt;a href="#compatibility-with-circleci"&gt;Compatibility with CircleCI&lt;/a&gt;).&lt;/p&gt;
-&lt;h4 data-hextra-search-id="how-this-compares-with-machine-runner-3-container-runner-and-the-orchestrator"&gt;How this compares with machine runner 3, container runner and the orchestrator&lt;span class="hx:absolute hx:-mt-20" id="how-this-compares-with-machine-runner-3-container-runner-and-the-orchestrator"&gt;&lt;/span&gt;
-&lt;a href="#how-this-compares-with-machine-runner-3-container-runner-and-the-orchestrator" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;CircleCI&amp;rsquo;s own runners also leave the version to you. Machine runner 3 on a host uses the OS package (&lt;code&gt;apt&lt;/code&gt;, &lt;code&gt;yum&lt;/code&gt;, Homebrew) or a manual install, with no auto-update. Container runner uses the image &lt;code&gt;tag&lt;/code&gt; in the Helm values, with a floating tag per major and minor version (&lt;code&gt;kubernetes-3&lt;/code&gt;, &lt;code&gt;kubernetes-3.0&lt;/code&gt;) and a fixed tag per patch. The machine runner orchestrator uses the Helm chart and the pool&amp;rsquo;s disk image, whose default tag floats to the latest image (a dated tag pins it). This repository takes the container runner model: an exact pin by default, and &lt;code&gt;3.1&lt;/code&gt;, &lt;code&gt;3&lt;/code&gt; or &lt;code&gt;current&lt;/code&gt; to float.&lt;/p&gt;
 &lt;h4 data-hextra-search-id="settings-of-the-distributor"&gt;Settings of the distributor&lt;span class="hx:absolute hx:-mt-20" id="settings-of-the-distributor"&gt;&lt;/span&gt;
 &lt;a href="#settings-of-the-distributor" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;Variables of &lt;code&gt;docker stack deploy&lt;/code&gt;, for the distributor service only. &lt;code&gt;linux/stack/runners.yaml&lt;/code&gt; reads them in &lt;code&gt;x-distributor-env&lt;/code&gt;.&lt;/p&gt;
 &lt;table&gt;
@@ -398,7 +401,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/div&gt;
 &lt;p&gt;Put the same two values in &lt;code&gt;deploy/deploy.env&lt;/code&gt;. The distributor installs only a tarball with one of these values. Without the list it refuses the tarball (&lt;code&gt;SHA-256 mismatch&lt;/code&gt;) and the nodes keep the running version. &lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_SHA256=manifest&lt;/code&gt; trusts the manifest instead (weaker). If you edit the pin in your copy of the stack file, change both defaults together in &lt;code&gt;x-distributor-env&lt;/code&gt; (and in &lt;code&gt;x-env&lt;/code&gt; of &lt;code&gt;microvm.yaml&lt;/code&gt;, which downloads the runner itself). Use &lt;code&gt;3.1.12&lt;/code&gt; or later: it fixes the enforcement of &lt;code&gt;max_run_time&lt;/code&gt;.&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Freeze the nodes now.&lt;/strong&gt; Pin the version the nodes run now (&lt;a href="#see-what-runs"&gt;See what runs&lt;/a&gt;). It is installed, so no network is needed. Then put the same two values in &lt;code&gt;deploy/deploy.env&lt;/code&gt;, or the next deploy sets the default pin again and undoes the freeze:&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Freeze the nodes now.&lt;/strong&gt; Pin the version the nodes run now (&lt;a href="#see-what-runs"&gt;See what runs&lt;/a&gt;). It is installed, so no network is needed. Record the same two values in &lt;code&gt;deploy/deploy.env&lt;/code&gt;:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service update --env-add &lt;span class="nv"&gt;MACHINE_RUNNER_SWARM_RUNNER_VERSION&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&amp;lt;VERSION&amp;gt; --env-add &lt;span class="nv"&gt;MACHINE_RUNNER_SWARM_RUNNER_SHA256&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;manifest runners_runner-distributor&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
 &lt;button
@@ -427,7 +430,7 @@ data-copied-label="Copied!"
 &lt;/button&gt;
 &lt;/div&gt;
 &lt;/div&gt;
-&lt;p&gt;The distributor keeps the last 3 active versions (about 75 MB each) and never removes the active one. A rollback to a kept version only moves the link: no download, no network. A removed version is downloaded again, with its hash from the manifest or from a list you give. The file &lt;code&gt;history&lt;/code&gt; in the volume lists the flips. The next container of every runner service runs the old version, and running jobs are unaffected. Put the same values in &lt;code&gt;deploy/deploy.env&lt;/code&gt;, or the next deploy undoes the rollback.&lt;/p&gt;
+&lt;p&gt;The distributor keeps the last 3 active versions (about 75 MB each) and never removes the active one. A rollback to a kept version only moves the link: no download, no network. A removed version is downloaded again, with its hash from the manifest or from a list you give. The file &lt;code&gt;history&lt;/code&gt; in the volume lists the flips. The next container of every runner service runs the old version, and running jobs are unaffected. Record the same values in &lt;code&gt;deploy/deploy.env&lt;/code&gt;.&lt;/p&gt;
 &lt;h4 data-hextra-search-id="see-what-runs"&gt;See what runs&lt;span class="hx:absolute hx:-mt-20" id="see-what-runs"&gt;&lt;/span&gt;
 &lt;a href="#see-what-runs" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service logs --tail &lt;span class="m"&gt;20&lt;/span&gt; runners_runner-distributor&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
@@ -460,7 +463,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;p&gt;The last command names the version directory that a container resolved at start. When a node gets no runner or a download is refused, refer to &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/troubleshooting/#the-runner-waits-for-the-distributor-and-then-exits-with-code-80"&gt;The runner waits for the distributor, and then exits with code 80&lt;/a&gt;.&lt;/p&gt;
 &lt;h4 data-hextra-search-id="run-the-downloads-from-a-mirror"&gt;Run the downloads from a mirror&lt;span class="hx:absolute hx:-mt-20" id="run-the-downloads-from-a-mirror"&gt;&lt;/span&gt;
-&lt;a href="#run-the-downloads-from-a-mirror" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;A site without a route to CircleCI&amp;rsquo;s release bucket serves &lt;code&gt;&amp;lt;version&amp;gt;/circleci-runner_linux_&amp;lt;arch&amp;gt;.tar.gz&lt;/code&gt; for every version the nodes may run from an internal HTTP server. The distributor builds the tarball address from the base URL and version and ignores the manifest&amp;rsquo;s &lt;code&gt;url&lt;/code&gt; fields, so a copy of &lt;code&gt;manifest.json&lt;/code&gt; stays unchanged.&lt;/p&gt;
+&lt;a href="#run-the-downloads-from-a-mirror" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;A site without a route to CircleCI&amp;rsquo;s release bucket serves &lt;code&gt;&amp;lt;VERSION&amp;gt;/circleci-runner_linux_&amp;lt;ARCH&amp;gt;.tar.gz&lt;/code&gt; for every version the nodes may run from an internal HTTP server. The distributor builds the tarball address from the base URL and version and ignores the manifest&amp;rsquo;s &lt;code&gt;url&lt;/code&gt; fields, so a copy of &lt;code&gt;manifest.json&lt;/code&gt; stays unchanged.&lt;/p&gt;
 &lt;table&gt;
 &lt;thead&gt;
 &lt;tr&gt;
@@ -540,10 +543,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;The distributor uses the &lt;code&gt;wget&lt;/code&gt; and CA bundle of the stock Alpine image, so an &lt;code&gt;https&lt;/code&gt; mirror needs a certificate from a public authority. Otherwise use an &lt;code&gt;http://&lt;/code&gt; mirror with the SHA-256 list (the list, not the transport, is what you trust), or an image of your own for &lt;code&gt;runner-distributor&lt;/code&gt; (&lt;code&gt;FROM&lt;/code&gt; the pinned Alpine, your CA added; not tested). Do not use one proxy for both the distributor and the mirror (&lt;a href="#proxies-and-certificate-authorities-component-by-component"&gt;Proxies and certificate authorities, component by component&lt;/a&gt;).&lt;/p&gt;
-&lt;/li&gt;
-&lt;li&gt;
-&lt;p&gt;Over plain &lt;code&gt;http&lt;/code&gt;, an exact pin needs a usable SHA-256 list (the default one is enough), because the manifest would otherwise be the only root of trust and would travel unprotected. A floating value has no list, so it is refused. &lt;code&gt;MACHINE_RUNNER_SWARM_ALLOW_HTTP=true&lt;/code&gt; accepts it for a lab.&lt;/p&gt;
+&lt;p&gt;The distributor uses the &lt;code&gt;wget&lt;/code&gt; and CA bundle of the stock Alpine image, so an &lt;code&gt;https&lt;/code&gt; mirror needs a certificate from a public authority. Otherwise use an &lt;code&gt;http://&lt;/code&gt; mirror with the SHA-256 list (an exact pin needs a usable list over &lt;code&gt;http&lt;/code&gt;, and the default list is enough), or an image of your own for &lt;code&gt;runner-distributor&lt;/code&gt; (not tested). &lt;code&gt;MACHINE_RUNNER_SWARM_ALLOW_HTTP=true&lt;/code&gt; accepts &lt;code&gt;http&lt;/code&gt; with no list, for a lab (&lt;a href="#proxies-and-certificate-authorities-component-by-component"&gt;Proxies and certificate authorities&lt;/a&gt;).&lt;/p&gt;
 &lt;/li&gt;
 &lt;li&gt;
 &lt;p&gt;The mirror replaces the runner download only. Every runner container still downloads its task agent from &lt;code&gt;circleci-binary-releases.s3.amazonaws.com&lt;/code&gt;, and every node still pulls &lt;code&gt;alpine&lt;/code&gt; from a registry (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/faq/#does-it-work-on-hosts-without-internet-access"&gt;Does it work on hosts without internet access?&lt;/a&gt;).&lt;/p&gt;
@@ -551,12 +551,12 @@ data-copied-label="Copied!"
 &lt;/ul&gt;
 &lt;h3 data-hextra-search-id="upgrade-the-runner-on-windows"&gt;Upgrade the runner on Windows&lt;span class="hx:absolute hx:-mt-20" id="upgrade-the-runner-on-windows"&gt;&lt;/span&gt;
 &lt;a href="#upgrade-the-runner-on-windows" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The service &lt;code&gt;runner-distributor-windows&lt;/code&gt; is the only way a runner and Git reach a Windows node. It works like the &lt;a href="#upgrade-the-runner-on-linux"&gt;Linux distributor&lt;/a&gt;: same variables (&lt;a href="#settings-of-the-distributor"&gt;table&lt;/a&gt;), same policy, no version in the runner services. An upgrade, pin or rollback changes the distributor only, so &lt;strong&gt;no runner service restarts and no busy job is killed.&lt;/strong&gt;&lt;/p&gt;
-&lt;p&gt;It installs into the volume &lt;code&gt;runner-bin&lt;/code&gt; (&lt;code&gt;versions\&amp;lt;version&amp;gt;&lt;/code&gt; for the runner, &lt;code&gt;git\&amp;lt;git version&amp;gt;&lt;/code&gt; for portable Git) and mounts the links &lt;code&gt;current&lt;/code&gt; and &lt;code&gt;git\current&lt;/code&gt; read-only at &lt;code&gt;C:\machine-runner-swarm&lt;/code&gt; and &lt;code&gt;C:\Program Files\Git&lt;/code&gt;. Docker resolves a link when it creates a container, so the next job runs the new version and a running job keeps its directory. The distributor never overwrites a version or removes one in use (Windows cannot replace files a running container uses): it tries again at its next check. During a flip &lt;code&gt;current&lt;/code&gt; is missing for a few milliseconds, and a container created then does not start (Swarm retries after the restart delay of 10 seconds). On a new node, runner tasks fail the same way until the first download is done.&lt;/p&gt;
+&lt;p&gt;It installs into the volume &lt;code&gt;runner-bin&lt;/code&gt; (&lt;code&gt;versions\&amp;lt;VERSION&amp;gt;&lt;/code&gt; for the runner, &lt;code&gt;git\&amp;lt;GIT_VERSION&amp;gt;&lt;/code&gt; for portable Git) and mounts the links &lt;code&gt;current&lt;/code&gt; and &lt;code&gt;git\current&lt;/code&gt; read-only at &lt;code&gt;C:\machine-runner-swarm&lt;/code&gt; and &lt;code&gt;C:\Program Files\Git&lt;/code&gt;. Docker resolves a link when it creates a container, so the next job runs the new version and a running job keeps its directory. The distributor never overwrites a version or removes one in use (Windows cannot replace files a running container uses): it tries again at its next check. During a flip &lt;code&gt;current&lt;/code&gt; is missing for a few milliseconds, and a container created then does not start (Swarm retries after the restart delay of 10 seconds). On a new node, runner tasks fail the same way until the first download is done.&lt;/p&gt;
 &lt;p&gt;Differences from Linux, in &lt;code&gt;x-distributor-env&lt;/code&gt; of &lt;code&gt;windows\stack\runners.yaml&lt;/code&gt;:&lt;/p&gt;
 &lt;ul&gt;
 &lt;li&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_SHA256&lt;/code&gt; defaults to the two values (&lt;code&gt;amd64&lt;/code&gt;, &lt;code&gt;arm64&lt;/code&gt;) of the pinned version.&lt;/li&gt;
-&lt;li&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL&lt;/code&gt; holds &lt;code&gt;manifest.json&lt;/code&gt; and &lt;code&gt;&amp;lt;version&amp;gt;/circleci-runner_windows_&amp;lt;arch&amp;gt;.tar.gz&lt;/code&gt;. It must be &lt;code&gt;https://&lt;/code&gt; (or &lt;code&gt;file://&lt;/code&gt;), unless a SHA-256 list is set.&lt;/li&gt;
-&lt;li&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_TOOLS_BASE_URL&lt;/code&gt; is a directory URL with &lt;code&gt;PortableGit-&amp;lt;version&amp;gt;-64-bit.7z.exe&lt;/code&gt; (arm64: &lt;code&gt;-arm64.7z.exe&lt;/code&gt;) and &lt;code&gt;7zr.exe&lt;/code&gt;, the two downloads the script pins by SHA-256. Without it they come from GitHub.&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL&lt;/code&gt; holds &lt;code&gt;manifest.json&lt;/code&gt; and &lt;code&gt;&amp;lt;VERSION&amp;gt;/circleci-runner_windows_&amp;lt;ARCH&amp;gt;.tar.gz&lt;/code&gt;. It must be &lt;code&gt;https://&lt;/code&gt; (or &lt;code&gt;file://&lt;/code&gt;), unless a SHA-256 list is set.&lt;/li&gt;
+&lt;li&gt;&lt;code&gt;MACHINE_RUNNER_SWARM_TOOLS_BASE_URL&lt;/code&gt; is a directory URL with &lt;code&gt;PortableGit-&amp;lt;VERSION&amp;gt;-64-bit.7z.exe&lt;/code&gt; (arm64: &lt;code&gt;-arm64.7z.exe&lt;/code&gt;) and &lt;code&gt;7zr.exe&lt;/code&gt;, the two downloads the script pins by SHA-256. Without it they come from GitHub.&lt;/li&gt;
 &lt;li&gt;The architecture is &lt;code&gt;amd64&lt;/code&gt; or &lt;code&gt;arm64&lt;/code&gt;. CI runs the distributor on amd64 hosts only: arm64 file names and manifest entries are tested, and no Windows arm64 host runs the stack.&lt;/li&gt;
 &lt;li&gt;There is no start-time binary check (no entrypoint script): the distributor compares the active binary with its record at every check and reinstalls it if it changed (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/security/#runner-binary-integrity-on-windows"&gt;Runner binary integrity on Windows&lt;/a&gt;).&lt;/li&gt;
 &lt;li&gt;A mirror needs the &lt;code&gt;windows&lt;/code&gt; tarballs, the two Git downloads in the tools directory, and &lt;code&gt;manifest.json&lt;/code&gt; where the &lt;a href="#run-the-downloads-from-a-mirror"&gt;Linux mirror table&lt;/a&gt; says. The distributor downloads with PowerShell, so an &lt;code&gt;https&lt;/code&gt; mirror needs a certificate the stock Server Core image trusts (not your own authority): otherwise use an &lt;code&gt;http://&lt;/code&gt; mirror with the SHA-256 list, or an image of your own. It reads only &lt;code&gt;HTTPS_PROXY&lt;/code&gt;.&lt;/li&gt;
@@ -604,7 +604,7 @@ data-copied-label="Copied!"
 &lt;/button&gt;
 &lt;/div&gt;
 &lt;/div&gt;
-&lt;p&gt;Waiting replicas keep the old version until they claim a job or exit after &lt;code&gt;CIRCLECI_RUNNER_IDLE_TIMEOUT&lt;/code&gt; (1 hour). A forced update replaces them at once but also kills a running job: force it only while the class is idle (&lt;code&gt;docker service update --force runners_windows-default&lt;/code&gt;).&lt;/p&gt;
+&lt;p&gt;Waiting replicas keep the old version until they claim a job or exit after &lt;code&gt;CIRCLECI_RUNNER_IDLE_TIMEOUT&lt;/code&gt; (1 hour). To replace them at once, force an update only while the class is idle (&lt;code&gt;docker service update --force runners_windows-default&lt;/code&gt;).&lt;/p&gt;
 &lt;h3 data-hextra-search-id="upgrade-the-token-proxy"&gt;Upgrade the token proxy&lt;span class="hx:absolute hx:-mt-20" id="upgrade-the-token-proxy"&gt;&lt;/span&gt;
 &lt;a href="#upgrade-the-token-proxy" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The proxy is the image &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt;, read from &lt;code&gt;MACHINE_RUNNER_SWARM_PROXY_IMAGE&lt;/code&gt; by the service &lt;code&gt;token-proxy&lt;/code&gt; (Windows: &lt;code&gt;token-proxy-windows&lt;/code&gt;). Tags: &lt;code&gt;X.Y.Z&lt;/code&gt; (a release, never moves), &lt;code&gt;X.Y&lt;/code&gt;, &lt;code&gt;X&lt;/code&gt;, &lt;code&gt;latest&lt;/code&gt; (the newest release), &lt;code&gt;edge&lt;/code&gt; (the newest main-branch commit that passed the end-to-end tests) and &lt;code&gt;sha-&amp;lt;12 characters&amp;gt;&lt;/code&gt; (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/install/install-linux/#the-token-proxy-image"&gt;The token proxy image&lt;/a&gt;). A release bundle defaults to its own release by tag and digest. A checkout defaults to &lt;code&gt;latest&lt;/code&gt;, which only a release moves.&lt;/p&gt;
 &lt;ul&gt;
@@ -628,7 +628,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;&lt;strong&gt;Change the running service.&lt;/strong&gt; Swarm stops the old proxy before it starts the new one (a second proxy would allow a second claim). Runners cannot claim for a few seconds, and every runner that has claimed stays refused (&lt;a href="#restart-the-proxy"&gt;Restart the proxy&lt;/a&gt;). Record the change in &lt;code&gt;deploy/deploy.env&lt;/code&gt;, or the next deploy undoes it. A tag such as &lt;code&gt;latest&lt;/code&gt; is resolved to a digest at deploy: deploy again to pick up a newer one.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Change the running service.&lt;/strong&gt; Swarm stops the old proxy before it starts the new one (a second proxy would allow a second claim). Runners cannot claim for a few seconds, and every runner that has claimed stays refused (&lt;a href="#restart-the-proxy"&gt;Restart the proxy&lt;/a&gt;). Record it in &lt;code&gt;deploy/deploy.env&lt;/code&gt;. A tag such as &lt;code&gt;latest&lt;/code&gt; is resolved to a digest at deploy: deploy again to pick up a newer one.&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service update --image &amp;lt;IMAGE&amp;gt; runners_token-proxy&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
 &lt;button
@@ -667,7 +667,7 @@ data-copied-label="Copied!"
 &lt;li&gt;&lt;strong&gt;The distributor image.&lt;/strong&gt; &lt;code&gt;runner-distributor&lt;/code&gt; runs &lt;code&gt;alpine:3&lt;/code&gt;, pinned by digest. Change the digest and deploy. It restarts on every node at once, and no running job is affected.&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;Windows base images.&lt;/strong&gt; Microsoft republishes the Server Core tags each Patch Tuesday. Pin by digest, rebuild your images on top, and change a Windows service only while its class is idle.&lt;/li&gt;
 &lt;/ul&gt;
-&lt;p&gt;For one service: &lt;code&gt;docker service update --image &amp;lt;IMAGE&amp;gt; runners_&amp;lt;SERVICE&amp;gt;&lt;/code&gt;. Record it in your stack file, or the next deploy undoes it.&lt;/p&gt;
+&lt;p&gt;For one service: &lt;code&gt;docker service update --image &amp;lt;IMAGE&amp;gt; runners_&amp;lt;SERVICE&amp;gt;&lt;/code&gt;. Record it in your stack file.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="rotate-a-runner-token"&gt;Rotate a runner token&lt;span class="hx:absolute hx:-mt-20" id="rotate-a-runner-token"&gt;&lt;/span&gt;
 &lt;a href="#rotate-a-runner-token" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Swarm secrets are immutable: create a second secret and swap it into the service that holds the token. Single-task classes (Linux and Windows) hold it in &lt;code&gt;token-proxy&lt;/code&gt; (Windows: &lt;code&gt;token-proxy-windows&lt;/code&gt;), one replica, so the swap takes seconds and runners are not touched. Persistent classes hold it in the class service, which updates one replica at a time: a busy replica is replaced after its job ends (up to 5 hours and 5 minutes), so N replicas can take N times that. Raise &lt;code&gt;update_config.parallelism&lt;/code&gt; in the stack file, or pass &lt;code&gt;--update-parallelism &amp;lt;NUMBER&amp;gt;&lt;/code&gt; once (&lt;code&gt;0&lt;/code&gt; replaces every replica at once).&lt;/p&gt;
 &lt;ol&gt;
@@ -706,7 +706,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;Swap the secret. Single-task class on Linux, in the proxy. Keep the &lt;code&gt;target&lt;/code&gt;: the proxy names a class after the file &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt;, and a new name makes a new class that no runner belongs to:&lt;/p&gt;
+&lt;p&gt;Swap the secret. Single-task class on Linux, in the proxy. Keep the &lt;code&gt;target&lt;/code&gt;: the proxy names a class after the file &lt;code&gt;&amp;lt;SERVICE&amp;gt;-token&lt;/code&gt;, and a new name makes a new class that no runner belongs to:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service update &lt;span class="se"&gt;\
 &lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --secret-rm linux-default-token &lt;span class="se"&gt;\
@@ -798,50 +798,12 @@ data-copied-label="Copied!"
 &lt;/li&gt;
 &lt;/ol&gt;
 &lt;h3 data-hextra-search-id="if-a-token-leaked"&gt;If a token leaked&lt;span class="hx:absolute hx:-mt-20" id="if-a-token-leaked"&gt;&lt;/span&gt;
-&lt;a href="#if-a-token-leaked" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Do not swap first: the old token stays valid for anyone who holds it until it is deleted in CircleCI. Delete it as soon as its replacement exists.&lt;/p&gt;
+&lt;a href="#if-a-token-leaked" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The old token stays valid for anyone who holds it until it is deleted in CircleCI, so delete it before the swap. Delete it as soon as its replacement exists.&lt;/p&gt;
 &lt;ol&gt;
-&lt;li&gt;
-&lt;p&gt;Create the new token and secret (steps 1 and 2 above). Nothing uses the secret yet.&lt;/p&gt;
-&lt;/li&gt;
-&lt;li&gt;
-&lt;p&gt;Delete the old token at once. CircleCI stops accepting it for new claims, and running jobs continue. A proxy or persistent runner that still holds the old secret fails with 401, so the class claims no new jobs until step 3 completes:&lt;/p&gt;
-&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
-&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;circleci runner token list --resource-class &amp;lt;NAMESPACE&amp;gt;/linux-default
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;circleci runner token delete &amp;lt;TOKEN_ID&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
-&lt;button
-class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
-title="Copy code"
-aria-label="Copy code"
-data-copied-label="Copied!"
-&gt;
-&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
-&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
-&lt;/button&gt;
-&lt;/div&gt;
-&lt;/div&gt;
-&lt;/li&gt;
-&lt;li&gt;
-&lt;p&gt;Swap the secret. Single-task class: in the proxy, as in step 3 above, then replace the idle runners (&lt;code&gt;docker service update --force --update-parallelism 0 runners_&amp;lt;SERVICE&amp;gt;&lt;/code&gt;; on Windows, &lt;a href="#replace-refused-runners-on-windows"&gt;Replace refused runners on Windows&lt;/a&gt;). Persistent class: replace every replica at once. Each replica finishes its running job first. On Windows, drop &lt;code&gt;uid&lt;/code&gt;, &lt;code&gt;gid&lt;/code&gt; and &lt;code&gt;mode&lt;/code&gt;, and expect a running job to end after about 5 seconds: rerun it.&lt;/p&gt;
-&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
-&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service update --update-parallelism &lt;span class="m"&gt;0&lt;/span&gt; &lt;span class="se"&gt;\
-&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --secret-rm linux-persistent-token &lt;span class="se"&gt;\
-&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; --secret-add &lt;span class="nv"&gt;source&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;linux-persistent-token-v2,target&lt;span class="o"&gt;=&lt;/span&gt;circleci_runner_config.yaml,uid&lt;span class="o"&gt;=&lt;/span&gt;2000,gid&lt;span class="o"&gt;=&lt;/span&gt;2000,mode&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="m"&gt;0400&lt;/span&gt; &lt;span class="se"&gt;\
-&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; runners_linux-persistent&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
-&lt;button
-class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
-title="Copy code"
-aria-label="Copy code"
-data-copied-label="Copied!"
-&gt;
-&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
-&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
-&lt;/button&gt;
-&lt;/div&gt;
-&lt;/div&gt;
-&lt;/li&gt;
-&lt;li&gt;
-&lt;p&gt;Do steps 4 and 5 above and remove the old secret. Then look for what the token did: unknown names in the runner inventory in CircleCI, and the jobs that ran on the class.&lt;/p&gt;
-&lt;/li&gt;
+&lt;li&gt;Create the new token and secret (steps 1 and 2 above).&lt;/li&gt;
+&lt;li&gt;Delete the old token at once (the commands of step 6). CircleCI stops accepting it for new claims, and running jobs continue. A proxy or persistent runner that still holds the old secret fails with 401, so the class claims no new jobs until step 3 completes.&lt;/li&gt;
+&lt;li&gt;Swap the secret as in step 3. Then replace the idle runners of a single-task class (&lt;code&gt;docker service update --force --update-parallelism 0 runners_&amp;lt;SERVICE&amp;gt;&lt;/code&gt;; on Windows, &lt;a href="#replace-refused-runners-on-windows"&gt;Replace refused runners on Windows&lt;/a&gt;). In a persistent class, add &lt;code&gt;--update-parallelism 0&lt;/code&gt; to the swap command so that every replica is replaced at once, each after its running job (on Windows, a running job ends: rerun it).&lt;/li&gt;
+&lt;li&gt;Do steps 4 and 5, and remove the old secret. Then look for what the token did: unknown names in the runner inventory in CircleCI, and the jobs that ran on the class.&lt;/li&gt;
 &lt;/ol&gt;
 &lt;p&gt;A leaked single-task token did not come from a job in a runner container, because those hold no token. Look at who can read Swarm secrets (the &lt;code&gt;docker&lt;/code&gt; group on a manager), at the proxy node, and at manager backups. Rotate the tokens of every class whose secret that path reached, because the proxy holds all of them.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="restart-the-proxy"&gt;Restart the proxy&lt;span class="hx:absolute hx:-mt-20" id="restart-the-proxy"&gt;&lt;/span&gt;
@@ -880,7 +842,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;&lt;code&gt;state restored; &amp;lt;class&amp;gt;: N runner(s) have claimed and stay refused&lt;/code&gt; means you are done. &lt;code&gt;no state&lt;/code&gt; or &lt;code&gt;state lost&lt;/code&gt; with running tasks at CircleCI means the runners present are refused (403) until they recycle. Replace the idle ones on a Linux class:&lt;/p&gt;
+&lt;p&gt;&lt;code&gt;state restored; &amp;lt;CLASS&amp;gt;: N runner(s) have claimed and stay refused&lt;/code&gt; means you are done. &lt;code&gt;no state&lt;/code&gt; or &lt;code&gt;state lost&lt;/code&gt; with running tasks at CircleCI means the runners present are refused (403) until they recycle. Replace the idle ones on a Linux class:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service update --force --update-parallelism &lt;span class="m"&gt;0&lt;/span&gt; runners_linux-default&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
 &lt;button
@@ -894,10 +856,10 @@ data-copied-label="Copied!"
 &lt;/button&gt;
 &lt;/div&gt;
 &lt;/div&gt;
-&lt;p&gt;A busy Linux replica finishes its job first. &lt;strong&gt;Do not run this on a Windows class&lt;/strong&gt;: a busy Windows container is killed about 5 seconds after the stop, and the job with it. Use &lt;a href="#replace-refused-runners-on-windows"&gt;Replace refused runners on Windows&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;A busy Linux replica finishes its job first. On a Windows class, use &lt;a href="#replace-refused-runners-on-windows"&gt;Replace refused runners on Windows&lt;/a&gt; instead.&lt;/p&gt;
 &lt;/li&gt;
 &lt;/ol&gt;
-&lt;p&gt;The image does not change on restart (same tag or digest, unless the tag moved): see &lt;a href="#upgrade-the-token-proxy"&gt;Upgrade the token proxy&lt;/a&gt;. A stop (this command, a deploy, a node shutdown) lets claims in flight finish, for 8 seconds at most, so a claim CircleCI has answered and that is saved reaches its runner. That is the Linux figure, with a Swarm grace of 10 seconds. A Windows container can be ended about 5 seconds after a stop, which can cut off a claim in flight (&lt;a href="#a-claim-whose-outcome-is-unknown"&gt;A claim whose outcome is unknown&lt;/a&gt;).&lt;/p&gt;
+&lt;p&gt;The image does not change on restart (same tag or digest, unless the tag moved): see &lt;a href="#upgrade-the-token-proxy"&gt;Upgrade the token proxy&lt;/a&gt;. A stop (this command, a deploy, a node shutdown) lets claims in flight finish, for 8 seconds at most, so a claim CircleCI has answered and that is saved reaches its runner. That is the Linux figure. On Windows, a stop can cut off a claim in flight (&lt;a href="#a-claim-whose-outcome-is-unknown"&gt;A claim whose outcome is unknown&lt;/a&gt;).&lt;/p&gt;
 &lt;p&gt;The start line names one of these states for each class:&lt;/p&gt;
 &lt;ul&gt;
 &lt;li&gt;&lt;strong&gt;&lt;code&gt;state restored&lt;/code&gt;.&lt;/strong&gt; All N latched addresses stay refused, also those DNS does not list yet, until DNS has not listed them for 30 seconds in a row.&lt;/li&gt;
@@ -905,10 +867,9 @@ data-copied-label="Copied!"
 &lt;li&gt;&lt;strong&gt;&lt;code&gt;no state (a first start)&lt;/code&gt; with &lt;code&gt;CircleCI reports M running task(s)&lt;/code&gt;, or &lt;code&gt;CircleCI does not say how many tasks run&lt;/code&gt;.&lt;/strong&gt; The proxy cannot tell which runners hold the tasks, so it fails safe and latches every runner present until Swarm replaces it.&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;&lt;code&gt;state lost; ...&lt;/code&gt; or &lt;code&gt;no state directory; ...&lt;/code&gt;.&lt;/strong&gt; The state file is damaged or removed, or there is no state directory: the same decision for every class, from what CircleCI says.&lt;/li&gt;
 &lt;/ul&gt;
-&lt;p&gt;With no state the proxy asks CircleCI (&lt;code&gt;GET /api/v3/runner/scale&lt;/code&gt; with each class&amp;rsquo;s token, up to three times, within 25 seconds in all). With no running task the runners present may claim. With a running task, or when the call fails, is late or answers anything else, the proxy latches every runner of that class present, so a runner that holds a job cannot claim a second one. A refused runner gets 403 until it recycles: at its idle timeout (1 hour in the shipped files) or at once with the command above.&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Why 403, and not 401.&lt;/strong&gt; Tested with the real runner 3.1.13 in single-task mode against the fake API: a 401 and a 403 on a claim behave the same. The runner keeps its container, claims again about every 5 seconds, and exits 0 only when its idle timeout ends. So replace idle runners with the command above, or use a shorter &lt;code&gt;CIRCLECI_RUNNER_IDLE_TIMEOUT&lt;/code&gt;. A running job and a runner that starts after the proxy are unaffected.&lt;/p&gt;
+&lt;p&gt;A refused runner gets 403 until it recycles: at its idle timeout (1 hour in the shipped files) or at once with the command above. A 401 and a 403 on a claim behave the same in the runner: it keeps its container and claims again every 5 seconds.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="drain-a-node-for-patching"&gt;Drain a node for patching&lt;span class="hx:absolute hx:-mt-20" id="drain-a-node-for-patching"&gt;&lt;/span&gt;
-&lt;a href="#drain-a-node-for-patching" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Restarting the Docker daemon stops every container (live restore does not work in Swarm mode), so empty the node before you patch Docker or reboot. On Linux, a drain sends SIGTERM and waits for the grace period, so running jobs finish. &lt;strong&gt;On Windows, a drain kills a running job after about 5 seconds&lt;/strong&gt;: use &lt;a href="#a-windows-node"&gt;A Windows node&lt;/a&gt;.&lt;/p&gt;
+&lt;a href="#drain-a-node-for-patching" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Restarting the Docker daemon stops every container (live restore does not work in Swarm mode), so empty the node before you patch Docker or reboot. On Linux, a drain sends SIGTERM and waits for the grace period, so running jobs finish. On Windows, use &lt;a href="#a-windows-node"&gt;A Windows node&lt;/a&gt; instead.&lt;/p&gt;
 &lt;ol&gt;
 &lt;li&gt;
 &lt;p&gt;Drain:&lt;/p&gt;
@@ -988,7 +949,7 @@ data-copied-label="Copied!"
 &lt;li&gt;&lt;strong&gt;RHEL and its clones.&lt;/strong&gt; Turn off automatic installation in &lt;code&gt;dnf-automatic&lt;/code&gt; (or limit it to a download), and version-lock the Docker packages.&lt;/li&gt;
 &lt;/ul&gt;
 &lt;h3 data-hextra-search-id="the-node-of-the-proxy"&gt;The node of the proxy&lt;span class="hx:absolute hx:-mt-20" id="the-node-of-the-proxy"&gt;&lt;/span&gt;
-&lt;a href="#the-node-of-the-proxy" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Draining the node that runs &lt;code&gt;token-proxy&lt;/code&gt; stops the proxy. A proxy pinned to a labelled node stays &lt;code&gt;Pending&lt;/code&gt; until that node is &lt;code&gt;active&lt;/code&gt;, then starts there with its state. No claim is possible meanwhile, so choose a quiet period and patch that node last. A proxy with the default placement moves to another manager and its state stays behind (&lt;a href="#where-the-proxy-runs-and-when-it-moves"&gt;Where the proxy runs, and when it moves&lt;/a&gt;). Draining every manager, or the only node that can run the proxy, stops every claim: keep one node undrained for it (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/install/multi-node/#managers-and-quorum"&gt;the warning in Multi-Node Clusters&lt;/a&gt;).&lt;/p&gt;
+&lt;a href="#the-node-of-the-proxy" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Draining the node that runs &lt;code&gt;token-proxy&lt;/code&gt; stops the proxy: no claim is possible until it runs again, so patch that node last, in a quiet period (&lt;a href="#where-the-proxy-runs-and-when-it-moves"&gt;Where the proxy runs, and when it moves&lt;/a&gt;). Draining every manager, or the only node that can run the proxy, stops every claim: keep one node undrained for it (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/install/multi-node/#managers-and-quorum"&gt;the warning in Multi-node clusters&lt;/a&gt;).&lt;/p&gt;
 &lt;h3 data-hextra-search-id="stop-a-busy-windows-container"&gt;Stop a busy Windows container&lt;span class="hx:absolute hx:-mt-20" id="stop-a-busy-windows-container"&gt;&lt;/span&gt;
 &lt;a href="#stop-a-busy-windows-container" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;On Linux, a stop lets the running job finish. On Windows, stopping a busy container from outside kills its job after about 5 seconds. The normal flow is unaffected: a job finishes, the runner exits, the container ends cleanly, and Swarm starts a new one.&lt;/p&gt;
 &lt;p&gt;When Docker stops a container, Windows sends it the shutdown event. The runner turns it into SIGTERM and drains, but on Server Core Windows waits only the registry value &lt;code&gt;WaitToKillServiceTimeout&lt;/code&gt; before it ends the processes. The default is 5 seconds, whatever &lt;code&gt;docker stop -t&lt;/code&gt; or &lt;code&gt;stop_grace_period&lt;/code&gt; says. The container exits with code 3221225786 (&lt;code&gt;0xC000013A&lt;/code&gt;) and the job dies with it. These stop containers this way: a rolling update (&lt;code&gt;docker stack deploy&lt;/code&gt;, &lt;code&gt;docker service update&lt;/code&gt;), &lt;code&gt;docker service scale&lt;/code&gt; to a lower number, &lt;code&gt;docker node update --availability drain&lt;/code&gt;, &lt;code&gt;docker stack rm&lt;/code&gt;, and a restart of the Docker service. Roll out changes while the class is idle, or rerun the interrupted jobs.&lt;/p&gt;
@@ -1010,7 +971,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/div&gt;
 &lt;h4 data-hextra-search-id="optional-an-image-that-lets-a-job-finish-after-a-stop-diy"&gt;Optional: an image that lets a job finish after a stop (DIY)&lt;span class="hx:absolute hx:-mt-20" id="optional-an-image-that-lets-a-job-finish-after-a-stop-diy"&gt;&lt;/span&gt;
-&lt;a href="#optional-an-image-that-lets-a-job-finish-after-a-stop-diy" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;Your own image can lift the limit by setting &lt;code&gt;WaitToKillServiceTimeout&lt;/code&gt; once, at build time, in milliseconds: at least your longest job plus a margin. This example is 18,300,000 (5 hours and 5 minutes, the runner&amp;rsquo;s &lt;code&gt;max_run_time&lt;/code&gt; plus 5 minutes):&lt;/p&gt;
+&lt;a href="#optional-an-image-that-lets-a-job-finish-after-a-stop-diy" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;Your own image can lift the limit by setting &lt;code&gt;WaitToKillServiceTimeout&lt;/code&gt; once, at build time, in milliseconds: at least your longest job plus a margin. This example is 18,300,000 (5 hours and 5 minutes, the &lt;code&gt;max_run_time&lt;/code&gt; of the runner plus 5 minutes):&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-dockerfile" data-lang="dockerfile"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;FROM&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="s"&gt;mcr.microsoft.com/windows/servercore:ltsc2022&lt;/span&gt;&lt;span class="err"&gt;
 &lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;RUN&lt;/span&gt; reg add HKLM&lt;span class="se"&gt;\S&lt;/span&gt;YSTEM&lt;span class="se"&gt;\C&lt;/span&gt;urrentControlSet&lt;span class="se"&gt;\C&lt;/span&gt;ontrol /v WaitToKillServiceTimeout /t REG_SZ /d &lt;span class="m"&gt;18300000&lt;/span&gt; /f&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
@@ -1025,29 +986,21 @@ data-copied-label="Copied!"
 &lt;/button&gt;
 &lt;/div&gt;
 &lt;/div&gt;
-&lt;div
-data-alert="note" class="hextra-alert"
-&gt;
-&lt;p class="hextra-alert-title"&gt;&lt;svg height=20px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"&gt;&lt;circle cx="12" cy="12" r="10"/&gt;&lt;path d="M12 16v-4"/&gt;&lt;path d="M12 8h.01"/&gt;&lt;/svg&gt;
-&lt;span class="hextra-alert-title-text"&gt;Note&lt;/span&gt;
-&lt;/p&gt;
-&lt;div class="hextra-alert-content"&gt;&lt;p&gt;Set the value at build time. Setting it at run time with &lt;code&gt;reg add&lt;/code&gt; inside a running container does not work: Windows reads the value only when the container boots.&lt;/p&gt;&lt;/div&gt;
-&lt;/div&gt;
-&lt;p&gt;Use it as the &lt;code&gt;image:&lt;/code&gt; of the service, which still mounts the runner and Git and sets &lt;code&gt;PATH&lt;/code&gt; as in the shipped stack file. Build one image per Server Core tag, and rebuild it after each Patch Tuesday update of the base image.&lt;/p&gt;
+&lt;p&gt;Set the value at build time: Windows reads it only when the container boots, so &lt;code&gt;reg add&lt;/code&gt; in a running container does nothing. Use the image as the &lt;code&gt;image:&lt;/code&gt; of the service, which still mounts the runner and Git and sets &lt;code&gt;PATH&lt;/code&gt; as in the shipped stack file. Build one image per Server Core tag, and rebuild it after each Patch Tuesday update of the base image.&lt;/p&gt;
 &lt;div
 data-alert="warning" class="hextra-alert"
 &gt;
 &lt;p class="hextra-alert-title"&gt;&lt;svg height=20px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"&gt;&lt;path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/&gt;&lt;path d="M12 9v4"/&gt;&lt;path d="M12 17h.01"/&gt;&lt;/svg&gt;
 &lt;span class="hextra-alert-title-text"&gt;Warning&lt;/span&gt;
 &lt;/p&gt;
-&lt;div class="hextra-alert-content"&gt;&lt;p&gt;Never use &lt;code&gt;New-Item -Force&lt;/code&gt; on an existing registry key, in an image build or a running container. It replaces the key and deletes its values and subkeys. On the &lt;code&gt;cexecsvc&lt;/code&gt; service key, the container then fails to start with &lt;code&gt;hcs::System::Start: context deadline exceeded&lt;/code&gt;. Use &lt;code&gt;reg add&lt;/code&gt; or &lt;code&gt;Set-ItemProperty&lt;/code&gt;, which set one value.&lt;/p&gt;&lt;/div&gt;
+&lt;div class="hextra-alert-content"&gt;&lt;p&gt;Never use &lt;code&gt;New-Item -Force&lt;/code&gt; on an existing registry key, in an image build or a running container. It deletes the values and subkeys of the key, and on the &lt;code&gt;cexecsvc&lt;/code&gt; service key the container then fails to start with &lt;code&gt;hcs::System::Start: context deadline exceeded&lt;/code&gt;. Use &lt;code&gt;reg add&lt;/code&gt; or &lt;code&gt;Set-ItemProperty&lt;/code&gt;.&lt;/p&gt;&lt;/div&gt;
 &lt;/div&gt;
-&lt;p&gt;This repository does not build or test such an image. Before you rely on it, run a job of a few minutes on a non-production node, force an update of its service, and check that the job finishes.&lt;/p&gt;
+&lt;p&gt;Machine runner swarm does not build or test such an image. Before you rely on it, run a job of a few minutes on a non-production node, force an update of its service, and check that the job finishes.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="run-the-cluster"&gt;Run the cluster&lt;span class="hx:absolute hx:-mt-20" id="run-the-cluster"&gt;&lt;/span&gt;
 &lt;a href="#run-the-cluster" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Reference for production: logs that survive, signals to watch, deploy variables, backups, certificates and failures.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="ship-the-logs"&gt;Ship the logs&lt;span class="hx:absolute hx:-mt-20" id="ship-the-logs"&gt;&lt;/span&gt;
 &lt;a href="#ship-the-logs" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;&lt;code&gt;docker service logs&lt;/code&gt; reads only logs of tasks Swarm still holds. Every finished job ends a task, and the task history limit of 2 makes Swarm prune old tasks, so a job log is gone after a few more jobs. The stack files keep logs on the node (&lt;code&gt;local&lt;/code&gt; driver on Linux, 3 files of 20 MB; &lt;code&gt;json-file&lt;/code&gt; on Windows) and rotate them.&lt;/p&gt;
-&lt;p&gt;The token proxy logs one line (about 85 bytes) per forwarded claim, a 204 included: about one per idle runner every 5 seconds. With 50 idle runners that is about 70 MB a day, so the Linux proxy&amp;rsquo;s 60 MB wrap in under a day and the Windows proxy&amp;rsquo;s 10 MB in a few hours, and the lines that matter after an incident (&lt;code&gt;refused&lt;/code&gt;, &lt;code&gt;state restored&lt;/code&gt;, &lt;code&gt;released&lt;/code&gt;) are among the first lost. Before the fleet is large, ship the proxy log off the node or raise &lt;code&gt;max-file&lt;/code&gt; of &lt;code&gt;token-proxy&lt;/code&gt; in your copy of the stack file. To keep logs, choose one:&lt;/p&gt;
+&lt;p&gt;The token proxy logs one line (about 85 bytes) per forwarded claim, a 204 included: about one per idle runner every 5 seconds. With 50 idle runners that is about 70 MB a day, so the 60 MB of the Linux proxy and the 10 MB of the Windows proxy wrap within a day, and the lines that matter after an incident (&lt;code&gt;refused&lt;/code&gt;, &lt;code&gt;state restored&lt;/code&gt;, &lt;code&gt;released&lt;/code&gt;) go first. Ship the proxy log off the node, or raise &lt;code&gt;max-file&lt;/code&gt; of &lt;code&gt;token-proxy&lt;/code&gt; in your copy of the stack file. To keep logs, choose one:&lt;/p&gt;
 &lt;ul&gt;
 &lt;li&gt;&lt;strong&gt;A logging driver.&lt;/strong&gt; Change &lt;code&gt;logging:&lt;/code&gt; in your copy of every stack file to a shipping driver such as &lt;code&gt;syslog&lt;/code&gt;, &lt;code&gt;fluentd&lt;/code&gt; or &lt;code&gt;gelf&lt;/code&gt;. The stack files set the driver per service, so a default in &lt;code&gt;daemon.json&lt;/code&gt; does not apply. &lt;code&gt;docker service logs&lt;/code&gt; then fails for these drivers.&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;A log agent on every node.&lt;/strong&gt; It reads container logs through the Docker API and forwards them. The stack files stay as they are, and &lt;code&gt;docker service logs&lt;/code&gt; keeps working.&lt;/li&gt;
@@ -1196,27 +1149,27 @@ data-copied-label="Copied!"
 &lt;/thead&gt;
 &lt;tbody&gt;
 &lt;tr&gt;
-&lt;td&gt;&lt;code&gt;listening on :8080, upstream &amp;lt;host&amp;gt;, classes tasks.linux-default,...&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;Started. One class per secret &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt; it holds. A class missing here gets 403 from its runners: its secret is not mounted in &lt;code&gt;token-proxy&lt;/code&gt; or not named &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;listening on :8080, upstream &amp;lt;HOST&amp;gt;, classes tasks.linux-default,...&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;Started. One class per secret &lt;code&gt;&amp;lt;SERVICE&amp;gt;-token&lt;/code&gt; it holds. A class missing here gets 403 from its runners: its secret is not mounted in &lt;code&gt;token-proxy&lt;/code&gt; or not named &lt;code&gt;&amp;lt;SERVICE&amp;gt;-token&lt;/code&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
-&lt;td&gt;&lt;code&gt;claim from &amp;lt;ip&amp;gt; (tasks.&amp;lt;service&amp;gt;): upstream status 204&lt;/code&gt; or &lt;code&gt;200&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;claim from &amp;lt;IP_ADDRESS&amp;gt; (tasks.&amp;lt;SERVICE&amp;gt;): upstream status 204&lt;/code&gt; or &lt;code&gt;200&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;204: no task (normal, about every 5 seconds per idle runner). 200: a task was handed out, and that runner cannot claim again&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
-&lt;td&gt;&lt;code&gt;released &amp;lt;ip&amp;gt; (tasks.&amp;lt;service&amp;gt;)&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;released &amp;lt;IP_ADDRESS&amp;gt; (tasks.&amp;lt;SERVICE&amp;gt;)&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;DNS has not listed the address for 30 seconds in a row: the container is gone, and a new one on that address may claim&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
-&lt;td&gt;&lt;code&gt;claim from &amp;lt;ip&amp;gt; refused: not a runner of any class (tasks.&amp;lt;service&amp;gt; lists [...], ...)&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;claim from &amp;lt;IP_ADDRESS&amp;gt; refused: not a runner of any class (tasks.&amp;lt;SERVICE&amp;gt; lists [...], ...)&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;Not a runner of a configured class, or one DNS does not list yet. Compare with the addresses in the line. Look for a class added without adding it to the proxy&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
-&lt;td&gt;&lt;code&gt;claim from &amp;lt;ip&amp;gt; refused: this runner has already claimed a task&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;claim from &amp;lt;IP_ADDRESS&amp;gt; refused: this runner has already claimed a task&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;A second claim from one container. After a restart, a runner that has claimed gets this until Swarm replaces it (&lt;a href="#restart-the-proxy"&gt;Restart the proxy&lt;/a&gt;)&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
-&lt;td&gt;&lt;code&gt;claim from &amp;lt;ip&amp;gt; refused: too many claims&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;claim from &amp;lt;IP_ADDRESS&amp;gt; refused: too many claims&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;More than 2 claims a second from one container (429)&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
@@ -1224,7 +1177,7 @@ data-copied-label="Copied!"
 &lt;td&gt;&lt;a href="#when-the-proxy-cannot-save-its-state"&gt;When the proxy cannot save its state&lt;/a&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
-&lt;td&gt;&lt;code&gt;claim from &amp;lt;ip&amp;gt; (tasks.&amp;lt;service&amp;gt;): upstream status 401&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;claim from &amp;lt;IP_ADDRESS&amp;gt; (tasks.&amp;lt;SERVICE&amp;gt;): upstream status 401&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;CircleCI rejects the class token: deleted, or the secret holds another class&amp;rsquo;s token (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/troubleshooting/#the-runner-log-shows-401"&gt;The runner log shows 401&lt;/a&gt;)&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
@@ -1242,7 +1195,7 @@ data-copied-label="Copied!"
 &lt;/tbody&gt;
 &lt;/table&gt;
 &lt;p&gt;&lt;strong&gt;Limits.&lt;/strong&gt; Each client IP gets 2 claims a second (burst 10, answer 429) and 50 requests a second (burst 200) on all paths. At most 512 requests are served at once, and one above that gets 503 with &lt;code&gt;Retry-After&lt;/code&gt;. The proxy waits 60 seconds for CircleCI&amp;rsquo;s response headers. A runner and a job stay far below these numbers.&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;If the proxy is down,&lt;/strong&gt; runners cannot claim and CircleCI keeps jobs queued. Idle runners keep polling and fail, and they cannot go around the proxy, because they hold only the placeholder. A runner that runs a job keeps its container, but its calls and its task agent&amp;rsquo;s calls to the API fail meanwhile. &lt;code&gt;linux/tests/proxy.sh&lt;/code&gt; measures this with the real runner: a proxy restart while jobs run does not end them, and a proxy down when jobs end only delays the report (the runner sends the end of the job once the proxy is back and exits 0). The end-to-end test restarts the proxy in the middle of a real job too (probe &lt;code&gt;b2&lt;/code&gt;). Swarm restarts a failed proxy task after 5 seconds on Linux and 10 on Windows, so an outage that short is harmless. Do not leave the proxy down long while jobs run: how long the real task agent keeps retrying is not documented.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;If the proxy is down,&lt;/strong&gt; runners cannot claim and CircleCI keeps jobs queued. A runner that runs a job keeps its container, but its calls to the API wait. &lt;code&gt;linux/tests/proxy.sh&lt;/code&gt; measures this with the real runner: a restart while jobs run does not end them, and a proxy that is down when jobs end only delays the report. Swarm restarts a failed proxy task after 5 seconds on Linux and 10 on Windows. Do not leave the proxy down long while jobs run: how long the task agent keeps retrying is not documented.&lt;/p&gt;
 &lt;h4 data-hextra-search-id="replace-refused-runners-on-windows"&gt;Replace refused runners on Windows&lt;span class="hx:absolute hx:-mt-20" id="replace-refused-runners-on-windows"&gt;&lt;/span&gt;
 &lt;a href="#replace-refused-runners-on-windows" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;&lt;code&gt;docker service update --force&lt;/code&gt; replaces every container of a service at once, busy ones included, so on a Windows class it ends running jobs. A refused runner (403 &lt;code&gt;this runner has already claimed a task&lt;/code&gt;) holds no task, so removing that one container is safe, and Swarm starts a replacement. The CI does not run these commands: check the result before you use them on a fleet.&lt;/p&gt;
 &lt;ol&gt;
@@ -1305,8 +1258,8 @@ data-copied-label="Copied!"
 &lt;h4 data-hextra-search-id="when-the-proxy-cannot-save-its-state"&gt;When the proxy cannot save its state&lt;span class="hx:absolute hx:-mt-20" id="when-the-proxy-cannot-save-its-state"&gt;&lt;/span&gt;
 &lt;a href="#when-the-proxy-cannot-save-its-state" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;The proxy saves a runner&amp;rsquo;s address before it hands the task over. If the save fails (the volume &lt;code&gt;proxy-state&lt;/code&gt; is full, read-only or gone), that runner gets 503 and stays refused (403), every other claim gets 503 without reaching CircleCI, and the proxy deletes &lt;code&gt;state.json&lt;/code&gt; (so no restart reads a stale state) and reports unhealthy. CircleCI has already allocated that task to the runner, which never runs it: rerun the job if it does not end. Swarm restarts the proxy after 3 failed health checks, and with the state file gone the restart asks CircleCI and refuses every runner of a class with running tasks. Mend the volume (free space, or fix the mount) before or right after: the proxy refuses to start when it cannot write its state directory.&lt;/p&gt;
 &lt;h4 data-hextra-search-id="where-the-proxy-runs-and-when-it-moves"&gt;Where the proxy runs, and when it moves&lt;span class="hx:absolute hx:-mt-20" id="where-the-proxy-runs-and-when-it-moves"&gt;&lt;/span&gt;
-&lt;a href="#where-the-proxy-runs-and-when-it-moves" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;The proxy runs on a manager by default (&lt;code&gt;node.role == manager&lt;/code&gt;), with no label. With one manager it never moves. Its state, the addresses of runners that have claimed, is the volume &lt;code&gt;proxy-state&lt;/code&gt; of its node.&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;The worst case.&lt;/strong&gt; If the proxy moves, its state is lost: the new node has an empty volume. A move happens by itself when its node is down and another manager matches, or by hand when you change the placement. The proxy then asks CircleCI for each class (&lt;a href="#restart-the-proxy"&gt;Restart the proxy&lt;/a&gt;). With running tasks in a class, or no answer, it &lt;strong&gt;refuses the existing runners&lt;/strong&gt; of that class (403) until they recycle (a runner that runs a job is unaffected). Replace the idle ones with &lt;code&gt;docker service update --force --update-parallelism 0 runners_&amp;lt;SERVICE&amp;gt;&lt;/code&gt; per Linux class, and on Windows as in &lt;a href="#replace-refused-runners-on-windows"&gt;Replace refused runners on Windows&lt;/a&gt;. This is the safe side: no runner can claim twice.&lt;/p&gt;
+&lt;a href="#where-the-proxy-runs-and-when-it-moves" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h4&gt;&lt;p&gt;The proxy runs on a manager by default (&lt;code&gt;node.role == manager&lt;/code&gt;). Its state, the addresses of runners that have claimed, is the volume &lt;code&gt;proxy-state&lt;/code&gt; of its node.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;If the proxy moves, its state is lost.&lt;/strong&gt; A move happens by itself when its node is down and another manager matches, or by hand when you change the placement. The new node has an empty volume, so the proxy asks CircleCI for each class (&lt;a href="#restart-the-proxy"&gt;Restart the proxy&lt;/a&gt;). With running tasks in a class, or no answer, it refuses the existing runners of that class (403) until they recycle. A runner that runs a job is unaffected. Replace the idle ones with &lt;code&gt;docker service update --force --update-parallelism 0 runners_&amp;lt;SERVICE&amp;gt;&lt;/code&gt; per Linux class, and on Windows as in &lt;a href="#replace-refused-runners-on-windows"&gt;Replace refused runners on Windows&lt;/a&gt;. No runner can claim twice.&lt;/p&gt;
 &lt;p&gt;To move the proxy by hand (if no node matches, the service stays pending and no runner can claim):&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service update --constraint-rm &lt;span class="s1"&gt;&amp;#39;node.role == manager&amp;#39;&lt;/span&gt; --constraint-add &lt;span class="s1"&gt;&amp;#39;node.hostname == &amp;lt;NEW_MANAGER&amp;gt;&amp;#39;&lt;/span&gt; runners_token-proxy&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
@@ -1321,7 +1274,7 @@ data-copied-label="Copied!"
 &lt;/button&gt;
 &lt;/div&gt;
 &lt;/div&gt;
-&lt;p&gt;&lt;strong&gt;Several managers, or a cluster with workers.&lt;/strong&gt; The default lets the proxy start on any manager, and runners may share a node with it. In a cluster, label the proxy&amp;rsquo;s node and say so at deploy time (&lt;a href="#keep-the-deploy-variables-in-version-control"&gt;Keep the deploy variables in version control&lt;/a&gt;):&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;In a cluster, pin the proxy.&lt;/strong&gt; Label its node and say so at deploy time (&lt;a href="#keep-the-deploy-variables-in-version-control"&gt;Keep the deploy variables in version control&lt;/a&gt;):&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker node update --label-add machine-runner-swarm.proxy&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="nb"&gt;true&lt;/span&gt; &amp;lt;MANAGER&amp;gt;
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo env &lt;span class="nv"&gt;MACHINE_RUNNER_SWARM_PROXY_PLACEMENT&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s1"&gt;&amp;#39;node.labels.machine-runner-swarm.proxy == true&amp;#39;&lt;/span&gt; docker stack deploy -c deploy/runners.yaml runners&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
@@ -1336,8 +1289,8 @@ data-copied-label="Copied!"
 &lt;/button&gt;
 &lt;/div&gt;
 &lt;/div&gt;
-&lt;p&gt;The placement variable pins the proxy to a labelled node (manager or worker), and runner services never run on a labelled node, so no job shares a node with the class tokens. On a single node, with no label, the proxy and runners share the node. If the labelled node dies, the service stays pending until you label another. The labelled node runs no jobs: size the cluster so the other nodes carry the replicas.&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Planned work on the proxy&amp;rsquo;s node.&lt;/strong&gt; A reboot keeps the state, and a move loses it. If the proxy is pinned, drain the node, patch it and set it &lt;code&gt;active&lt;/code&gt;: the proxy is pending meanwhile, no runner can claim, and running jobs wait for the proxy at the end. It then starts on the same node with its state. Keep the downtime to the patch, and patch this node last (&lt;a href="#drain-a-node-for-patching"&gt;Drain a node for patching&lt;/a&gt;). With the default placement and other managers, draining moves the proxy with an empty state (the worst case above): pin it first, or accept replacing the refused runners afterwards.&lt;/p&gt;
+&lt;p&gt;The proxy then runs on the labeled node (a manager or a worker), and runner services never run on it, so no job shares a node with the class tokens. On a single node, set no label. If the labeled node dies, the service stays pending until you label another. The labeled node runs no jobs, so size the cluster for that.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Planned work on that node.&lt;/strong&gt; A reboot keeps the state. Drain the node, patch it and set it &lt;code&gt;active&lt;/code&gt;: no runner can claim meanwhile, and running jobs wait for the proxy at the end. Patch this node last (&lt;a href="#drain-a-node-for-patching"&gt;Drain a node for patching&lt;/a&gt;). With the default placement, draining moves the proxy with an empty state: pin it first, or accept replacing the refused runners afterwards.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="keep-the-deploy-variables-in-version-control"&gt;Keep the deploy variables in version control&lt;span class="hx:absolute hx:-mt-20" id="keep-the-deploy-variables-in-version-control"&gt;&lt;/span&gt;
 &lt;a href="#keep-the-deploy-variables-in-version-control" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The variables of &lt;code&gt;docker stack deploy&lt;/code&gt; are the only record of your choices that the stack files do not hold: the runner pin and its SHA-256 values, the proxy image, and the proxy placement. A deploy that leaves them out silently sets the defaults again: the shipped pin, the proxy tag &lt;code&gt;latest&lt;/code&gt;, and the placement &lt;code&gt;node.role == manager&lt;/code&gt; (which can move the proxy to a node without its state). A &lt;code&gt;docker service update&lt;/code&gt; change is lost the same way.&lt;/p&gt;
 &lt;p&gt;Keep the variables in a file in your own repository next to your stack files, and never deploy by hand. &lt;code&gt;deploy/deploy.env&lt;/code&gt; (no secrets):&lt;/p&gt;
@@ -1410,7 +1363,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;h3 data-hextra-search-id="back-up-the-managers-and-recover"&gt;Back up the managers, and recover&lt;span class="hx:absolute hx:-mt-20" id="back-up-the-managers-and-recover"&gt;&lt;/span&gt;
 &lt;a href="#back-up-the-managers-and-recover" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;The cluster state is &lt;code&gt;/var/lib/docker/swarm&lt;/code&gt; on each manager. It holds the Raft log with every Swarm secret, so &lt;strong&gt;the backup holds every runner token&lt;/strong&gt;. Keep it like a password vault and delete old copies.&lt;/p&gt;
-&lt;p&gt;The method needs a second manager: Docker stops on the manager you copy, and the others must keep the quorum. A one-manager cluster has no safe way to copy while it runs: keep your stack files and deploy variables in version control and rely on the redeploy below.&lt;/p&gt;
+&lt;p&gt;Docker stops on the manager you copy, so the others must keep the quorum: the method needs a second manager. With one manager, keep your stack files and deploy variables in version control and rely on the redeploy below.&lt;/p&gt;
 &lt;ol&gt;
 &lt;li&gt;
 &lt;p&gt;If the managers use autolock, save the key: &lt;code&gt;docker swarm unlock-key&lt;/code&gt;.&lt;/p&gt;
@@ -1496,7 +1449,7 @@ data-copied-label="Copied!"
 &lt;a href="#node-death" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Swarm marks a node &lt;code&gt;Down&lt;/code&gt; after it misses its heartbeats and starts replacement tasks on other nodes that match the constraints.&lt;/p&gt;
 &lt;ul&gt;
 &lt;li&gt;&lt;strong&gt;The jobs on the node are lost.&lt;/strong&gt; CircleCI reports them as failed because of a problem with your infrastructure. Self-hosted runners have no automatic retry: rerun the workflow from the failed job.&lt;/li&gt;
-&lt;li&gt;&lt;strong&gt;Services pinned to the node stay &lt;code&gt;Pending&lt;/code&gt;&lt;/strong&gt;: the persistent class (&lt;code&gt;node.hostname&lt;/code&gt;) and the docker-build classes (a labelled node). Capacity drops by the node&amp;rsquo;s replicas until it returns or other nodes have room.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Services pinned to the node stay &lt;code&gt;Pending&lt;/code&gt;&lt;/strong&gt;: the persistent class (&lt;code&gt;node.hostname&lt;/code&gt;) and the docker-build classes (a labeled node). Capacity drops by the node&amp;rsquo;s replicas until it returns or other nodes have room.&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;A returning node&lt;/strong&gt; rejoins by itself while its certificate is valid. Swarm does not move tasks back.&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;A node gone for good:&lt;/strong&gt; &lt;code&gt;docker node rm --force &amp;lt;NODE&amp;gt;&lt;/code&gt;. For a lost manager use &lt;code&gt;docker node demote&lt;/code&gt; (if reachable) or &lt;code&gt;docker node rm --force&lt;/code&gt;, and add a new manager to hold the quorum. The cluster runs while a majority of managers remains. Without one, running jobs finish but no replica is replaced (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/install/multi-node/#managers-and-quorum"&gt;Managers and quorum&lt;/a&gt;).&lt;/li&gt;
 &lt;/ul&gt;
@@ -1521,9 +1474,9 @@ data-copied-label="Copied!"
 &lt;a href="#free-disk-space" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;A full disk is the most common way a node stops running jobs, and a full manager disk can break Swarm itself.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="where-the-space-goes"&gt;Where the space goes&lt;span class="hx:absolute hx:-mt-20" id="where-the-space-goes"&gt;&lt;/span&gt;
 &lt;a href="#where-the-space-goes" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;ul&gt;
-&lt;li&gt;&lt;strong&gt;Stopped containers.&lt;/strong&gt; A job runs in its container&amp;rsquo;s writable layer, which stays until Swarm prunes the task. A slot keeps its running task and up to &lt;code&gt;task-history-limit&lt;/code&gt; finished ones (Swarm&amp;rsquo;s default is 5), so R replicas can hold R times (1 plus the limit) layers. A job that leaves gigabytes behind makes this the largest item.&lt;/li&gt;
-&lt;li&gt;&lt;strong&gt;Images.&lt;/strong&gt; Every tag a job image has had, and every version of your own images, stays until something removes it. &lt;code&gt;docker image prune&lt;/code&gt; removes only untagged images.&lt;/li&gt;
-&lt;li&gt;&lt;strong&gt;Logs:&lt;/strong&gt; 3 files of 20 MB (60 MB) per runner on both systems and for the Linux proxy, 10 MB for the Windows proxy. &lt;strong&gt;A docker-build node&amp;rsquo;s engine:&lt;/strong&gt; images, volumes and build cache that jobs leave. &lt;strong&gt;Raft log and Swarm state&lt;/strong&gt;, in &lt;code&gt;/var/lib/docker/swarm&lt;/code&gt; of each manager.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Stopped containers.&lt;/strong&gt; A job runs in the writable layer of its container, which stays until Swarm prunes the task. A slot keeps its running task and up to &lt;code&gt;task-history-limit&lt;/code&gt; finished ones (default 5), so R replicas can hold R times (1 plus the limit) layers.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Images.&lt;/strong&gt; Every tag a job image has had stays until something removes it. &lt;code&gt;docker image prune&lt;/code&gt; removes only untagged images.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Logs and state.&lt;/strong&gt; Logs are 3 files of 20 MB per runner on both systems and for the Linux proxy (10 MB for the Windows proxy). A docker-build node keeps the images, volumes and build cache that jobs leave. Each manager keeps the Raft log in &lt;code&gt;/var/lib/docker/swarm&lt;/code&gt;.&lt;/li&gt;
 &lt;/ul&gt;
 &lt;h3 data-hextra-search-id="prevent-it"&gt;Prevent it&lt;span class="hx:absolute hx:-mt-20" id="prevent-it"&gt;&lt;/span&gt;
 &lt;a href="#prevent-it" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;ol&gt;
@@ -1534,48 +1487,7 @@ data-copied-label="Copied!"
 &lt;p&gt;&lt;strong&gt;Give Docker its own filesystem, and keep managers free of jobs.&lt;/strong&gt; Put &lt;code&gt;/var/lib/docker&lt;/code&gt; on a separate volume, sized for the worst case above: replicas, times the largest workspace, times (1 plus the history limit), plus images. A manager with the proxy label runs no jobs.&lt;/p&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;&lt;strong&gt;Prune images on every node, on a schedule.&lt;/strong&gt; Swarm has no command that runs on every node, and a global service with the Docker socket would be root everywhere, so use each node&amp;rsquo;s scheduler (configuration management, or a systemd timer on Linux). Create &lt;code&gt;/etc/systemd/system/docker-image-prune.service&lt;/code&gt;, which removes images no container uses that are older than a week:&lt;/p&gt;
-&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
-&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-ini" data-lang="ini"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Unit]&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Description&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;Remove unused Docker images older than a week&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Service]&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Type&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;oneshot&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;ExecStart&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;/usr/bin/docker image prune --all --force --filter until=168h&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
-&lt;button
-class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
-title="Copy code"
-aria-label="Copy code"
-data-copied-label="Copied!"
-&gt;
-&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
-&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
-&lt;/button&gt;
-&lt;/div&gt;
-&lt;/div&gt;
-&lt;p&gt;Create &lt;code&gt;/etc/systemd/system/docker-image-prune.timer&lt;/code&gt;, which runs it every Sunday:&lt;/p&gt;
-&lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
-&lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-ini" data-lang="ini"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Unit]&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Description&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;Weekly removal of unused Docker images&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Timer]&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;OnCalendar&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;Sun 03:00&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;RandomizedDelaySec&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;1h&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;Persistent&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;true&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="k"&gt;[Install]&lt;/span&gt;
-&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="na"&gt;WantedBy&lt;/span&gt;&lt;span class="o"&gt;=&lt;/span&gt;&lt;span class="s"&gt;timers.target&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
-&lt;button
-class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
-title="Copy code"
-aria-label="Copy code"
-data-copied-label="Copied!"
-&gt;
-&lt;div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
-&lt;div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"&gt;&lt;/div&gt;
-&lt;/button&gt;
-&lt;/div&gt;
-&lt;/div&gt;
+&lt;p&gt;&lt;strong&gt;Prune images on every node, on a schedule.&lt;/strong&gt; Swarm has no command that runs on every node, and a global service with the Docker socket would be root everywhere, so use each node&amp;rsquo;s scheduler (configuration management, or a systemd timer on Linux). Install the two units of &lt;a href="https://github.com/CircleCI-Labs/machine-runner-swarm/tree/main/examples/systemd" target="_blank" rel="noopener"&gt;&lt;code&gt;examples/systemd&lt;/code&gt;&lt;/a&gt; in &lt;code&gt;/etc/systemd/system&lt;/code&gt;. The service removes images no container uses that are older than a week, and the timer runs it every Sunday:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo systemctl daemon-reload
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;sudo systemctl &lt;span class="nb"&gt;enable&lt;/span&gt; --now docker-image-prune.timer&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
@@ -1590,7 +1502,7 @@ data-copied-label="Copied!"
 &lt;/button&gt;
 &lt;/div&gt;
 &lt;/div&gt;
-&lt;p&gt;&lt;code&gt;until&lt;/code&gt; filters by image creation time, not last use, and &lt;code&gt;--all&lt;/code&gt; skips every image a container (stopped ones too) still uses. A removed image that is needed again is pulled again, so a mirror (&lt;a href="#what-needs-the-internet"&gt;What needs the internet&lt;/a&gt;) must be up. On a docker-build node, add &lt;code&gt;docker builder prune --force --filter until=168h&lt;/code&gt;. On Windows, run the same &lt;code&gt;docker image prune&lt;/code&gt; from a scheduled task. The Server Core and distributor images are in use while the stack runs, so a prune keeps them.&lt;/p&gt;
+&lt;p&gt;&lt;code&gt;until&lt;/code&gt; filters by image creation time, not last use, and &lt;code&gt;--all&lt;/code&gt; skips every image a container (stopped ones too) still uses. A removed image that is needed again is pulled again, so a mirror (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/security/#what-needs-internet"&gt;What needs internet&lt;/a&gt;) must be up. On a docker-build node, add &lt;code&gt;docker builder prune --force --filter until=168h&lt;/code&gt;. On Windows, run the same &lt;code&gt;docker image prune&lt;/code&gt; from a scheduled task. The Server Core and distributor images are in use while the stack runs, so a prune keeps them.&lt;/p&gt;
 &lt;/li&gt;
 &lt;li&gt;
 &lt;p&gt;&lt;strong&gt;Alert on every node&amp;rsquo;s disk&lt;/strong&gt; (&lt;code&gt;df -h /var/lib/docker&lt;/code&gt;): above 80 percent on a worker, 70 percent on a manager (&lt;a href="#monitor-the-cluster"&gt;Monitor the cluster&lt;/a&gt;).&lt;/p&gt;
@@ -1670,34 +1582,7 @@ data-copied-label="Copied!"
 &lt;/ol&gt;
 &lt;h2 data-hextra-search-id="compatibility-with-circleci"&gt;Compatibility with CircleCI&lt;span class="hx:absolute hx:-mt-20" id="compatibility-with-circleci"&gt;&lt;/span&gt;
 &lt;a href="#compatibility-with-circleci" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;The token proxy sits between the runner and CircleCI, so it depends on the runner API more closely than a plain runner install.&lt;/p&gt;
-&lt;h3 data-hextra-search-id="what-the-proxy-relies-on"&gt;What the proxy relies on&lt;span class="hx:absolute hx:-mt-20" id="what-the-proxy-relies-on"&gt;&lt;/span&gt;
-&lt;a href="#what-the-proxy-relies-on" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;table&gt;
-&lt;thead&gt;
-&lt;tr&gt;
-&lt;th&gt;Call&lt;/th&gt;
-&lt;th&gt;Who sends it&lt;/th&gt;
-&lt;th&gt;What the proxy does, and reads&lt;/th&gt;
-&lt;/tr&gt;
-&lt;/thead&gt;
-&lt;tbody&gt;
-&lt;tr&gt;
-&lt;td&gt;&lt;code&gt;POST /api/v3/runner/claim&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;A runner&lt;/td&gt;
-&lt;td&gt;The only call the proxy changes. It accepts the claim from a runner address that Swarm DNS lists for a class, adds that class&amp;rsquo;s token, and forwards it. A 2xx other than 204 means CircleCI handed a task over: the proxy latches that runner. 204 means no task. Any other status passes through, nothing latched&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr&gt;
-&lt;td&gt;&lt;code&gt;GET /api/v3/runner/scale&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;The proxy, with a class token, at a start with no state for the class&lt;/td&gt;
-&lt;td&gt;It reads &lt;code&gt;data.attributes.running_task_count&lt;/code&gt; and &lt;code&gt;data.attributes.unclaimed_task_count&lt;/code&gt;, each a whole number of 0 or more. Anything else is an error, and the proxy latches the runners present&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr&gt;
-&lt;td&gt;Every other call&lt;/td&gt;
-&lt;td&gt;The runner and task agent&lt;/td&gt;
-&lt;td&gt;Forwarded unchanged with the caller&amp;rsquo;s own token (the placeholder, for the runner). The proxy relies on the runner passing &lt;code&gt;CIRCLECI_RUNNER_API_URL&lt;/code&gt; on to its task agent, so these calls go through it too&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;
-&lt;/table&gt;
-&lt;p&gt;The claim and scale calls are the runner&amp;rsquo;s internal protocol, not in CircleCI&amp;rsquo;s public &lt;a href="https://circleci.com/docs/reference/runner-api/" target="_blank" rel="noopener"&gt;runner API reference&lt;/a&gt;. CircleCI does not promise they stay as they are.&lt;/p&gt;
+&lt;p&gt;The proxy changes one call, &lt;code&gt;POST /api/v3/runner/claim&lt;/code&gt;: a 2xx other than 204 means that CircleCI handed over a task, and the proxy latches that runner. At a start with no state it also reads &lt;code&gt;GET /api/v3/runner/scale&lt;/code&gt; (&lt;code&gt;data.attributes.running_task_count&lt;/code&gt; and &lt;code&gt;unclaimed_task_count&lt;/code&gt;, whole numbers of 0 or more). Every other call is forwarded unchanged. Neither call is in CircleCI&amp;rsquo;s public &lt;a href="https://circleci.com/docs/reference/runner-api/" target="_blank" rel="noopener"&gt;runner API reference&lt;/a&gt;, and CircleCI does not promise that they stay as they are.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="what-is-tested"&gt;What is tested&lt;span class="hx:absolute hx:-mt-20" id="what-is-tested"&gt;&lt;/span&gt;
 &lt;a href="#what-is-tested" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;ul&gt;
 &lt;li&gt;&lt;strong&gt;The runner version.&lt;/strong&gt; The exact pin of the stack files, &lt;code&gt;3.1.13&lt;/code&gt; in this release. The CI runs the real runner binary against a fake API (&lt;code&gt;task.sh&lt;/code&gt;, &lt;code&gt;proxy.sh&lt;/code&gt; and others), and the end-to-end jobs run real jobs on CircleCI cloud through the proxy, on Linux amd64 and arm64 and Windows Server 2022 and 2025. The distributor test also installs the previous version (&lt;code&gt;3.1.11&lt;/code&gt;) for the rollback, and the version CircleCI names as &lt;code&gt;current&lt;/code&gt; in the live manifest, and checks its record.&lt;/li&gt;
@@ -1741,69 +1626,10 @@ data-copied-label="Copied!"
 &lt;a href="#circleci-server-proxies-and-hosts-without-internet" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Two setups are &lt;strong&gt;not tested yet&lt;/strong&gt;: CircleCI server, and an installation with no route to the internet. Nothing here promises either works.&lt;/p&gt;
 &lt;ul&gt;
 &lt;li&gt;&lt;strong&gt;CircleCI server.&lt;/strong&gt; The proxy takes the runner API address in its &lt;code&gt;-upstream&lt;/code&gt; argument, in the &lt;code&gt;command&lt;/code&gt; of &lt;code&gt;token-proxy&lt;/code&gt; in the stack file. The CI runs against CircleCI cloud and a fake API, never a server installation. Open questions: whether the claim and scale calls match your server version, which runner versions your server accepts (the default pin is tested against cloud only), and whether the proxy and runner trust your server&amp;rsquo;s certificate (&lt;a href="#proxies-and-certificate-authorities-component-by-component"&gt;the table below&lt;/a&gt;). Run the &lt;a href="#monitor-the-cluster"&gt;canary&lt;/a&gt; first, and do not assume anything on this page was checked for your version.&lt;/li&gt;
-&lt;li&gt;&lt;strong&gt;An air-gapped installation.&lt;/strong&gt; It does not work with this release: every runner container downloads its task agent from &lt;code&gt;circleci-binary-releases.s3.amazonaws.com&lt;/code&gt; at start, and no setting redirects that. Nodes must reach that host, directly or through a proxy the runner honours.&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;An air-gapped installation.&lt;/strong&gt; It does not work with this release: every runner container downloads its task agent from &lt;code&gt;circleci-binary-releases.s3.amazonaws.com&lt;/code&gt; at start, and no setting redirects that. Nodes must reach that host, directly or through a proxy the runner honors.&lt;/li&gt;
 &lt;/ul&gt;
 &lt;h3 data-hextra-search-id="what-needs-the-internet"&gt;What needs the internet&lt;span class="hx:absolute hx:-mt-20" id="what-needs-the-internet"&gt;&lt;/span&gt;
-&lt;a href="#what-needs-the-internet" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;table&gt;
-&lt;thead&gt;
-&lt;tr&gt;
-&lt;th&gt;Needed by&lt;/th&gt;
-&lt;th&gt;Host&lt;/th&gt;
-&lt;th&gt;When&lt;/th&gt;
-&lt;th&gt;Mirror here?&lt;/th&gt;
-&lt;/tr&gt;
-&lt;/thead&gt;
-&lt;tbody&gt;
-&lt;tr&gt;
-&lt;td&gt;The token proxy (claims), and the runner and task agent (their calls go through it)&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;runner.circleci.com&lt;/code&gt;, or your server&amp;rsquo;s runner API&lt;/td&gt;
-&lt;td&gt;Always&lt;/td&gt;
-&lt;td&gt;No: it is the API&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr&gt;
-&lt;td&gt;Every runner container (task agent)&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;circleci-binary-releases.s3.amazonaws.com&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;At every container start&lt;/td&gt;
-&lt;td&gt;No&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr&gt;
-&lt;td&gt;The runner distributor&lt;/td&gt;
-&lt;td&gt;The same host&lt;/td&gt;
-&lt;td&gt;At first install and at an upgrade. With a floating version, at every check interval. With the default pin, never once installed&lt;/td&gt;
-&lt;td&gt;Yes: &lt;code&gt;MACHINE_RUNNER_SWARM_DOWNLOAD_BASE_URL&lt;/code&gt; (&lt;a href="#run-the-downloads-from-a-mirror"&gt;mirror&lt;/a&gt;)&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr&gt;
-&lt;td&gt;The Windows distributor&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;github.com&lt;/code&gt;: PortableGit and 7-Zip&lt;/td&gt;
-&lt;td&gt;When it installs a version of Git&lt;/td&gt;
-&lt;td&gt;Yes: &lt;code&gt;MACHINE_RUNNER_SWARM_TOOLS_BASE_URL&lt;/code&gt;&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr&gt;
-&lt;td&gt;The jobs&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;circleci-tasks-prod.s3.us-east-1.amazonaws.com&lt;/code&gt; (cache, workspaces, artifacts), your VCS provider, whatever the job commands fetch&lt;/td&gt;
-&lt;td&gt;During a job&lt;/td&gt;
-&lt;td&gt;Not part of this project&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr&gt;
-&lt;td&gt;Docker on each node&lt;/td&gt;
-&lt;td&gt;The registries of the &lt;code&gt;image:&lt;/code&gt; lines: Docker Hub for &lt;code&gt;alpine&lt;/code&gt;, &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt; and job images, and the Windows base image registry&lt;/td&gt;
-&lt;td&gt;At a deploy, when a node joins, when an image changes&lt;/td&gt;
-&lt;td&gt;Yes: copy the images to your registry and change &lt;code&gt;image:&lt;/code&gt;&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr&gt;
-&lt;td&gt;The MicroVM install&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;github.com&lt;/code&gt;: the Kata tarball&lt;/td&gt;
-&lt;td&gt;At install&lt;/td&gt;
-&lt;td&gt;Yes: copy the tarball in (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/configure/microvm/"&gt;MicroVM&lt;/a&gt;)&lt;/td&gt;
-&lt;/tr&gt;
-&lt;tr&gt;
-&lt;td&gt;Verifying a release or image&lt;/td&gt;
-&lt;td&gt;The Sigstore services &lt;code&gt;cosign&lt;/code&gt; uses&lt;/td&gt;
-&lt;td&gt;When you verify&lt;/td&gt;
-&lt;td&gt;See &lt;a href="#verify-a-release-without-internet"&gt;Verify a release without internet&lt;/a&gt;&lt;/td&gt;
-&lt;/tr&gt;
-&lt;/tbody&gt;
-&lt;/table&gt;
+&lt;a href="#what-needs-the-internet" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;See &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/security/#what-needs-internet"&gt;What needs internet&lt;/a&gt;. The mirror steps are in &lt;a href="#run-the-downloads-from-a-mirror"&gt;Run the downloads from a mirror&lt;/a&gt;, and the Windows Git downloads come from &lt;code&gt;MACHINE_RUNNER_SWARM_TOOLS_BASE_URL&lt;/code&gt; (&lt;a href="#upgrade-the-runner-on-windows"&gt;Upgrade the runner on Windows&lt;/a&gt;).&lt;/p&gt;
 &lt;p&gt;To mirror the images, copy each with its digest to a registry the nodes reach (this keeps every platform), and change the &lt;code&gt;image:&lt;/code&gt; line of every stack file and &lt;code&gt;MACHINE_RUNNER_SWARM_PROXY_IMAGE&lt;/code&gt;. Deploy with &lt;code&gt;--resolve-image never&lt;/code&gt; if the manager cannot reach the registry to resolve tags (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/install/multi-node/#registry-needs"&gt;Registry needs&lt;/a&gt;):&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker buildx imagetools create --tag &amp;lt;REGISTRY&amp;gt;/&amp;lt;NAME&amp;gt;:&amp;lt;TAG&amp;gt; &amp;lt;SOURCE_IMAGE&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
@@ -1832,7 +1658,7 @@ data-copied-label="Copied!"
 &lt;tr&gt;
 &lt;td&gt;The Docker engine of each node (every image pull)&lt;/td&gt;
 &lt;td&gt;The engine&amp;rsquo;s own settings: &lt;code&gt;HTTP_PROXY&lt;/code&gt;, &lt;code&gt;HTTPS_PROXY&lt;/code&gt;, &lt;code&gt;NO_PROXY&lt;/code&gt; in a systemd drop-in of &lt;code&gt;docker.service&lt;/code&gt;, or &lt;code&gt;proxies&lt;/code&gt; in &lt;code&gt;daemon.json&lt;/code&gt;. The stack files set nothing&lt;/td&gt;
-&lt;td&gt;The node&amp;rsquo;s trust store. For a private registry, &lt;code&gt;/etc/docker/certs.d/&amp;lt;registry&amp;gt;/ca.crt&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The node&amp;rsquo;s trust store. For a private registry, &lt;code&gt;/etc/docker/certs.d/&amp;lt;REGISTRY&amp;gt;/ca.crt&lt;/code&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;runner-distributor&lt;/code&gt; on Linux&lt;/td&gt;
@@ -1884,7 +1710,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;Remove the secrets (&lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt; of every class you deployed) and the persistent-class volumes:&lt;/p&gt;
+&lt;p&gt;Remove the secrets (&lt;code&gt;&amp;lt;SERVICE&amp;gt;-token&lt;/code&gt; of every class you deployed) and the persistent-class volumes:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-sh" data-lang="sh"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker secret rm linux-default-token runner-placeholder-token
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker volume rm runners_persistent-home runners_proxy-state&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
@@ -1919,7 +1745,34 @@ data-copied-label="Copied!"
 &lt;p&gt;Remove the nodes from the Swarm: &lt;code&gt;docker swarm leave&lt;/code&gt; on each worker, then &lt;code&gt;docker swarm leave --force&lt;/code&gt; on the last manager. No node has files outside Docker to remove.&lt;/p&gt;
 &lt;/li&gt;
 &lt;/ol&gt;</description></item><item><title>Troubleshooting</title><link>https://circleci-labs.github.io/machine-runner-swarm/docs/operate/troubleshooting/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://circleci-labs.github.io/machine-runner-swarm/docs/operate/troubleshooting/</guid><description>
-&lt;p&gt;Each entry gives the symptom, the cause and the fix. Start with the task state and the runner output:&lt;/p&gt;
+&lt;p&gt;Each entry gives the symptom, the cause and the fix. After a quickstart, find your symptom here first:&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;You see&lt;/th&gt;
+&lt;th&gt;Do this&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;runners_linux-default&lt;/code&gt; shows &lt;code&gt;1/2&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;Run &lt;code&gt;docker service ps --no-trunc runners_linux-default&lt;/code&gt;. If the error says &lt;code&gt;insufficient resources&lt;/code&gt;, run one replica: &lt;code&gt;sudo docker service scale runners_linux-default=1&lt;/code&gt; (&lt;a href="#a-task-stays-pending"&gt;A task stays pending&lt;/a&gt;)&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;&lt;code&gt;runners_token-proxy&lt;/code&gt; shows &lt;code&gt;0/1&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;Run &lt;code&gt;docker service ps --no-trunc runners_token-proxy&lt;/code&gt;. A &lt;code&gt;no suitable node&lt;/code&gt; error means no node matches its placement: by default it needs a manager, and with &lt;code&gt;MACHINE_RUNNER_SWARM_PROXY_PLACEMENT&lt;/code&gt; it needs an active node with that label. A node with the label &lt;code&gt;machine-runner-swarm.proxy&lt;/code&gt; runs no runner services&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;The CLI lists no instance&lt;/td&gt;
+&lt;td&gt;Run &lt;code&gt;docker service logs --tail 50 runners_linux-default&lt;/code&gt;, then see &lt;a href="#the-runner-log-shows-401"&gt;The runner log shows 401&lt;/a&gt; and &lt;a href="#the-runner-log-shows-x509-certificate-errors"&gt;x509 certificate errors&lt;/a&gt;&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;The job stays &lt;code&gt;Queued&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The class name must equal &lt;code&gt;&amp;lt;NAMESPACE&amp;gt;/linux-default&lt;/code&gt;, and your plan needs free runner concurrency (&lt;a href="#jobs-wait-while-the-runners-are-idle"&gt;Jobs wait while the runners are idle&lt;/a&gt;)&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;For anything else, start with the task state and the runner output:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker stack ps runners --no-trunc
 &lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service logs --tail &lt;span class="m"&gt;100&lt;/span&gt; runners_&amp;lt;SERVICE&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
@@ -1937,7 +1790,7 @@ data-copied-label="Copied!"
 &lt;p&gt;For CircleCI guidance shared by all runners, refer to &lt;a href="https://circleci.com/docs/guides/execution-runner/troubleshoot-self-hosted-runner/" target="_blank" rel="noopener"&gt;Troubleshoot self-hosted runner&lt;/a&gt;.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="general"&gt;General&lt;span class="hx:absolute hx:-mt-20" id="general"&gt;&lt;/span&gt;
 &lt;a href="#general" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;h3 data-hextra-search-id="a-task-stays-pending"&gt;A task stays pending&lt;span class="hx:absolute hx:-mt-20" id="a-task-stays-pending"&gt;&lt;/span&gt;
-&lt;a href="#a-task-stays-pending" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: the &lt;code&gt;ERROR&lt;/code&gt; column of &lt;code&gt;docker service ps --no-trunc runners_&amp;lt;service&amp;gt;&lt;/code&gt; shows &lt;code&gt;no suitable node&lt;/code&gt;.&lt;/p&gt;
+&lt;a href="#a-task-stays-pending" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: the &lt;code&gt;ERROR&lt;/code&gt; column of &lt;code&gt;docker service ps --no-trunc runners_&amp;lt;SERVICE&amp;gt;&lt;/code&gt; shows &lt;code&gt;no suitable node&lt;/code&gt;.&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; No node satisfies the task.&lt;/p&gt;
 &lt;ul&gt;
 &lt;li&gt;&lt;code&gt;scheduling constraints not satisfied on N nodes&lt;/code&gt;: a label is missing, the OS or architecture differs, or the service needs a worker and the label sits on a manager.&lt;/li&gt;
@@ -2013,10 +1866,10 @@ data-copied-label="Copied!"
 &lt;h3 data-hextra-search-id="the-runner-log-shows-401"&gt;The runner log shows 401&lt;span class="hx:absolute hx:-mt-20" id="the-runner-log-shows-401"&gt;&lt;/span&gt;
 &lt;a href="#the-runner-log-shows-401" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: the log contains &lt;code&gt;401 (Unauthorized)&lt;/code&gt; and the runner never claims a job.&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; CircleCI rejected the token: it was deleted, mistyped, or belongs to another class. A drifted clock is not a 401: it fails the TLS handshake first (see the x509 entry).&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt; Check that the secret &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt; holds the token of the class with the same name as the service. A swapped token does not fail loudly: the runner serves the class of its token, so jobs of the intended class stay queued. On Linux the token is in the proxy: look in &lt;code&gt;runners_token-proxy&lt;/code&gt; for &lt;code&gt;upstream status 401&lt;/code&gt;. Then &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#rotate-a-runner-token"&gt;rotate the token&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt; Check that the secret &lt;code&gt;&amp;lt;SERVICE&amp;gt;-token&lt;/code&gt; holds the token of the class with the same name as the service. A swapped token does not fail loudly: the runner serves the class of its token, so jobs of the intended class stay queued. The token of a single-task class is in the proxy: look in &lt;code&gt;runners_token-proxy&lt;/code&gt; (Windows: &lt;code&gt;runners_token-proxy-windows&lt;/code&gt;) for &lt;code&gt;upstream status 401&lt;/code&gt;. Then &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#rotate-a-runner-token"&gt;rotate the token&lt;/a&gt;.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="the-runner-log-shows-403-and-the-proxy-log-says-refused"&gt;The runner log shows 403 and the proxy log says refused&lt;span class="hx:absolute hx:-mt-20" id="the-runner-log-shows-403-and-the-proxy-log-says-refused"&gt;&lt;/span&gt;
-&lt;a href="#the-runner-log-shows-403-and-the-proxy-log-says-refused" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: the runner log has &lt;code&gt;403 (Forbidden)&lt;/code&gt; for the claim, and &lt;code&gt;runners_token-proxy&lt;/code&gt; says &lt;code&gt;claim from &amp;lt;ip&amp;gt; refused&lt;/code&gt;.&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; The proxy answers a claim only from an address that Swarm DNS lists now for &lt;code&gt;tasks.&amp;lt;service&amp;gt;&lt;/code&gt; of a class it serves, once for each container. The log line gives the reason.&lt;/p&gt;
+&lt;a href="#the-runner-log-shows-403-and-the-proxy-log-says-refused" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: the runner log has &lt;code&gt;403 (Forbidden)&lt;/code&gt; for the claim, and &lt;code&gt;runners_token-proxy&lt;/code&gt; says &lt;code&gt;claim from &amp;lt;IP_ADDRESS&amp;gt; refused&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; The proxy answers a claim only from an address that Swarm DNS lists now for &lt;code&gt;tasks.&amp;lt;SERVICE&amp;gt;&lt;/code&gt; of a class it serves, once for each container. The log line gives the reason.&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt;&lt;/p&gt;
 &lt;ul&gt;
 &lt;li&gt;
@@ -2103,7 +1956,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;Stop it from taking jobs. On Linux, drain it. On Windows, pause it instead: failing jobs free the node quickly, and a drain would kill a good job after about 5 seconds (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#a-windows-node"&gt;A Windows node&lt;/a&gt;).&lt;/p&gt;
+&lt;p&gt;Stop it from taking jobs. On Linux, drain it. On Windows, pause it instead: failing jobs free the node quickly (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#a-windows-node"&gt;A Windows node&lt;/a&gt;).&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker node update --availability drain &amp;lt;NODE_NAME&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
 &lt;button
@@ -2137,7 +1990,7 @@ data-copied-label="Copied!"
 &lt;/button&gt;
 &lt;/div&gt;
 &lt;/div&gt;
-&lt;p&gt;Read the newest failed container (&lt;code&gt;docker logs &amp;lt;container&amp;gt;&lt;/code&gt;) and &lt;code&gt;journalctl -u docker -n 100&lt;/code&gt;. For a full disk, see &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#free-disk-space"&gt;Free disk space&lt;/a&gt;. A missing &lt;code&gt;current&lt;/code&gt; means the distributor has not installed a runner here: &lt;a href="#the-runner-waits-for-the-distributor-and-then-exits-with-code-80"&gt;The runner waits for the distributor, and then exits with code 80&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;Read the newest failed container (&lt;code&gt;docker logs &amp;lt;CONTAINER&amp;gt;&lt;/code&gt;) and &lt;code&gt;journalctl -u docker -n 100&lt;/code&gt;. For a full disk, see &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#free-disk-space"&gt;Free disk space&lt;/a&gt;. A missing &lt;code&gt;current&lt;/code&gt; means the distributor has not installed a runner here: &lt;a href="#the-runner-waits-for-the-distributor-and-then-exits-with-code-80"&gt;The runner waits for the distributor, and then exits with code 80&lt;/a&gt;.&lt;/p&gt;
 &lt;/li&gt;
 &lt;li&gt;
 &lt;p&gt;Fix the cause and set the node &lt;code&gt;active&lt;/code&gt;. If the cause is unclear, run &lt;code&gt;docker swarm leave&lt;/code&gt; on it, then &lt;code&gt;docker node rm &amp;lt;NODE_NAME&amp;gt;&lt;/code&gt; on a manager, and rebuild it. Rerun the failed jobs.&lt;/p&gt;
@@ -2160,7 +2013,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;/div&gt;
 &lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; A new task failed to start, for example exit code 80 after a wrong setting or a missing secret. The stack files set no &lt;code&gt;failure_action&lt;/code&gt;, so Swarm pauses at the first failure, and the replicas it did not reach keep the old version.&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt; Read why the task failed (&lt;code&gt;docker service ps --no-trunc runners_&amp;lt;service&amp;gt;&lt;/code&gt;), correct your stack file, and deploy again with the same files. To go back at once:&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt; Read why the task failed (&lt;code&gt;docker service ps --no-trunc runners_&amp;lt;SERVICE&amp;gt;&lt;/code&gt;), correct your stack file, and deploy again with the same files. To go back at once:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
 &lt;div&gt;&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;docker service update --rollback runners_&amp;lt;SERVICE&amp;gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;&lt;div class="hextra-code-copy-btn-container hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0"&gt;
 &lt;button
@@ -2204,7 +2057,7 @@ data-copied-label="Copied!"
 &lt;tbody&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;docker stack deploy&lt;/code&gt; fails with &lt;code&gt;secret not found: linux-default-token&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;An external secret does not exist. Every service needs &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt;, and on Linux every runner service also needs &lt;code&gt;runner-placeholder-token&lt;/code&gt;. Create it, or delete the service from your copy with its entries under &lt;code&gt;secrets:&lt;/code&gt; and &lt;code&gt;networks:&lt;/code&gt;. On Windows, &lt;code&gt;runners.yaml&lt;/code&gt; needs only &lt;code&gt;windows-default-token&lt;/code&gt;, and each add-on file its own &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;An external secret does not exist. Every service needs &lt;code&gt;&amp;lt;SERVICE&amp;gt;-token&lt;/code&gt;, and every single-task runner service (Linux and Windows) also needs &lt;code&gt;runner-placeholder-token&lt;/code&gt;. Create it, or delete the service from your copy with its entries under &lt;code&gt;secrets:&lt;/code&gt; and &lt;code&gt;networks:&lt;/code&gt;. On Windows, &lt;code&gt;runners.yaml&lt;/code&gt; needs &lt;code&gt;windows-default-token&lt;/code&gt; and &lt;code&gt;runner-placeholder-token&lt;/code&gt;, and each add-on file its own &lt;code&gt;&amp;lt;SERVICE&amp;gt;-token&lt;/code&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;Swarm is encrypted and needs to be unlocked before it can be used&lt;/code&gt;&lt;/td&gt;
@@ -2220,23 +2073,23 @@ data-copied-label="Copied!"
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;Jobs queue but no runner claims them&lt;/td&gt;
-&lt;td&gt;The &lt;code&gt;resource_class&lt;/code&gt; does not equal &lt;code&gt;&amp;lt;namespace&amp;gt;/&amp;lt;service&amp;gt;&lt;/code&gt;, the class has &lt;code&gt;replicas: 0&lt;/code&gt;, or replicas cannot reach CircleCI. Check &lt;strong&gt;Runners&lt;/strong&gt; in the web app, that the tasks run, and &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/security/#egress-hosts"&gt;Egress hosts&lt;/a&gt;&lt;/td&gt;
+&lt;td&gt;The &lt;code&gt;resource_class&lt;/code&gt; does not equal &lt;code&gt;&amp;lt;NAMESPACE&amp;gt;/&amp;lt;SERVICE&amp;gt;&lt;/code&gt;, the class has &lt;code&gt;replicas: 0&lt;/code&gt;, or replicas cannot reach CircleCI. Check &lt;strong&gt;Runners&lt;/strong&gt; in the web app, that the tasks run, and &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/security/#egress-hosts"&gt;Egress hosts&lt;/a&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;A task is &lt;code&gt;rejected&lt;/code&gt; with &lt;code&gt;No such image&lt;/code&gt; or an authentication error&lt;/td&gt;
-&lt;td&gt;The node cannot pull the image: registry unreachable, image private, or rate limit. Check egress, deploy with &lt;code&gt;--with-registry-auth&lt;/code&gt; for a private registry, or use a mirror (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/install/multi-node/#registry-needs"&gt;Registry needs&lt;/a&gt;, &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#what-needs-the-internet"&gt;What needs the internet&lt;/a&gt;)&lt;/td&gt;
+&lt;td&gt;The node cannot pull the image: registry unreachable, image private, or rate limit. Check egress, deploy with &lt;code&gt;--with-registry-auth&lt;/code&gt; for a private registry, or use a mirror (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/install/multi-node/#registry-needs"&gt;Registry needs&lt;/a&gt;, &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/security/#what-needs-internet"&gt;What needs the internet&lt;/a&gt;)&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;docker service logs&lt;/code&gt; prints nothing, or less than you expect&lt;/td&gt;
-&lt;td&gt;Swarm prunes old tasks of a slot with their logs (history limit 5 by default, 2 with the setup helper), and the command reads only the &lt;code&gt;local&lt;/code&gt;, &lt;code&gt;json-file&lt;/code&gt; and &lt;code&gt;journald&lt;/code&gt; drivers. Use &lt;code&gt;docker service ps --no-trunc&lt;/code&gt;, &lt;code&gt;docker logs &amp;lt;container&amp;gt;&lt;/code&gt; on the node, and &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#ship-the-logs"&gt;Ship the logs&lt;/a&gt;&lt;/td&gt;
+&lt;td&gt;Swarm prunes old tasks of a slot with their logs (history limit 5 by default, 2 with the setup helper), and the command reads only the &lt;code&gt;local&lt;/code&gt;, &lt;code&gt;json-file&lt;/code&gt; and &lt;code&gt;journald&lt;/code&gt; drivers. Use &lt;code&gt;docker service ps --no-trunc&lt;/code&gt;, &lt;code&gt;docker logs &amp;lt;CONTAINER&amp;gt;&lt;/code&gt; on the node, and &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#ship-the-logs"&gt;Ship the logs&lt;/a&gt;&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;A job exits with code 137, or a build fails with &lt;code&gt;fork: Resource temporarily unavailable&lt;/code&gt; or &lt;code&gt;Cannot allocate memory&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;137 is SIGKILL: the kernel kills a job over the memory limit (&lt;code&gt;docker inspect &amp;lt;container&amp;gt;&lt;/code&gt; shows &lt;code&gt;OOMKilled: true&lt;/code&gt;), or a stop outlasted &lt;code&gt;stop_grace_period&lt;/code&gt;. More processes than &lt;code&gt;limits.pids&lt;/code&gt; (4096) fails to fork. Raise &lt;code&gt;limits.memory&lt;/code&gt; or &lt;code&gt;limits.pids&lt;/code&gt; and keep the reservation equal (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/configure/resource-classes/#size-the-limits"&gt;Size the limits&lt;/a&gt;)&lt;/td&gt;
+&lt;td&gt;137 is SIGKILL: the kernel kills a job over the memory limit (&lt;code&gt;docker inspect &amp;lt;CONTAINER&amp;gt;&lt;/code&gt; shows &lt;code&gt;OOMKilled: true&lt;/code&gt;), or a stop outlasted &lt;code&gt;stop_grace_period&lt;/code&gt;. More processes than &lt;code&gt;limits.pids&lt;/code&gt; (4096) fails to fork. Raise &lt;code&gt;limits.memory&lt;/code&gt; or &lt;code&gt;limits.pids&lt;/code&gt; and keep the reservation equal (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/configure/resource-classes/#size-the-limits"&gt;Size the limits&lt;/a&gt;)&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;A job fails with a message that points at an issue with your infrastructure, and its log just stops&lt;/td&gt;
-&lt;td&gt;The runner stopped during the job: a node died or rebooted, a stop from outside (update, scale-down, drain) outlasted the grace period (on Windows it kills the job after about 5 seconds), or an out-of-memory kill. Find the task with &lt;code&gt;docker service ps --no-trunc runners_&amp;lt;service&amp;gt;&lt;/code&gt;, then rerun the job: runners do not retry (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#node-death"&gt;Node death&lt;/a&gt;, &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#stop-a-busy-windows-container"&gt;Stop a busy Windows container&lt;/a&gt;)&lt;/td&gt;
+&lt;td&gt;The runner stopped during the job: a node died or rebooted, a stop from outside (update, scale-down, drain) outlasted the grace period (on Windows, change a class only while it is idle), or an out-of-memory kill. Find the task with &lt;code&gt;docker service ps --no-trunc runners_&amp;lt;SERVICE&amp;gt;&lt;/code&gt;, then rerun the job: runners do not retry (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#node-death"&gt;Node death&lt;/a&gt;, &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#stop-a-busy-windows-container"&gt;Stop a busy Windows container&lt;/a&gt;)&lt;/td&gt;
 &lt;/tr&gt;
 &lt;/tbody&gt;
 &lt;/table&gt;
@@ -2279,7 +2132,7 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;p&gt;If the binary changes again, find what writes to the volume: a privileged container on the node, or a person with access.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="the-distributor-log-shows-cannot-download"&gt;The distributor log shows cannot download&lt;span class="hx:absolute hx:-mt-20" id="the-distributor-log-shows-cannot-download"&gt;&lt;/span&gt;
-&lt;a href="#the-distributor-log-shows-cannot-download" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: &lt;code&gt;runners_runner-distributor&lt;/code&gt; logs &lt;code&gt;runner-distributor: cannot download &amp;lt;address&amp;gt;&lt;/code&gt;, for &lt;code&gt;manifest.json&lt;/code&gt; or a tarball such as &lt;code&gt;&amp;lt;version&amp;gt;/circleci-runner_linux_amd64.tar.gz&lt;/code&gt;. The distributor keeps its runner and retries in 5 minutes. Without a runner, the runner containers of the node end as in the entry above.&lt;/p&gt;
+&lt;a href="#the-distributor-log-shows-cannot-download" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: &lt;code&gt;runners_runner-distributor&lt;/code&gt; logs &lt;code&gt;runner-distributor: cannot download &amp;lt;ADDRESS&amp;gt;&lt;/code&gt;, for &lt;code&gt;manifest.json&lt;/code&gt; or a tarball such as &lt;code&gt;&amp;lt;VERSION&amp;gt;/circleci-runner_linux_amd64.tar.gz&lt;/code&gt;. The distributor keeps its runner and retries in 5 minutes. Without a runner, the runner containers of the node end as in the entry above.&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; The node cannot reach &lt;code&gt;circleci-binary-releases.s3.amazonaws.com&lt;/code&gt; or your mirror (egress rule, proxy, DNS, clock), or the file is not on the mirror (for example the pinned version). An &lt;code&gt;https&lt;/code&gt; mirror needs a certificate from a public CA, because the distributor uses the CA bundle of the stock Alpine image. A proxy rarely helps: the distributor &lt;code&gt;wget&lt;/code&gt; reads only lowercase &lt;code&gt;http_proxy&lt;/code&gt;, sends &lt;code&gt;https://&lt;/code&gt; URLs as a plain &lt;code&gt;GET&lt;/code&gt; and not &lt;code&gt;CONNECT&lt;/code&gt;, and ignores &lt;code&gt;no_proxy&lt;/code&gt;.&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt; Download the same file from the node with the same tool:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
@@ -2297,11 +2150,11 @@ data-copied-label="Copied!"
 &lt;/div&gt;
 &lt;p&gt;Open the host in &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/security/#egress-hosts"&gt;Egress hosts&lt;/a&gt;, or fix the mirror. A mirror that the node reaches without a proxy is the dependable setup (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#run-the-downloads-from-a-mirror"&gt;Run the downloads from a mirror&lt;/a&gt;, &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#proxies-and-certificate-authorities-component-by-component"&gt;Proxies and certificate authorities, component by component&lt;/a&gt;).&lt;/p&gt;
 &lt;h3 data-hextra-search-id="the-distributor-log-shows-sha-256-mismatch"&gt;The distributor log shows SHA-256 mismatch&lt;span class="hx:absolute hx:-mt-20" id="the-distributor-log-shows-sha-256-mismatch"&gt;&lt;/span&gt;
-&lt;a href="#the-distributor-log-shows-sha-256-mismatch" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: &lt;code&gt;runner-distributor: SHA-256 mismatch for circleci-runner_linux_amd64.tar.gz &amp;lt;version&amp;gt;: got &amp;lt;hash&amp;gt;, wanted &amp;lt;hash&amp;gt;: refusing to install&lt;/code&gt;. The distributor installs nothing and retries later.&lt;/p&gt;
+&lt;a href="#the-distributor-log-shows-sha-256-mismatch" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: &lt;code&gt;runner-distributor: SHA-256 mismatch for circleci-runner_linux_amd64.tar.gz &amp;lt;VERSION&amp;gt;: got &amp;lt;HASH&amp;gt;, wanted &amp;lt;HASH&amp;gt;: refusing to install&lt;/code&gt;. The distributor installs nothing and retries later.&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; The tarball does not have the SHA-256 that the manifest, or your &lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_SHA256&lt;/code&gt; list, names. Usual causes: a list that lacks one architecture (a fleet with amd64 and arm64 nodes needs both), a mirror whose tarball and manifest do not match, or a proxy that changes the download.&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt; Compare &lt;code&gt;wanted&lt;/code&gt; with the SHA-256 of the file you expect, from the &lt;code&gt;checksums.txt&lt;/code&gt; of the release or the manifest, and correct the list, mirror or proxy. Never copy the &lt;code&gt;got&lt;/code&gt; value into the list without checking where the file came from.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="the-token-proxy-service-does-not-start-the-image-cannot-be-pulled"&gt;The token-proxy service does not start: the image cannot be pulled&lt;span class="hx:absolute hx:-mt-20" id="the-token-proxy-service-does-not-start-the-image-cannot-be-pulled"&gt;&lt;/span&gt;
-&lt;a href="#the-token-proxy-service-does-not-start-the-image-cannot-be-pulled" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: &lt;code&gt;docker service ps runners_token-proxy --no-trunc&lt;/code&gt; (Windows: &lt;code&gt;runners_token-proxy-windows&lt;/code&gt;) shows &lt;code&gt;No such image&lt;/code&gt;, &lt;code&gt;manifest unknown&lt;/code&gt;, &lt;code&gt;pull access denied&lt;/code&gt; or &lt;code&gt;no matching manifest for &amp;lt;platform&amp;gt;&lt;/code&gt;, and runners get connection errors for &lt;code&gt;token-proxy&lt;/code&gt;. The distributor and runner are unaffected.&lt;/p&gt;
+&lt;a href="#the-token-proxy-service-does-not-start-the-image-cannot-be-pulled" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: &lt;code&gt;docker service ps runners_token-proxy --no-trunc&lt;/code&gt; (Windows: &lt;code&gt;runners_token-proxy-windows&lt;/code&gt;) shows &lt;code&gt;No such image&lt;/code&gt;, &lt;code&gt;manifest unknown&lt;/code&gt;, &lt;code&gt;pull access denied&lt;/code&gt; or &lt;code&gt;no matching manifest for &amp;lt;PLATFORM&amp;gt;&lt;/code&gt;, and runners get connection errors for &lt;code&gt;token-proxy&lt;/code&gt;. The distributor and runner are unaffected.&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; The image is &lt;code&gt;ccilabs/machine-runner-swarm-proxy&lt;/code&gt;, or what &lt;code&gt;MACHINE_RUNNER_SWARM_PROXY_IMAGE&lt;/code&gt; names. Usual causes: the node cannot reach Docker Hub, the tag does not exist (a typo, or &lt;code&gt;edge&lt;/code&gt; before the first publication of the main branch), a local image such as &lt;code&gt;machine-runner-swarm-proxy:dev&lt;/code&gt; that exists on another node, or a platform the tag lacks (Windows on Arm).&lt;/p&gt;
 &lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt; Check the name and pull it on the node:&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;
@@ -2373,7 +2226,7 @@ data-copied-label="Copied!"
 &lt;td&gt;The image has neither &lt;code&gt;sudo&lt;/code&gt; nor util-linux &lt;code&gt;setpriv&lt;/code&gt;, or no &lt;code&gt;setpriv&lt;/code&gt; and no &lt;code&gt;su&lt;/code&gt; to start the runner. A hardened class (&lt;code&gt;MACHINE_RUNNER_SWARM_JOB_SUDO=false&lt;/code&gt;) needs util-linux &lt;code&gt;setpriv&lt;/code&gt; even if the image has sudo. Add the packages in a derived image (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/configure/images/#what-an-image-needs"&gt;What an image needs&lt;/a&gt;)&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
-&lt;td&gt;The distributor logs &lt;code&gt;current is &amp;lt;version&amp;gt; (major &amp;lt;n&amp;gt;), not 3: not adopting it&lt;/code&gt;, or &lt;code&gt;current has SHA-256 &amp;lt;hash&amp;gt;, which no versioned release of the manifest has: not adopting it&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;The distributor logs &lt;code&gt;current is &amp;lt;VERSION&amp;gt; (major &amp;lt;N&amp;gt;), not 3: not adopting it&lt;/code&gt;, or &lt;code&gt;current has SHA-256 &amp;lt;HASH&amp;gt;, which no versioned release of the manifest has: not adopting it&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;The first: &lt;code&gt;current&lt;/code&gt; moved to another major version, and the distributor keeps its version. Read the runner changelog, try it, then set &lt;code&gt;MACHINE_RUNNER_SWARM_RUNNER_MAJOR&lt;/code&gt; or pin the version (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#pin-a-version"&gt;Pin a version&lt;/a&gt;). The second: the mirror has an old or edited &lt;code&gt;manifest.json&lt;/code&gt;. Copy it again, with the tarball of the version &lt;code&gt;current&lt;/code&gt; names&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
@@ -2386,7 +2239,7 @@ data-copied-label="Copied!"
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;&lt;code&gt;docker build&lt;/code&gt; fails with &lt;code&gt;Cannot connect to the Docker daemon&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;By design: the class mounts no Docker engine. Use the opt-in class or a daemonless builder (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/configure/docker-builds/"&gt;Docker Builds&lt;/a&gt;)&lt;/td&gt;
+&lt;td&gt;By design: the class mounts no Docker engine. Use the opt-in class or a daemonless builder (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/configure/docker-builds/"&gt;Docker builds&lt;/a&gt;)&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;A docker-build job fails with &lt;code&gt;permission denied while trying to connect to the Docker daemon socket&lt;/code&gt;&lt;/td&gt;
@@ -2416,7 +2269,7 @@ data-copied-label="Copied!"
 &lt;td&gt;Without &lt;code&gt;SeCreateSymbolicLinkPrivilege&lt;/code&gt; the runner retries the task agent download forever. This happens when the container runs as a user other than &lt;code&gt;ContainerAdministrator&lt;/code&gt;. Never set &lt;code&gt;user:&lt;/code&gt; in a Windows service or change &lt;code&gt;USER&lt;/code&gt; in a derived image&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
-&lt;td&gt;Log says &lt;code&gt;circleci-runner &amp;lt;version&amp;gt; is in use: removing it at a later check&lt;/code&gt;&lt;/td&gt;
+&lt;td&gt;Log says &lt;code&gt;circleci-runner &amp;lt;VERSION&amp;gt; is in use: removing it at a later check&lt;/code&gt;&lt;/td&gt;
 &lt;td&gt;Windows cannot remove files that a running container uses. Nothing to do: the distributor removes the version at a later check&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
@@ -2473,8 +2326,8 @@ data-copied-label="Copied!"
 &lt;p&gt;A &lt;code&gt;SHA-256 mismatch&lt;/code&gt;, &lt;code&gt;cannot download&lt;/code&gt; or &lt;code&gt;not adopting it&lt;/code&gt; line names the cause. The service must have a task on the node (&lt;code&gt;docker service ps runners_runner-distributor-windows&lt;/code&gt;), so the node needs the label &lt;code&gt;machine-runner-swarm.windows-ltsc2022=true&lt;/code&gt; and the base image pulled. Behind a proxy, set &lt;code&gt;HTTPS_PROXY&lt;/code&gt; on the distributor service (it reads only &lt;code&gt;HTTPS_PROXY&lt;/code&gt;, no &lt;code&gt;NO_PROXY&lt;/code&gt;). Without internet access, refer to &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#upgrade-the-runner-on-windows"&gt;Upgrade the runner on Windows&lt;/a&gt;.&lt;/p&gt;
 &lt;h3 data-hextra-search-id="container-exits-with-code-3221225786-after-a-stop"&gt;Container exits with code 3221225786 after a stop&lt;span class="hx:absolute hx:-mt-20" id="container-exits-with-code-3221225786-after-a-stop"&gt;&lt;/span&gt;
 &lt;a href="#container-exits-with-code-3221225786-after-a-stop" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h3&gt;&lt;p&gt;Symptom: a job ends about 5 seconds after a rolling update, scale-down, node drain or &lt;code&gt;docker stop&lt;/code&gt;, and &lt;code&gt;docker service ps --no-trunc&lt;/code&gt; shows &lt;code&gt;task: non-zero exit (3221225786)&lt;/code&gt; (&lt;code&gt;0xC000013A&lt;/code&gt;).&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; The container was stopped from outside while it ran a job, and Windows gives a stock Server Core container about 5 seconds, whatever &lt;code&gt;stop_grace_period&lt;/code&gt; says. A job that finishes by itself does not end this way.&lt;/p&gt;
-&lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt; Rerun the interrupted jobs, and change a service only while its class runs no job (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#stop-a-busy-windows-container"&gt;Stop a busy Windows container&lt;/a&gt;).&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Cause.&lt;/strong&gt; The container was stopped from outside while it ran a job. A job that finishes by itself does not end this way.&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Fix.&lt;/strong&gt; Rerun the interrupted jobs, and change a class only while it is idle (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#stop-a-busy-windows-container"&gt;why&lt;/a&gt;).&lt;/p&gt;
 &lt;h2 data-hextra-search-id="collect-information-for-a-bug-report"&gt;Collect information for a bug report&lt;span class="hx:absolute hx:-mt-20" id="collect-information-for-a-bug-report"&gt;&lt;/span&gt;
 &lt;a href="#collect-information-for-a-bug-report" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;p&gt;Gather the output of these commands, remove tokens, and open an &lt;a href="https://github.com/CircleCI-Labs/machine-runner-swarm/issues" target="_blank" rel="noopener"&gt;issue&lt;/a&gt;.&lt;/p&gt;
 &lt;div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code"&gt;

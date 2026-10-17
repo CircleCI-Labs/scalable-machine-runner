@@ -7,7 +7,7 @@ data-alert="warning" class="hextra-alert"
 &lt;p class="hextra-alert-title"&gt;&lt;svg height=20px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"&gt;&lt;path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/&gt;&lt;path d="M12 9v4"/&gt;&lt;path d="M12 17h.01"/&gt;&lt;/svg&gt;
 &lt;span class="hextra-alert-title-text"&gt;Warning&lt;/span&gt;
 &lt;/p&gt;
-&lt;div class="hextra-alert-content"&gt;&lt;p&gt;This repository no longer ships the Docker Compose setup. The files &lt;code&gt;docker-compose.yml&lt;/code&gt;, &lt;code&gt;base-image/&lt;/code&gt;, &lt;code&gt;convenience-image/&lt;/code&gt;, and &lt;code&gt;machine-image/&lt;/code&gt; were removed in the Swarm rewrite, and the change is marked &lt;code&gt;[BREAKING]&lt;/code&gt; in the &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/reference/changelog/"&gt;changelog&lt;/a&gt;. Find the old files with &lt;code&gt;git log -- docker-compose.yml&lt;/code&gt;.&lt;/p&gt;&lt;/div&gt;
+&lt;div class="hextra-alert-content"&gt;&lt;p&gt;Machine runner swarm no longer ships the Docker Compose setup. The files &lt;code&gt;docker-compose.yml&lt;/code&gt;, &lt;code&gt;base-image/&lt;/code&gt;, &lt;code&gt;convenience-image/&lt;/code&gt;, and &lt;code&gt;machine-image/&lt;/code&gt; were removed in the Swarm rewrite, and the change is marked &lt;code&gt;[BREAKING]&lt;/code&gt; in the &lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/reference/changelog/"&gt;changelog&lt;/a&gt;. Find the old files with &lt;code&gt;git log -- docker-compose.yml&lt;/code&gt;.&lt;/p&gt;&lt;/div&gt;
 &lt;/div&gt;
 &lt;p&gt;The old setup restarted the same container after each job, so jobs did not get a clean environment. The Swarm stack creates a new container for every job (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/faq/#why-not-plain-docker-compose"&gt;Why not plain Docker Compose?&lt;/a&gt;). This page covers Linux hosts, which the old setup supported. Your job configs, resource classes and tokens can stay.&lt;/p&gt;
 &lt;h2 data-hextra-search-id="what-changed"&gt;What changed&lt;span class="hx:absolute hx:-mt-20" id="what-changed"&gt;&lt;/span&gt;
@@ -29,11 +29,11 @@ data-alert="warning" class="hextra-alert"
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;Token in a &lt;code&gt;.env&lt;/code&gt; file as &lt;code&gt;CIRCLECI_RUNNER_API_AUTH_TOKEN&lt;/code&gt;, visible in &lt;code&gt;docker inspect&lt;/code&gt;&lt;/td&gt;
-&lt;td&gt;Swarm secret &lt;code&gt;&amp;lt;service&amp;gt;-token&lt;/code&gt;, which holds a runner config file&lt;/td&gt;
+&lt;td&gt;Swarm secret &lt;code&gt;&amp;lt;SERVICE&amp;gt;-token&lt;/code&gt;, which holds a runner config file&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;The same &lt;code&gt;CIRCLECI_RUNNER_NAME&lt;/code&gt; for every replica&lt;/td&gt;
-&lt;td&gt;&lt;code&gt;{{.Node.Hostname}}-&amp;lt;service&amp;gt;-{{.Task.Slot}}&lt;/code&gt;, unique for each replica&lt;/td&gt;
+&lt;td&gt;&lt;code&gt;{{.Node.Hostname}}-&amp;lt;SERVICE&amp;gt;-{{.Task.Slot}}&lt;/code&gt;, unique for each replica&lt;/td&gt;
 &lt;/tr&gt;
 &lt;tr&gt;
 &lt;td&gt;Dockerfiles that build the runner into an image&lt;/td&gt;
@@ -60,7 +60,7 @@ data-alert="warning" class="hextra-alert"
 &lt;p&gt;&lt;strong&gt;Choose the images.&lt;/strong&gt; The old &lt;code&gt;convenience&lt;/code&gt; service maps to &lt;code&gt;cimg/base&lt;/code&gt; or another &lt;code&gt;cimg&lt;/code&gt; image, and &lt;code&gt;base&lt;/code&gt; to a stock image with your tools. Move extra tools from your Dockerfiles into a derived image (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/configure/images/#linux-bring-your-own-image"&gt;Linux: bring your own image&lt;/a&gt;).&lt;/p&gt;
 &lt;/li&gt;
 &lt;li&gt;
-&lt;p&gt;&lt;strong&gt;Edit the stack file.&lt;/strong&gt; Rename or copy the services, set your old replica counts, and keep only what you need. The old &lt;code&gt;machine&lt;/code&gt; service becomes &lt;code&gt;linux/stack/persistent.yaml&lt;/code&gt; (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/configure/resource-classes/"&gt;Resource Classes&lt;/a&gt;).&lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;Edit the stack file.&lt;/strong&gt; Rename or copy the services, set your old replica counts, and keep only what you need. The old &lt;code&gt;machine&lt;/code&gt; service becomes &lt;code&gt;linux/stack/persistent.yaml&lt;/code&gt; (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/configure/resource-classes/"&gt;Resource classes&lt;/a&gt;).&lt;/p&gt;
 &lt;/li&gt;
 &lt;li&gt;
 &lt;p&gt;&lt;strong&gt;Deploy next to the old setup.&lt;/strong&gt; Both can run at once, because the runner names differ. Check that the new runners show up in the inventory. If a new service keeps a class whose old runners are busy, the token proxy sees running tasks at its first start, cannot tell whose they are, and refuses the present runners until their idle timeout, or until you run the command below once the old runners are idle. New classes avoid this (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#restart-the-proxy"&gt;Restart the proxy&lt;/a&gt;).&lt;/p&gt;
@@ -87,7 +87,7 @@ data-copied-label="Copied!"
 &lt;/ol&gt;
 &lt;h2 data-hextra-search-id="behavior-to-expect"&gt;Behavior to expect&lt;span class="hx:absolute hx:-mt-20" id="behavior-to-expect"&gt;&lt;/span&gt;
 &lt;a href="#behavior-to-expect" class="subheading-anchor" aria-label="Permalink for this section"&gt;&lt;/a&gt;&lt;/h2&gt;&lt;ul&gt;
-&lt;li&gt;&lt;strong&gt;Runner updates.&lt;/strong&gt; The runner is an exact pin by default: the newest version this repository&amp;rsquo;s CI tests, bumped by each release of this repository. Set &lt;code&gt;3.1&lt;/code&gt;, &lt;code&gt;3&lt;/code&gt; or &lt;code&gt;current&lt;/code&gt; to follow CircleCI&amp;rsquo;s manifest (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#upgrade-the-runner-on-linux"&gt;Upgrade the runner on Linux&lt;/a&gt;).&lt;/li&gt;
+&lt;li&gt;&lt;strong&gt;Runner updates.&lt;/strong&gt; The runner is an exact pin by default: the newest version that CI tests, bumped by each release. Set &lt;code&gt;3.1&lt;/code&gt;, &lt;code&gt;3&lt;/code&gt; or &lt;code&gt;current&lt;/code&gt; to follow CircleCI&amp;rsquo;s manifest (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#upgrade-the-runner-on-linux"&gt;Upgrade the runner on Linux&lt;/a&gt;).&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;Sudo.&lt;/strong&gt; The default classes keep passwordless sudo, as the old images did. The hardened class removes it (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/get-started/concepts/#users-and-the-runner-token-on-linux"&gt;Concepts&lt;/a&gt;).&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;Fixed replicas.&lt;/strong&gt; The stack does not scale by itself, and a node that dies is not replaced (&lt;a href="https://circleci-labs.github.io/machine-runner-swarm/docs/operate/operations/#capacity-and-concurrency"&gt;Capacity and concurrency&lt;/a&gt;).&lt;/li&gt;
 &lt;li&gt;&lt;strong&gt;Startup time.&lt;/strong&gt; A new container starts for every job, so a job waits about 10 seconds longer for the next claim, plus the task agent download. Add replicas for busy classes.&lt;/li&gt;

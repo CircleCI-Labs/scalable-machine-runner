@@ -1,6 +1,6 @@
 version: 2.1
 
-# Setup phase for CircleCI-Labs/scalable-machine-runner (see docs/ci.md).
+# Setup phase for CircleCI-Labs/machine-runner-swarm (see docs/ci.md).
 #
 # One small job decides what this pipeline runs and then continues the
 # pipeline with .circleci/continue.yml, which holds ONE workflow (`ci`). The

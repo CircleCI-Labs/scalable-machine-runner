@@ -55,7 +55,7 @@ git cliff --unreleased --tag "$(git cliff --bumped-version)" --strip header   # 
 
 git-cliff writes the notes of the new version for the body of the GitHub release. Breaking changes come first. Then come features, bug fixes, performance changes, and reverts. Each entry shows the scope and the message. GitHub adds `(#123)` to the title of a squash merge, and the notes link that number to the pull request. An entry without a pull request number links to its commit instead.
 
-[CHANGELOG.md](../CHANGELOG.md) in the repository is not a list of changes: it points to [GitHub Releases](https://github.com/CircleCI-Labs/scalable-machine-runner/releases), where the notes of every release are. The release bundle holds a generated `CHANGELOG.md` with the notes of every release, from `git cliff`.
+[CHANGELOG.md](../CHANGELOG.md) in the repository is not a list of changes: it points to [GitHub Releases](https://github.com/CircleCI-Labs/machine-runner-swarm/releases), where the notes of every release are. The release bundle holds a generated `CHANGELOG.md` with the notes of every release, from `git cliff`.
 
 ## What a release contains
 
@@ -202,9 +202,9 @@ Two things are not covered, and you should not read the signature as covering th
 Read the GitHub settings back with the API. The first command lists the rules that apply to `main` (it must include `pull_request`, `non_fast_forward`, `deletion` and `required_status_checks`), and the second shows the bypass list of a ruleset, which must be empty for `main`:
 
 ```bash
-gh api repos/CircleCI-Labs/scalable-machine-runner/rules/branches/main --jq '.[].type'
-gh api repos/CircleCI-Labs/scalable-machine-runner/rulesets --jq '.[] | "\(.id) \(.name) \(.enforcement)"'
-gh api repos/CircleCI-Labs/scalable-machine-runner/rulesets/<id> --jq '{conditions, bypass_actors, rules: [.rules[].type]}'
+gh api repos/CircleCI-Labs/machine-runner-swarm/rules/branches/main --jq '.[].type'
+gh api repos/CircleCI-Labs/machine-runner-swarm/rulesets --jq '.[] | "\(.id) \(.name) \(.enforcement)"'
+gh api repos/CircleCI-Labs/machine-runner-swarm/rulesets/<id> --jq '{conditions, bypass_actors, rules: [.rules[].type]}'
 ```
 
 The ruleset of `smr-swarm/**` must show `creation` and `update` among its rules. The CLI cannot list the restrictions of a context, so read them from the API, once for each of the five contexts, and compare them with the table (a `project` restriction and an `expression` restriction each). The id of a context is in the output of `circleci context list --org <org>`:
@@ -247,7 +247,7 @@ Mark a breaking change in a commit message, or in the title of a squashed pull r
 
 ## Tag pipelines
 
-The release creates the tag through the GitHub API, with no `git push`. GitHub then sends a push event for the new tag. The project uses the GitHub OAuth integration (project slug `gh/CircleCI-Labs/scalable-machine-runner`), not the GitHub App. An OAuth project has no trigger settings: CircleCI starts a pipeline for every push that GitHub reports, to a branch or to a tag, so the new tag starts a pipeline. In that pipeline `pipeline.git.tag` is the tag, and `pipeline.git.branch` and `CIRCLE_BRANCH` are empty.
+The release creates the tag through the GitHub API, with no `git push`. GitHub then sends a push event for the new tag. The project uses the GitHub OAuth integration (project slug `gh/CircleCI-Labs/machine-runner-swarm`), not the GitHub App. An OAuth project has no trigger settings: CircleCI starts a pipeline for every push that GitHub reports, to a branch or to a tag, so the new tag starts a pipeline. In that pipeline `pipeline.git.tag` is the tag, and `pipeline.git.branch` and `CIRCLE_BRANCH` are empty.
 
 That pipeline cannot release and runs no job. CircleCI does not run a job for a tag unless the job has a tag filter, and no job in `.circleci/config.yml` or `.circleci/continue.yml` has one. The setup phase also releases only when the branch is `main`. Look at the **Pipelines** page of the project after the first release: the pipeline of the new tag should show no job. To build for tags in the future, give a job a tag filter on purpose, and keep the release context out of that job.
 

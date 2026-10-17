@@ -407,7 +407,7 @@ The project is public, so job logs and artifacts are public.
   ```
 
   The expression is the second line of defence: the `when` of the setup workflows already keeps the context out of every other branch, and the restriction keeps an API pipeline (which can name any branch and, where the organization allows it, bring its own config) from using it. In the organization's advanced settings, leave pipelines with an unversioned config off.
-- **Project settings.** The project is connected through the GitHub OAuth integration, not the GitHub App. Its slug is `gh/CircleCI-Labs/scalable-machine-runner`, not `circleci/<org-id>/<project-id>`. The settings **Build forked pull requests** and **Pass secrets to builds from forked pull requests** (Project Settings, Advanced) exist for OAuth projects, and both must be **off**: a fork pull request would otherwise run its own `.circleci/config.yml` on this project. Also turn on the setting that requires an administrator to change project settings, and turn off SSH reruns, if the organization offers them. **Auto-cancel redundant workflows must be off** (Project Settings, Advanced): with it on, every push to `smr-swarm/*` or to any branch that is not the default cancels the e2e workflow that is running, and the host of a cancelled workflow can leave a Swarm service that claims the next pipeline's job. The e2e workflows of two pushes then fail each other. With it off, the `serial-group` of each group lets one run at a time and the newer one waits.
+- **Project settings.** The project is connected through the GitHub OAuth integration, not the GitHub App. Its slug is `gh/CircleCI-Labs/machine-runner-swarm`, not `circleci/<org-id>/<project-id>`. The settings **Build forked pull requests** and **Pass secrets to builds from forked pull requests** (Project Settings, Advanced) exist for OAuth projects, and both must be **off**: a fork pull request would otherwise run its own `.circleci/config.yml` on this project. Also turn on the setting that requires an administrator to change project settings, and turn off SSH reruns, if the organization offers them. **Auto-cancel redundant workflows must be off** (Project Settings, Advanced): with it on, every push to `smr-swarm/*` or to any branch that is not the default cancels the e2e workflow that is running, and the host of a cancelled workflow can leave a Swarm service that claims the next pipeline's job. The e2e workflows of two pushes then fail each other. With it off, the `serial-group` of each group lets one run at a time and the newer one waits.
 - On Linux the token goes to `docker secret create` on stdin and is never on disk. On Windows it is in a file for the instant `docker secret create` reads it, outside the artifact directory. It is never printed.
 - The probes never print their environment, and read the token only to count bytes.
 - The context is attached only to `setup` and the host jobs. The probes are ordinary runner jobs.
@@ -487,7 +487,7 @@ Refer to [Releasing](releasing.md) for the rules, the setup of the token, and ho
 
 ## Docs site
 
-The documentation is also a site on GitHub Pages: <https://circleci-labs.github.io/scalable-machine-runner/>. CircleCI builds it with [Hugo](https://gohugo.io/) and the [Hextra](https://github.com/imfing/hextra) theme and pushes it to the `gh-pages` branch. No GitHub Actions workflow is involved. The Markdown of `README.md`, `docs/`, `CHANGELOG.md` and `CONTRIBUTING.md` stays the only source, and nothing in it is written for the site: `README.md` is the home page.
+The documentation is also a site on GitHub Pages: <https://circleci-labs.github.io/machine-runner-swarm/>. CircleCI builds it with [Hugo](https://gohugo.io/) and the [Hextra](https://github.com/imfing/hextra) theme and pushes it to the `gh-pages` branch. No GitHub Actions workflow is involved. The Markdown of `README.md`, `docs/`, `CHANGELOG.md` and `CONTRIBUTING.md` stays the only source, and nothing in it is written for the site: `README.md` is the home page.
 
 | Path | What it is |
 |---|---|
@@ -543,7 +543,7 @@ What Hextra does with the Markdown of this repository:
 
 ### Docs site previews
 
-`docs-site-build` runs on every pipeline, so every branch and pull request gets a preview of its site, and writes its address into a workspace for `docs-site-comment`. The production build links to its pages under `/scalable-machine-runner/`, so it can work only at the GitHub Pages address. CircleCI serves the artifacts of a job from `https://output.circle-artifacts.com/output/job/<job id>/artifacts/<node>/<path>`, and the job id is new on every run. [`site/preview.sh`](../site/preview.sh) therefore builds a second copy, `site/public-preview`, that works from any address:
+`docs-site-build` runs on every pipeline, so every branch and pull request gets a preview of its site, and writes its address into a workspace for `docs-site-comment`. The production build links to its pages under `/machine-runner-swarm/`, so it can work only at the GitHub Pages address. CircleCI serves the artifacts of a job from `https://output.circle-artifacts.com/output/job/<job id>/artifacts/<node>/<path>`, and the job id is new on every run. [`site/preview.sh`](../site/preview.sh) therefore builds a second copy, `site/public-preview`, that works from any address:
 
 - Hugo builds it with relative URLs (a link from `docs/maintainers/ci.html` to the home page is `../../index.html`) and with `uglyURLs`, so that a page is a file (`ci.html`).
 - The script then makes every relative link name a file: a server of artifacts does not serve the `index.html` of a directory, and the menu links to directories. It also rewrites the `url(/fonts/...)` of the inline style, and removes the `integrity` attributes: CircleCI sends script and style files to storage on another origin, and a browser refuses a script with an integrity hash from there.
@@ -619,7 +619,7 @@ A push to `main` publishes the token proxy image, makes a release and writes the
 - **Require status checks to pass**, with ONE check: the status of the workflow `ci`. Do not require anything else:
   - GitHub gets one status for each workflow, not for each job. The workflows are `ci`, `docs-site`, the setup workflow of the branch (`setup-e2e` on `main` and `smr-swarm/*`, `setup-plain` elsewhere, `setup-scan`) and `security-scan`. A job name (`lint-shell`, `docs-site-build`, `linux-swarm-a`) is not a status, so a ruleset cannot require it.
   - The setup workflow has a different name on different branches, so requiring `setup-plain` would block every pull request from `smr-swarm/*`, and the other way round.
-  - `ci` is on every pipeline, a docs-only one included, and it ends red when any job in it fails, so it stands for every lint and test job. Find the exact name of the status in a recent commit: `gh api repos/CircleCI-Labs/scalable-machine-runner/commits/main/status --jq '.statuses[].context'`.
+  - `ci` is on every pipeline, a docs-only one included, and it ends red when any job in it fails, so it stands for every lint and test job. Find the exact name of the status in a recent commit: `gh api repos/CircleCI-Labs/machine-runner-swarm/commits/main/status --jq '.statuses[].context'`.
 
 ### The e2e context and smr-swarm/*
 
@@ -672,7 +672,7 @@ Enable the trigger and save.
 **With the API.** The CircleCI CLI has no command for schedules. Create a personal API token, keep it in `CIRCLECI_TOKEN` (never in a file of the repository, and never printed), and run:
 
 ```bash
-curl --request POST "https://circleci.com/api/v2/project/gh/CircleCI-Labs/scalable-machine-runner/schedule" \
+curl --request POST "https://circleci.com/api/v2/project/gh/CircleCI-Labs/machine-runner-swarm/schedule" \
   --header "circle-token: ${CIRCLECI_TOKEN}" \
   --header "Content-Type: application/json" \
   --data '{
@@ -687,7 +687,7 @@ curl --request POST "https://circleci.com/api/v2/project/gh/CircleCI-Labs/scalab
 To try it once before the first Monday, start a pipeline with the same parameter. Use the branch of the pull request to try a change, or `main` afterwards:
 
 ```bash
-curl --request POST "https://circleci.com/api/v2/project/gh/CircleCI-Labs/scalable-machine-runner/pipeline" \
+curl --request POST "https://circleci.com/api/v2/project/gh/CircleCI-Labs/machine-runner-swarm/pipeline" \
   --header "circle-token: ${CIRCLECI_TOKEN}" \
   --header "Content-Type: application/json" \
   --data '{"branch": "main", "parameters": {"security-scan": true}}'

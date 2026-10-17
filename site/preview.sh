@@ -4,7 +4,7 @@
 #   site/preview.sh build [DIR]   build the site into DIR (default site/public-preview) and check its links
 #   site/preview.sh url           print the address of the preview among the artifacts of this CircleCI job
 #
-# The production build links to the pages with the path of baseURL (/scalable-machine-runner/...), so it works only there.
+# The production build links to the pages with the path of baseURL (/machine-runner-swarm/...), so it works only there.
 # CircleCI serves the artifacts of a job from https://output.circle-artifacts.com/output/job/<job id>/artifacts/<node>/<path>,
 # and the job id changes with every run. So the preview is built with relative URLs (a link from docs/x/y.html to the home page
 # is ../../index.html) and with uglyURLs, so that a page is a file (docs/ci.html), then every link is made to name a file: a

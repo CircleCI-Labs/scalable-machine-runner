@@ -338,7 +338,7 @@ On RHEL, a replica reports `Permission denied` for files under `/opt/machine-run
 $ sudo chcon -R -t container_file_t /var/lib/docker/volumes/runners_runner-bin/_data
 ```
 
-Keep SELinux enforcing. Do not disable it to work around the error, and open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues) with the `avc` line if you needed this.
+Keep SELinux enforcing. Do not disable it to work around the error, and open an [issue](https://github.com/CircleCI-Labs/machine-runner-swarm/issues) with the `avc` line if you needed this.
 
 ### Warning: sudo unable to send audit message
 
@@ -488,4 +488,4 @@ $ docker service logs --tail 200 runners_<service>
 $ docker service logs --tail 200 runners_token-proxy
 ```
 
-On Linux, include the runner version and the log of the distributor: `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node, and `docker service logs --tail 100 runners_runner-distributor`. On Windows, include the log of `runner-distributor-windows`: `docker service logs --tail 100 runners_runner-distributor-windows`. Then open an [issue](https://github.com/CircleCI-Labs/scalable-machine-runner/issues).
+On Linux, include the runner version and the log of the distributor: `docker run --rm -v runners_runner-bin:/v:ro alpine cat /v/current/VERSION` on the node, and `docker service logs --tail 100 runners_runner-distributor`. On Windows, include the log of `runner-distributor-windows`: `docker service logs --tail 100 runners_runner-distributor-windows`. Then open an [issue](https://github.com/CircleCI-Labs/machine-runner-swarm/issues).

@@ -1,9 +1,9 @@
 # Hugo configuration of the docs site (docs/ci.md, "Docs site"). Run site/stage.sh first: it writes content/.
 #
-# The GitHub Pages URL uses the repository name (scalable-machine-runner today; machine-runner-swarm after v0.1.0).
+# The GitHub Pages URL uses the repository name (machine-runner-swarm).
 # baseURL and the GitHub menu link below must match that name. GitHub redirects repository URLs after a rename,
 # but not the old Pages path. stage.sh derives blob/tree links from the GitHub menu URL.
-baseURL: https://circleci-labs.github.io/scalable-machine-runner/
+baseURL: https://circleci-labs.github.io/machine-runner-swarm/
 title: Machine runner swarm
 locale: en-US
 enableRobotsTXT: true
@@ -47,7 +47,7 @@ menu:
         type: theme-toggle
     - name: GitHub
       weight: 6
-      url: https://github.com/CircleCI-Labs/scalable-machine-runner
+      url: https://github.com/CircleCI-Labs/machine-runner-swarm
       params:
         icon: github
     # Styled as the call to action of the header (assets/css/custom.css).
@@ -59,7 +59,7 @@ menu:
 params:
   description: Run CircleCI machine runner 3 as Docker Swarm services, one service for each resource class.
   externalLinkDecoration: false
-  repo: https://github.com/CircleCI-Labs/scalable-machine-runner
+  repo: https://github.com/CircleCI-Labs/machine-runner-swarm
 
   # The landing page (layouts/home.html). "When to use it" comes from README.md; the rest is in the template.
   home:

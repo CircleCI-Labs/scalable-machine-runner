@@ -57,11 +57,11 @@ If you install self-hosted runners through the web app, an organization admin mu
 
 ## Get the files
 
-Clone the repository at a release tag, or extract a release bundle. Paths on this page are relative to the root of either. The [GitHub release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases) has the `machine-runner-swarm-<version>.zip` bundle for Windows, and the Linux page lists [every file of a release](install-linux.md#get-the-files).
+Clone the repository at a release tag, or extract a release bundle. Paths on this page are relative to the root of either. The [GitHub release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases) has the `machine-runner-swarm-<version>.zip` bundle for Windows, and the Linux page lists [every file of a release](install-linux.md#get-the-files).
 
 ```powershell
-git clone --branch <release-tag> https://github.com/CircleCI-Labs/scalable-machine-runner.git
-cd scalable-machine-runner
+git clone --branch <release-tag> https://github.com/CircleCI-Labs/machine-runner-swarm.git
+cd machine-runner-swarm
 ```
 
 ### Install cosign
@@ -84,11 +84,11 @@ This checks the file against a list from the same place, so it catches a damaged
 
 CircleCI signs the file `SHA256SUMS` of each release with the OIDC token of the job that makes the release. The signature proves that a job of this CircleCI project made the file, and the checksum proves that your download is the file that the job made. The Linux page explains [what the signature proves](install-linux.md#verify-a-release), and what it does not.
 
-Set `$version` once, to the number of the [latest release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases/latest) without the `v`, and read its notes. The first line is a placeholder: with it unchanged, the download fails and nothing runs.
+Set `$version` once, to the number of the [latest release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases/latest) without the `v`, and read its notes. The first line is a placeholder: with it unchanged, the download fails and nothing runs.
 
 ```powershell
 $version = 'X.Y.Z'
-$base = "https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download/v$version"
+$base = "https://github.com/CircleCI-Labs/machine-runner-swarm/releases/download/v$version"
 $zip = "machine-runner-swarm-$version.zip"
 ```
 

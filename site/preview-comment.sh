@@ -22,7 +22,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-marker='<!-- scalable-machine-runner-docs-preview -->'
+marker='<!-- machine-runner-swarm-docs-preview -->'
 api=${GITHUB_API_URL:-https://api.github.com}
 
 [ -n "${GITHUB_PR_COMMENT_TOKEN:-}" ] || exit 0

@@ -74,7 +74,7 @@ run "no comment yet: one is posted" 0 "$list
 $post" "$sentinel" "$pr"
 body=$(jq -r .body "$FAKE_LOG.body.POST")
 rows=$((rows + 1))
-if grep -qF '<!-- scalable-machine-runner-docs-preview -->' <<< "$body" \
+if grep -qF '<!-- machine-runner-swarm-docs-preview -->' <<< "$body" \
   && grep -qF 'https://output.circle-artifacts.com/output/job/3df8fe81-1066-4a7b-9843-bad46ff42b65/artifacts/0/docs-site-preview/index.html' <<< "$body" \
   && grep -qF '0123456' <<< "$body"; then
   echo "ok   the comment has the marker, the address and the commit"
@@ -98,7 +98,7 @@ else
 fi
 PREVIEW_DIR="$tmp/nonexistent" run "no preview address in the directory: skipped, nothing is posted" 0 "" "$sentinel" "$pr"
 
-echo '[{"id": 7, "body": "an ordinary comment"}, {"id": 555, "body": "<!-- scalable-machine-runner-docs-preview -->\nold"}, {"id": 556, "body": "<!-- scalable-machine-runner-docs-preview -->\nolder"}]' > "$FAKE_GET"
+echo '[{"id": 7, "body": "an ordinary comment"}, {"id": 555, "body": "<!-- machine-runner-swarm-docs-preview -->\nold"}, {"id": 556, "body": "<!-- machine-runner-swarm-docs-preview -->\nolder"}]' > "$FAKE_GET"
 run "a comment with the marker exists: it is updated, nothing is posted" 0 "$list
 PATCH /repos/o/r/issues/comments/555" "$sentinel" "$pr"
 FAKE_FAIL=PATCH run "the update fails: a new comment is posted" 0 "$list

@@ -42,11 +42,11 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
 
 3. On the host, download a release, verify it, and unpack it. A release is the install path: its stack file names the token proxy image of that release by tag and digest, and the CircleCI job that made it signed the checksums with a keyless cosign signature. A `git clone` of a branch or a tag gets the stack files with the default image `latest`, which is not pinned. The token proxy image is `ccilabs/machine-runner-swarm-proxy`: `ccilabs` is the Docker Hub organization of CircleCI Labs, and the signature check, not the name, is the trust root ([Verify the token proxy image](security.md#verify-the-token-proxy-image)).
 
-   Set `$version` once, to the number of the [latest release](https://github.com/CircleCI-Labs/scalable-machine-runner/releases/latest) without the `v`, and read its notes. The first line is a placeholder: with it unchanged, the download fails and nothing runs.
+   Set `$version` once, to the number of the [latest release](https://github.com/CircleCI-Labs/machine-runner-swarm/releases/latest) without the `v`, and read its notes. The first line is a placeholder: with it unchanged, the download fails and nothing runs.
 
    ```powershell
    $version = 'X.Y.Z'
-   $base = "https://github.com/CircleCI-Labs/scalable-machine-runner/releases/download/v$version"
+   $base = "https://github.com/CircleCI-Labs/machine-runner-swarm/releases/download/v$version"
    $zip = "machine-runner-swarm-$version.zip"
    ```
 
@@ -80,7 +80,7 @@ Replace `<namespace>` with your runner namespace, and `<org>` with your organiza
    }
    ```
 
-   Continue only when the last line is `RELEASE VERIFIED`. Anything else, an error message or no output at all, means that the release is not verified: delete the downloaded files and start again, or ask in an issue. The ref check exists because the signing identity is the same for every branch, so the block looks in the certificate for the extension `1.3.6.1.4.1.57264.1.14` (the OID in the long string) with the value `refs/heads/main`, and fails when a job of another branch signed the file. [Verify a release](install-windows.md#verify-a-release) explains it, and [How the signature works](https://github.com/CircleCI-Labs/scalable-machine-runner/blob/main/docs/releasing.md#how-the-signature-works) has the details.
+   Continue only when the last line is `RELEASE VERIFIED`. Anything else, an error message or no output at all, means that the release is not verified: delete the downloaded files and start again, or ask in an issue. The ref check exists because the signing identity is the same for every branch, so the block looks in the certificate for the extension `1.3.6.1.4.1.57264.1.14` (the OID in the long string) with the value `refs/heads/main`, and fails when a job of another branch signed the file. [Verify a release](install-windows.md#verify-a-release) explains it, and [How the signature works](https://github.com/CircleCI-Labs/machine-runner-swarm/blob/main/docs/releasing.md#how-the-signature-works) has the details.
 
    Change into the unpacked bundle. The paths below are relative to it.
 

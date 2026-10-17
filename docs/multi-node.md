@@ -56,24 +56,38 @@ Managers keep the cluster state in a Raft log, including every Swarm secret. Swa
 
 Quorum matters more for this stack than for a typical Swarm. Every job ends with a runner exit, and only a manager with quorum can create the replacement task. Without quorum, running jobs finish, but the runners are not replaced, so the capacity drops to zero.
 
-Keep jobs off managers when you can. A container breakout on a manager exposes the tokens of every class. Drain each manager (a node drain) so that it runs no tasks:
+Keep jobs off managers when you can. A container breakout on a manager exposes the tokens of every class. In a cluster, label the node that runs the token proxy (a manager), and tell the deploy about it. The runner services never run on a node with that label, so no job shares a node with the class tokens, and that node needs no drain:
 
 ```console
-$ docker node update --availability drain <manager name>
+$ docker node update --label-add machine-runner-swarm.proxy=true <manager name>
+$ sudo env MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true' docker stack deploy -c deploy/runners.yaml runners
+```
+
+Keep the variable with your other deploy variables ([Keep the deploy variables in version control](operations.md#keep-the-deploy-variables-in-version-control)), because a deploy without it puts the proxy back on any manager. Drain the other managers (a node drain) so that they run no tasks:
+
+```console
+$ docker node update --availability drain <other manager name>
 ```
 
 > [!WARNING]
-> **The token proxy needs a node that is not drained.** `token-proxy` runs on a manager by default (`node.role == manager`), and a drained node takes no task. If you drain every manager, the proxy stays `Pending` (`no suitable node`) and no runner can claim a job, with no other error: the runners only log 502 or a refused connection to `token-proxy`. The same happens when the managers are Linux hosts and the proxy is the Windows one (`token-proxy-windows` also defaults to a manager, and a Windows task cannot run on a Linux manager), and when a Windows-only swarm has no Windows manager. Keep one manager undrained for the proxy, or pin the proxy to a worker with the label `machine-runner-swarm.proxy=true` ([Labels used by this repository](#labels-used-by-this-repository)). A proxy on a worker still holds every class token, so choose a node that runs no jobs.
+> **The token proxy needs a node that is not drained.** `token-proxy` runs on a manager by default (`node.role == manager`), and with the label above it runs on the labelled node. A drained node takes no task. If you drain every manager, or the labelled node, the proxy stays `Pending` (`no suitable node`) and no runner can claim a job, with no other error: the runners only log 502 or a refused connection to `token-proxy`. The same happens when the managers are Linux hosts and the proxy is the Windows one (`token-proxy-windows` also defaults to a manager, and a Windows task cannot run on a Linux manager), and when a Windows-only swarm has no Windows manager. Label a Windows node for it, a worker included, and in a mixed cluster label one Linux and one Windows node, because each proxy also keeps to its own operating system. Never drain the labelled node without the steps in [The node of the proxy](operations.md#the-node-of-the-proxy). A proxy on a worker still holds every class token, so choose a node that runs no jobs: the label keeps the runner services away from it.
 
-On a single-node Swarm the only node is a manager and runs the replicas, and with it the proxy. Never use the Docker socket classes (pattern A) there. Refer to [Docker Builds](docker-builds.md).
+On a single-node Swarm the only node is a manager and runs the replicas, and with it the proxy: there is no label, and nothing changes. Never use the Docker socket classes (pattern A) there. Refer to [Docker Builds](docker-builds.md).
 
 ## Create the swarm
 
 Initialize Swarm on the first manager with an address that the other nodes can reach. The loopback address that the single-node install uses cannot accept other nodes.
 
 ```console
-$ docker swarm init --advertise-addr <manager IP address>
+$ docker swarm init --advertise-addr <manager IP address> \
+    --task-history-limit 2 \
+    --default-addr-pool 10.20.0.0/16 --default-addr-pool-mask-length 24
 ```
+
+Two options matter for this stack, and neither is the default:
+
+- **`--task-history-limit 2`.** Every finished job ends a task, and Swarm keeps the last 5 tasks of each slot, with their containers and their disk, unless you lower it. The single-node install sets 2, and a swarm that you create here does not. Refer to [Free disk space](operations.md#free-disk-space). Change it later with `docker swarm update --task-history-limit 2`.
+- **`--default-addr-pool`.** Each Linux class gets its own overlay network, a `/24` from the default pool of Swarm, which is `10.0.0.0/8`. Choose a pool that does not overlap your own networks, because an overlap makes tasks unreachable in ways that are hard to see. A `/16` split into `/24` networks gives 256 of them, which is enough for the classes of one stack and for the networks of your own services. You can set the pool only when you create the swarm.
 
 If you started with the loopback address, remove the stack with `docker stack rm runners`, run `docker swarm leave --force`, initialize again, and recreate the secrets.
 
@@ -172,7 +186,7 @@ Set a label with `docker node update --label-add <key>=<value> <node name>`. Rem
 | `machine-runner-swarm.windows-ltsc2025` | `true` | Services on an `ltsc2025` image. Set on Server 2025 nodes only |
 | `machine-runner-swarm.zone` | The name of a network zone | Services that must run in one zone. A commented example sits in the Linux placement block |
 | `machine-runner-swarm.docker-build` | `true` | The docker-build services (pattern A). Refer to [Docker Builds](docker-builds.md) |
-| `machine-runner-swarm.proxy` | `true` | Optional. The token proxy runs on a manager by default, with no label. With several managers, label the one that should keep the proxy (it holds every class token and its state `proxy-state`, so choose one that runs no jobs when you can) and deploy with `MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'`. Refer to [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves) |
+| `machine-runner-swarm.proxy` | `true` | The node that runs the token proxy, in a cluster. Label it, and deploy with `MACHINE_RUNNER_SWARM_PROXY_PLACEMENT='node.labels.machine-runner-swarm.proxy == true'`: the proxy then runs only there, and **no runner service ever runs on a node with this label**, so jobs never share a node with the class tokens and the proxy state `proxy-state`. On a single node, with no label, nothing changes. Refer to [Where the proxy runs, and when it moves](operations.md#where-the-proxy-runs-and-when-it-moves) |
 | `machine-runner-swarm.microvm` | `true` | The microVM services, on nodes whose Docker daemon runs every container in a Kata microVM. Every other service stays off these nodes. Refer to [MicroVM jobs](microvm.md) |
 | `machine-runner-swarm.class.<service>` | `true` | Pins a service to the labeled nodes. `windows-persistent` uses `machine-runner-swarm.class.windows-persistent`. `linux-persistent` pins itself with `node.hostname` instead |
 
@@ -216,7 +230,10 @@ Swarm does not share images between nodes. Each node pulls the image of a task f
 - Pin images by digest, for example `cimg/base:2026.10@sha256:<digest>`, so that every node runs the same content. Tags such as `21.0` move.
 - Pull large images ahead of time. A Windows `servercore` image is about 2.2 GB compressed.
 - Public registries apply pull rate limits. A mirror or an authenticated pull avoids failed pulls on a busy cluster.
-- The service `runner-distributor` runs the stock `alpine:3` image on every Linux node, so every Linux node must be able to pull it. Mirror it in your registry and change `image` in your copy of the stack file, if the nodes cannot reach Docker Hub.
+- The service `runner-distributor` runs the stock `alpine:3` image on every Linux node, so every Linux node must be able to pull it. Mirror it in your registry and change `image` in your copy of the stack file, if the nodes cannot reach Docker Hub. Copy it with its digest (`docker buildx imagetools create` keeps it), so that the pin still holds.
+- The token proxy runs from `ccilabs/machine-runner-swarm-proxy`. Mirror it with its signature (`cosign copy`), pin the digest in `MACHINE_RUNNER_SWARM_PROXY_IMAGE`, and keep that in your deploy file ([Upgrade the token proxy](operations.md#upgrade-the-token-proxy)).
+- A manager that cannot reach the registry cannot resolve a tag to a digest when you deploy. Deploy with `docker stack deploy --resolve-image never`, or use images that you pinned by digest and mirrored.
+- Images are not the whole list. A site with no route to the internet also needs the runner download and the task agent: refer to [CircleCI server, proxies, and hosts without internet](operations.md#circleci-server-proxies-and-hosts-without-internet).
 - Your own image must be in a registry that all nodes of its OS can reach. Refer to [Images](images.md).
 
 ## Inter-node ports

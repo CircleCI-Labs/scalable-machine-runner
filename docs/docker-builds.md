@@ -35,7 +35,7 @@ Four controls limit the damage:
 - **No neighbors.** The engine shows every container on the node. Keep other classes off the node. Refer to [Keep the docker-build node to itself](multi-node.md#keep-the-docker-build-node-to-itself).
 - **Trusted projects only.** Restrict the class with a config policy, and keep production contexts away from it. Refer to [CircleCI-side controls](security.md#circleci-side-controls).
 
-State also persists. The images, containers, volumes, and build cache of the host engine outlive the job, so the environment is not clean. Remove what a job creates in a final step.
+State also persists. The images, containers, volumes, and build cache of the host engine outlive the job, so the environment is not clean. Remove what a job creates in a final step. Nothing else prunes this engine, so the disk of the node fills with layers and cache over time: schedule `docker builder prune` and `docker image prune` on it, as in [Free disk space](operations.md#free-disk-space). Never run `docker volume prune` there: the node also holds the volume `runner-bin`.
 
 ### Deploy on Linux
 

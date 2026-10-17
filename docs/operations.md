@@ -109,7 +109,7 @@ The proxy answers `GET /healthz` with 200 when every class has a usable token fi
 | `claim from <ip> (tasks.<service>): upstream status 200` | A claim returned a task, and the runner at that address cannot claim again |
 | `released <ip> (tasks.<service>)` | DNS has not listed the address for 30 seconds in a row: the container is gone, and a new container on that address can claim |
 | `claim from <ip> refused: not a runner of any class (tasks.<service> lists [...], ...)` | A container that is not a runner of a configured class, or a runner that DNS does not list yet. The line names what DNS lists for every class, so compare the address with it. Look for a class that you added without adding it to the proxy, or for a container that does not belong on a class network |
-| `claim from <ip> refused: this runner has already claimed a task` | A second claim from one container. After a proxy restart every runner that was idle gets this until Swarm replaces it. Refer to [Restart the proxy](#restart-the-proxy) |
+| `claim from <ip> refused: this runner has already claimed a task` | A second claim from one container. After a proxy restart a runner that has claimed gets this until Swarm replaces it; with no saved state, every runner of a class that has running tasks gets it until Swarm replaces it. Refer to [Restart the proxy](#restart-the-proxy) |
 | `claim from <ip> refused: too many claims` | One container sent more than 2 claims a second (answer 429). A runner claims about every 5 seconds, so this is not a runner that works |
 | `state: cannot write it: ...`, and `claim from <ip> refused: the state cannot be written` | The proxy cannot save its state (the volume `proxy-state` is full or gone). A claim that has already been answered by CircleCI gets 503 instead of its task, the proxy removes `state.json` and reports unhealthy, and Swarm restarts it after 3 failed checks. Refer to [When the proxy cannot save its state](#when-the-proxy-cannot-save-its-state) |
 | `poll: cannot resolve the runners, no latch is released: ...` | Swarm DNS fails. No latch is released while it fails (at most one line a minute) |
@@ -528,7 +528,7 @@ Swarm secrets are immutable. To rotate a token, create a second secret and swap 
        runners_token-proxy
    ```
 
-   The proxy restarts, and the idle runners of every class get 403 until Swarm replaces them. Replace them at once with `docker service update --force --update-parallelism 0 runners_<service>` for each class, or wait for their idle timeout. Refer to [Restart the proxy](#restart-the-proxy).
+   The proxy restarts and reads the state from `proxy-state`, so runners that have not claimed may claim again. Recycle runners only when the start log says `no state` or `state lost`: `docker service update --force --update-parallelism 0 runners_<service>` for each affected class, or wait for their idle timeout. Refer to [Restart the proxy](#restart-the-proxy).
 
    On Linux, for a persistent class, swap it in the service itself:
 

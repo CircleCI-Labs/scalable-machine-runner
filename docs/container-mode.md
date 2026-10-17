@@ -60,6 +60,23 @@ The agent runs as a global Swarm service. It starts on every worker that carries
 
 Nothing is built or published. The service runs a stock Go image, pinned by digest. The Go sources of the agent, in [`linux/stack/container-agent`](../linux/stack/container-agent), are Swarm configs that are named after their content, as for the entrypoint of the runner classes. The entrypoint of the service compiles them into a volume of the container, which takes a few seconds, and runs the result. A changed source file gets a new config name, which updates the service, so `docker stack deploy` is the whole upgrade.
 
+## The driver interface
+
+The agent has two sides, so that the part that runs a job on a container engine can later be offered upstream as a driver, and so that nothing else in the agent depends on Docker. Both sides are in [`linux/stack/container-agent`](../linux/stack/container-agent). They are one Go package, because each file of the agent is mounted as a separate Swarm config, and each side is in files of its own:
+
+| Side | Files | What it does |
+|---|---|---|
+| The interface | `driver.go` | `Driver`, `Task`, `TaskSpec`, `ClassSettings`, `State`, `Result`, `NotStartedError`, and the optional `Recoverer`, each with its contract in the comments. It imports nothing of either side |
+| The driver | `driver_docker.go`, `docker.go` | The Docker implementation: the pause, init, service and primary containers, the network and the volume of a task, the pulls, and the removal. It is the only code that knows about containers, and it knows nothing of the runner API, of claims, or of class tokens |
+| The wrapper | `main.go`, `wrapper.go`, `api.go` | The settings, the claim loop and its slots, the runner API, the signals, and the log. It expands the variables of the job, hands each task to a `Driver`, and tells CircleCI how it ended. It knows nothing of containers |
+
+The interface has two calls:
+
+- `NewTask(spec, class)` makes a task from the claimed task and the settings of its class. It changes nothing on the host, and it refuses a spec that the driver cannot run.
+- `Task.Run(ctx, report)` runs the task to completion. It reports its state (`preparing`, `running`, `cleaning-up`) through `report`, returns the exit code of the primary container, and removes everything that it created before it returns, also when `ctx` ends first. An error that is a `NotStartedError` says that nothing of the job ran, which lets the wrapper return the task to the queue.
+
+The wrapper gives a driver the task token of one task and no class token. A driver for another engine replaces `driver_docker.go` and `docker.go`, and nothing else changes.
+
 ## The life of a job
 
 1. The agent polls CircleCI with the token of each class that it serves, but only while it has a free slot (`MACHINE_RUNNER_SWARM_CONTAINER_MAX_TASKS`), because a claim assigns the job to it.
@@ -177,7 +194,7 @@ Windows is not supported. A Windows version needs several things that Docker on 
 
 | Piece | State |
 |---|---|
-| Unit tests (`linux/stack/container-agent`, `go test`) | Pass: the container layout, limits, environment, GOAT settings, failure and retry paths, cleanup, the start-up sweep, the cap, and that no token reaches a log |
+| Unit tests (`linux/stack/container-agent`, `go test`) | Pass: the container layout, limits, environment, GOAT settings, failure and retry paths, cleanup, the start-up sweep, the cap, and that no token reaches a log. Across the interface: the wrapper against a fake driver, and the Docker driver against a fake engine, including a job that is cut off by its context |
 | Swarm test (`linux/tests/container-mode.sh`) | Passes in a Swarm in Docker-in-Docker: no agent on a node with the proxy or microVM label, one job with a service on `localhost`, one failing job, the limits, no socket in the job, the cap, the cleanup, and the orphans |
 | Init image and GOAT | The public `circleci/runner-init` image fills a volume in plain Docker, and its `orchestrator run-task` starts a task agent with the settings that the agent writes |
 | Real CircleCI job | Not yet. A first run on a test class is the next step |

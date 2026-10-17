@@ -113,7 +113,8 @@ executors:
   # The Android machine image is the one CircleCI image with nested virtualization (/dev/kvm): docs/ci.md#linux-microvm.
   linux-kvm:
     machine:
-      image: android:2026.05.1
+      # Android has quarterly tags plus current/default only (no dated tags like ubuntu-2604); Renovate cannot bump machine images.
+      image: android:current
     resource_class: large.gen2
   windows-2022:
     machine:

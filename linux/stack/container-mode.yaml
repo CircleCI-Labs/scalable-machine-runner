@@ -1,0 +1,100 @@
+# Add-on stack file, PROTOTYPE: container mode. It runs CircleCI Docker-executor jobs (docker: [{image: ...}, ...])
+# on a Swarm node, with no Kubernetes. Deploy it with an extra -c flag, or alone:
+#   docker stack deploy -c linux/stack/runners.yaml -c linux/stack/container-mode.yaml runners
+# Read docs/container-mode.md first. In short:
+#   1. Create one secret for each class, holding only its token (a class serves ONE mode: never a machine class):
+#        printf '%s' "$TOKEN" | docker secret create docker-default-token -
+#   2. Label every WORKER that may run jobs: docker node update --label-add machine-runner-swarm.container-mode=true <node>
+#   3. Edit MACHINE_RUNNER_SWARM_CONTAINER_CLASSES below: your namespace and the limits of each class. Add secrets, one for each class.
+# Nothing is built or published. The service runs a stock Go image pinned by digest: the Go sources in container-agent/ are Swarm
+# configs (named after their content, like the entrypoint of the runner classes), and the entrypoint compiles them at start-up.
+# The same compiler is then in the container that holds the socket: that adds no access beyond the socket, but you can instead
+# compile the sources into an image of your own (CGO_ENABLED=0 go build) and set image: and entrypoint: for a smaller container.
+#
+#   !!! The agent mounts the Docker socket, which is ROOT-EQUIVALENT on its node. It is the ONLY container that
+#   !!! gets it, and it is trusted: it starts the job containers from what CircleCI sends. Jobs never get the socket
+#   !!! or a class token. It runs on workers only, never on a manager, where the socket also controls the Swarm.
+#
+# The agent keeps its own class tokens, in Swarm secrets that only it mounts, and does not use the token-proxy of runners.yaml. The
+# proxy keeps class tokens out of the runner containers that run jobs. Here no job container ever gets a class token, and the agent
+# that holds them also holds the socket, which is root-equivalent on its node, so a proxy would add a service and protect nothing.
+# For the same reason the agent never runs on the node of the token-proxy (the proxy keeps off container-mode nodes too), on a
+# microVM node (the socket cannot cross into a Kata VM) or on a Docker-build node. A class serves ONE mode: never reuse the token of a
+# machine class here.
+#
+# Swarm sees one small service, not the job containers, so it cannot place jobs by free memory: MACHINE_RUNNER_SWARM_CONTAINER_MAX_TASKS and
+# the limits of the classes cap what one node runs. Size them so that
+#   MACHINE_RUNNER_SWARM_CONTAINER_MAX_TASKS x (primary limit + service limits) fits the node.
+
+services:
+  container-agent:
+    image: golang:1.27-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d
+    user: "0"   # to use the socket, which is owned by root
+    entrypoint: ["/entrypoint.sh"]
+    configs:
+      - {source: agent-entrypoint, target: /entrypoint.sh, mode: 0555}
+      - {source: agent-gomod, target: /src/go.mod, mode: 0444}
+      - {source: agent-main, target: /src/main.go, mode: 0444}
+      - {source: agent-api, target: /src/api.go, mode: 0444}
+      - {source: agent-docker, target: /src/docker.go, mode: 0444}
+      - {source: agent-task, target: /src/task.go, mode: 0444}
+    init: true
+    stop_grace_period: 5h5m   # the agent stops claiming on SIGTERM and lets running jobs finish (max run time 5h)
+    hostname: "{{.Node.Hostname}}-container-agent"
+    environment:
+      MACHINE_RUNNER_SWARM_CONTAINER_NAME: "{{.Node.Hostname}}-container-agent"
+      MACHINE_RUNNER_SWARM_CONTAINER_MAX_TASKS: "2"   # jobs at the same time on this node
+      MACHINE_RUNNER_SWARM_CONTAINER_MAX_RUN_TIME: 5h
+      # MACHINE_RUNNER_SWARM_CONTAINER_RUNNER_API: https://runner.circleci.com   # the default; set the URL of your CircleCI server for server installs
+      # Pinned by digest. Container runner uses circleci/runner-init:<tag from the claim> instead, which follows the
+      # task agent version that the server expects; unset MACHINE_RUNNER_SWARM_CONTAINER_INIT_IMAGE to do the same. Update the pin with the agent.
+      MACHINE_RUNNER_SWARM_CONTAINER_INIT_IMAGE: circleci/runner-init@sha256:10835c5a0ca6b40ac09db0c360b42e81dbf3656f1ef72b814e35df7f975bbd5c
+      MACHINE_RUNNER_SWARM_CONTAINER_PAUSE_IMAGE: registry.k8s.io/pause@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a
+      MACHINE_RUNNER_SWARM_CONTAINER_CLASSES: '[{"name":"CHANGE-ME/docker-default","token_file":"/run/secrets/docker-default-token","primary":{"cpus":2,"memory_mb":4096},"service":{"cpus":1,"memory_mb":2048}}]'
+    secrets:
+      - source: docker-default-token
+        target: docker-default-token
+        uid: "0"
+        gid: "0"
+        mode: 0400
+    networks: [container-agent]
+    read_only: true
+    cap_drop: [ALL]
+    ulimits:
+      nofile: {soft: 65536, hard: 65536}
+    logging:
+      driver: local
+      options: {max-size: 20m, max-file: "3"}
+    volumes:
+      - {type: volume, target: /work}   # an anonymous volume of this container: the build and its cache (the root file system is read-only)
+      - type: bind
+        source: /var/run/docker.sock   # root-equivalent, see above. Only this service has it.
+        target: /var/run/docker.sock
+    deploy:
+      mode: global   # one agent on every node that has the label below
+      restart_policy: {condition: any, delay: 10s}
+      update_config: {order: stop-first, parallelism: 1}   # stop-first: two agents on a node would remove each other's jobs at start-up
+      resources:
+        limits: {cpus: "1", memory: 1G, pids: 512}   # the compiler at start-up needs most of it; the agent itself uses little
+      placement:
+        constraints:
+          - node.platform.os == linux
+          - node.role == worker
+          - node.labels.machine-runner-swarm.container-mode == true
+          - node.labels.machine-runner-swarm.docker-build != true   # a dedicated socket node of its own (docker-build.yaml)
+          - node.labels.machine-runner-swarm.microvm != true   # the socket cannot cross into a Kata VM (microvm.yaml)
+          - node.labels.machine-runner-swarm.proxy != true   # never next to the token-proxy (runners.yaml): its tokens must not sit next to a socket
+
+networks:
+  container-agent: {driver: overlay}   # the agent only calls the CircleCI API outbound, so nothing crosses nodes on it and it needs no encryption
+
+secrets:
+  docker-default-token: {external: true}
+
+configs:   # named after the SHA-256 of the file: ci/config-names.sh --write renames them after a change, and CI checks it
+  agent-entrypoint: {name: machine-runner-swarm-container-agent-entrypoint-89b8049d9846, file: container-agent/entrypoint.sh}
+  agent-gomod: {name: machine-runner-swarm-container-agent-gomod-3b67745ae025, file: container-agent/go.mod}
+  agent-main: {name: machine-runner-swarm-container-agent-main-d7b353a75804, file: container-agent/main.go}
+  agent-api: {name: machine-runner-swarm-container-agent-api-1dc23b34afa2, file: container-agent/api.go}
+  agent-docker: {name: machine-runner-swarm-container-agent-docker-8b40f21fd001, file: container-agent/docker.go}
+  agent-task: {name: machine-runner-swarm-container-agent-task-6acb55edd21f, file: container-agent/task.go}

@@ -91,6 +91,83 @@ Describe 'Initialize-SwarmCluster' {
     }
 }
 
+Describe 'Get-SwarmServiceSchedulingEarlyFailure' {
+    BeforeAll {
+        $script:RejectedTaskJson = '{"ID":"r1","Name":"runners_runner-distributor-windows.1","Node":"","DesiredState":"Rejected","CurrentState":"Rejected 2 seconds ago","Error":"No suitable node (scheduling constraints not satisfied on 1 node)"}'
+        $script:PreparingTaskJson = '{"ID":"p1","Name":"runners_runner-distributor-windows.1","Node":"WIN1","DesiredState":"Running","CurrentState":"Preparing 1 minute ago","Error":""}'
+        $script:MockLabelsJson = '{"machine-runner-swarm.windows-ltsc2022":"true"}'
+        $script:MockPlacementJson = '{"Constraints":["node.platform.os == windows"]}'
+    }
+
+    It 'fails fast when Swarm scheduled no tasks' {
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker {
+            if ($ArgumentList -contains '--format' -and ($ArgumentList -contains '{{json .}}')) {
+                return @{ ExitCode = 0; Output = @() }
+            }
+            return @{ ExitCode = 0; Output = @('') }
+        }
+        Get-SwarmServiceSchedulingEarlyFailure -Service 'runners_runner-distributor-windows' | Should -Be 'Swarm scheduled no tasks for the service (placement constraints may be unmet)'
+    }
+
+    It 'keeps waiting while a task is still Preparing' {
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker {
+            if ($ArgumentList -contains '--format' -and ($ArgumentList -contains '{{json .}}')) {
+                return @{ ExitCode = 0; Output = @($script:PreparingTaskJson) }
+            }
+            return @{ ExitCode = 0; Output = @('') }
+        }
+        Get-SwarmServiceSchedulingEarlyFailure -Service 'runners_runner-distributor-windows' | Should -BeNullOrEmpty
+    }
+
+    It 'fails fast when every task was rejected or failed' {
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker {
+            if ($ArgumentList -contains '--format' -and ($ArgumentList -contains '{{json .}}')) {
+                return @{ ExitCode = 0; Output = @($script:RejectedTaskJson) }
+            }
+            return @{ ExitCode = 0; Output = @('') }
+        }
+        $reason = Get-SwarmServiceSchedulingEarlyFailure -Service 'runners_runner-distributor-windows'
+        $reason | Should -Match '^every service task failed or was rejected'
+        $reason | Should -Match 'scheduling constraints'
+    }
+}
+
+Describe 'Install-SwarmDistributor early scheduling failure' {
+    BeforeAll {
+        $script:DistService = 'runners_runner-distributor-windows'
+        $script:MockLabelsJson = '{"machine-runner-swarm.windows-ltsc2022":"true"}'
+        $script:MockPlacementJson = '{"Constraints":["node.platform.os == windows","node.labels.machine-runner-swarm.windows-ltsc2022 == true"]}'
+    }
+
+    It 'adds node labels and placement constraints to the detail after the grace period' {
+        Mock -ModuleName SwarmTestHelpers Invoke-SwarmDocker {
+            $cmd = $ArgumentList[0]
+            if ($cmd -eq 'secret') { return @{ ExitCode = 0; Output = @('exists') } }
+            if ($cmd -eq 'stack') { return @{ ExitCode = 0; Output = @('Created') } }
+            if ($cmd -eq 'service' -and $ArgumentList -contains 'logs') { return @{ ExitCode = 0; Output = @('') } }
+            if ($cmd -eq 'service' -and $ArgumentList -contains '--format' -and ($ArgumentList -contains '{{json .}}')) {
+                return @{ ExitCode = 0; Output = @() }
+            }
+            if ($cmd -eq 'service' -and $ArgumentList -contains '--no-trunc' -and -not ($ArgumentList -contains '--format')) {
+                return @{ ExitCode = 0; Output = @('ID NAME IMAGE NODE DESIRED STATE CURRENT STATE ERROR') }
+            }
+            if ($cmd -eq 'service' -and $ArgumentList -contains 'inspect') {
+                return @{ ExitCode = 0; Output = @($script:MockPlacementJson) }
+            }
+            if ($cmd -eq 'node') { return @{ ExitCode = 0; Output = @($script:MockLabelsJson) } }
+            if ($cmd -eq 'image') { return @{ ExitCode = 0; Output = @('REPOSITORY TAG IMAGE ID') } }
+            return @{ ExitCode = 0; Output = @('') }
+        }
+        $r = Install-SwarmDistributor -Stack 'runners' -StackFile (Join-Path $PSScriptRoot '..\stack\runners.yaml') -TimeoutSeconds 30 -EarlyFailureGraceSeconds 1 -DockerCommand 'docker'
+        $r.Ok | Should -BeFalse
+        $r.Detail | Should -Match 'stopped after 1s'
+        $r.Detail | Should -Match 'docker node inspect self \(labels\)'
+        $r.Detail | Should -Match $script:MockLabelsJson
+        $r.Detail | Should -Match 'docker service inspect \(placement\)'
+        $r.Detail | Should -Match 'node.labels.machine-runner-swarm.windows-ltsc2022'
+    }
+}
+
 Describe 'Get-SwarmStackEnvironment and the stock mounts' {
     It 'reads the environment the stack gives a stock service, without Swarm templates' {
         $e = Get-SwarmStackEnvironment

@@ -16,7 +16,7 @@ This page is for maintainers. A CircleCI job makes every release of this reposit
 
 1. A push to `main` starts a pipeline. The setup phase in `.circleci/config.yml` reads the branch. On `main`, with both e2e tokens present, it passes `release: true` to the pipeline, together with `full-suite`, the heavy suites (`windows`, `proxy-image`, `microvm`), `e2e-linux` and `e2e-windows`, and `strict: true`.
 1. The pipeline has one workflow, `ci`. With those parameters it runs all lint jobs, the Linux jobs, the Windows Server 2022 and 2025 jobs, `linux-mixed-arch`, and the e2e jobs on Linux and Windows. Expression filters on the parameters (`filters: pipeline.parameters.release` on the release job, and similar ones on the Windows, `linux-microvm` and e2e jobs) switch the jobs in and out, so no job runs twice.
-1. The `release` job requires every other job of the workflow. If one job fails, nothing is released. Fix the problem, then use **Rerun workflow from failed**. The release job runs once everything has passed.
+1. The `release` job requires every other job of the workflow, except the three optional ones that `lint-circleci` names (`linux-mixed-arch`, `proxy-image-edge` and `docs-site-comment`). If one required job fails, nothing is released. Fix the problem, then use **Rerun workflow from failed**. The release job runs once everything has passed.
 1. The `release` job runs in the serial group `<project slug>/release`, so two quick merges cannot race for the same version. A newer pipeline whose release job waits in the group makes the release job of an older pipeline skip. The newer one releases both changes.
 1. `ci/release.sh` checks that every Swarm config of the stack files is named after the content of its file (`ci/config-names.sh`), and stops when a name is stale. Then it finds the next version, makes the notes, reads the digest of the token proxy image that the pipeline of the commit pushed and pins it in the stack files, builds the bundles, signs `SHA256SUMS`, verifies the signature, verifies the signature of the image and gives it its release tags, and creates the GitHub release. The release creates the tag at the commit of the pipeline.
 1. When the job will publish (`GITHUB_TOKEN` and the Docker Hub credentials are set, and the image of the commit is on Docker Hub), `ci/release.sh` also records the release in the Deploys view of CircleCI: component `machine-runner-swarm`, environment `github-releases`, version the tag; and the tags of the image: component `token-proxy-image`, environment `docker-hub`, version `X.Y.Z`. Each deploy ends as `SUCCESS`, or as `FAILED` when any step of the script fails ([Deploys](ci.md#deploys)).
@@ -28,7 +28,7 @@ A push to `main` that changes only documentation (`docs/`, `site/`, Markdown fil
 
 If an e2e token is missing on `main`, the setup phase passes `release: false` and says so in its log. The pipeline then runs the `ci` workflow without the release job (and without the e2e group whose token is missing), because a release must wait for every test.
 
-**Add a new job to `requires` of the release job.** The release job lists every other job of the workflow in `requires` (in `.circleci/continue.yml`), and a comment at the job says so. The job `lint-circleci` compiles the workflow and fails when a job is missing from the list, so a pull request cannot add a test that the release does not wait for. The only exceptions are the optional jobs that `lint-circleci` names in its `$optional` list (today `linux-mixed-arch`, the emulated mixed-architecture cluster test, and `proxy-image-edge`, which moves the `edge` tag after the tests).
+**Add a new job to `requires` of the release job.** The release job lists every other job of the workflow in `requires` (in `.circleci/continue.yml`), and a comment at the job says so. The job `lint-circleci` compiles the workflow and fails when a job is missing from the list, so a pull request cannot add a test that the release does not wait for. The only exceptions are the optional jobs that `lint-circleci` names in its `$optional` list (today `linux-mixed-arch`, the emulated mixed-architecture cluster test, `proxy-image-edge`, which moves the `edge` tag after the tests, and `docs-site-comment`, which posts the preview address on a pull request).
 
 ## Versions
 
@@ -165,11 +165,68 @@ Until you do this, the `release` job runs every step except the last one on a pr
    In the organization's advanced settings, leave pipelines with an unversioned config off.
 
 1. In the project settings (**Advanced**), keep **Build forked pull requests** and **Pass secrets to builds from forked pull requests** off. The project uses the GitHub OAuth integration, and these settings are the ones that decide whether the code of a fork runs here.
-1. Protect `main` on GitHub: require a pull request and a review, and do not let anyone push to it. Whoever can change `.circleci/` or `ci/release.sh` on `main` controls what runs with the token.
+1. Protect `main` on GitHub with the ruleset of [A ruleset for main](ci.md#a-ruleset-for-main): a pull request required, no force push, no bypass, and the check `ci`. Whoever can change `.circleci/` or `ci/release.sh` on `main` controls what runs with the token. [What the release trust depends on](#what-the-release-trust-depends-on) lists every setting that the signature relies on.
 
 The documentation site, its optional pull request comment and the weekly security scan have their own contexts and a schedule, and [What a maintainer creates once](ci.md#what-a-maintainer-creates-once) lists them with the release context. Do not reuse this token for them: it can publish releases.
 
 The next release run on `main` publishes. To check the setup before then, read the log of the `release` job for `publishing skipped`.
+
+## What the release trust depends on
+
+A valid signature on a release says one thing: **a job of this CircleCI project, from the pipeline definition of this repository, ran on `refs/heads/main` of this repository.** The signing identity is the same for every branch, and a job of any branch can get an OIDC token, so the claim holds only as far as the settings below hold. They are settings of GitHub, CircleCI and Docker Hub, and not of the repository, so no file in it can enforce them or show them, and `ci/release.sh` does not check them. **The maintainers have set all of them for v0.1.0.** [Check the settings](#check-the-settings) says how to read them back.
+
+| Setting | Where | It must say | Without it |
+|---|---|---|---|
+| The ruleset of `main` | GitHub repository | Require a pull request. Block force pushes. Restrict deletions. No bypass list. Required status check: `ci` ([A ruleset for main](ci.md#a-ruleset-for-main)) | A writer could push a change of `.circleci/` or `ci/release.sh` to `main`, and the release job would sign it as `main` |
+| The ruleset of `smr-swarm/**` | GitHub repository | Restrict creations and updates, with the maintainers alone on the bypass list ([The e2e context and smr-swarm/*](ci.md#the-e2e-context-and-smr-swarm)) | A writer could create `smr-swarm/<name>`, change `.circleci/` in it, and print the e2e runner tokens in a public log |
+| The context `scalable-machine-runner-release` | CircleCI organization | The restrictions `project` (this project) and `expression`: `pipeline.git.branch == "main" and not job.ssh.enabled and not (pipeline.config_source starts-with "api")` | A job of another branch, an SSH rerun or an API pipeline could read the release token |
+| The context `scalable-machine-runner-dockerhub` | CircleCI organization | The same two restrictions as the release context ([The Docker Hub context](ci.md#the-docker-hub-context)) | A branch could push an image under the tag that the stack files name |
+| The context `scalable-machine-runner-docs` | CircleCI organization | `project`, and `expression`: `pipeline.git.branch == "main" and not job.ssh.enabled and not (pipeline.config_source starts-with "api")` | A branch could read a token that writes to the repository |
+| The context `scalable-machine-runner-e2e` | CircleCI organization | `project`, and `expression`: `(pipeline.git.branch == "main" or pipeline.git.branch starts-with "smr-swarm/") and not job.ssh.enabled and not (pipeline.config_source starts-with "api")` | A branch could read the e2e runner tokens |
+| The context `scalable-machine-runner-pr-comments` | CircleCI organization | `project`, and `expression`: `not job.ssh.enabled and not (pipeline.config_source starts-with "api")`. It cannot be limited to a branch: any branch pusher can read it, so the token has the least permission ([Docs site previews](ci.md#docs-site-previews)) | An SSH rerun or an API pipeline could read it |
+| The project settings | CircleCI project and organization | **Build forked pull requests** off. **Pass secrets to builds from forked pull requests** off. **Auto-cancel redundant workflows** off. SSH reruns off. Pipelines with an unversioned config off ([Secrets and public logs](ci.md#secrets-and-public-logs)) | A fork could run its own `.circleci/config.yml` here, or an API pipeline could bring a config of its own |
+| The tokens | GitHub, Docker Hub | The release and docs tokens: fine-grained, this repository only, **Contents: Read and write**. The comment token: **Issues: Read and write**, of a bot account. The Docker Hub token: read and write on `ccilabs/machine-runner-swarm-proxy` and nothing else, from an account that has two-factor authentication ([What each job can see](ci.md#what-each-job-can-see)) | A leaked token would reach more than the job that needs it |
+
+Two things are not covered, and you should not read the signature as covering them. The signature does not say that anyone reviewed the change: the ruleset sets the number of reviews, and `.github/CODEOWNERS` is a single line that asks the same people for every path. And it says nothing about `main` before the ruleset existed: a release signed from a commit that came in by another route is valid in the same way.
+
+### Check the settings
+
+Read the GitHub settings back with the API. The first command lists the rules that apply to `main` (it must include `pull_request`, `non_fast_forward`, `deletion` and `required_status_checks`), and the second shows the bypass list of a ruleset, which must be empty for `main`:
+
+```bash
+gh api repos/CircleCI-Labs/scalable-machine-runner/rules/branches/main --jq '.[].type'
+gh api repos/CircleCI-Labs/scalable-machine-runner/rulesets --jq '.[] | "\(.id) \(.name) \(.enforcement)"'
+gh api repos/CircleCI-Labs/scalable-machine-runner/rulesets/<id> --jq '{conditions, bypass_actors, rules: [.rules[].type]}'
+```
+
+The ruleset of `smr-swarm/**` must show `creation` and `update` among its rules. The CLI cannot list the restrictions of a context, so read them from the API, once for each of the five contexts, and compare them with the table (a `project` restriction and an `expression` restriction each). The id of a context is in the output of `circleci context list --org <org>`:
+
+```bash
+curl -s --header "circle-token: ${CIRCLECI_TOKEN}" https://circleci.com/api/v2/context/<context-id>/restrictions
+```
+
+The project settings are in the web app (Project Settings, then Advanced), and the Docker Hub token scope in the security settings of the account. Keep the output with the release pull request, so that the next person sees what was set and when.
+
+## Before the first release
+
+Do these before the merge that makes `v0.1.0`, in this order. Each later release needs only the checks that it states.
+
+1. **Check the settings** above, all of them, and note the date.
+1. **Rotate both e2e runner tokens.** Until the ruleset of `smr-swarm/**` and the context restrictions were in place, anyone who could push a branch could have printed them, so treat every token that exists today as read. Create a new token for each class, store it in the context, run one pipeline on `main` and check that both e2e groups pass, and then delete the old token. `circleci context secret set` prompts for the value in a terminal, so the token is not in the shell history:
+
+   ```bash
+   circleci runner token create cci-labs/scalable-machine-runner-e2e-linux --nickname ci-YYYYMM
+   circleci context secret set scalable-machine-runner-e2e --org <org> --name E2E_RUNNER_TOKEN_LINUX
+   circleci runner token create cci-labs/scalable-machine-runner-e2e-windows --nickname ci-YYYYMM
+   circleci context secret set scalable-machine-runner-e2e --org <org> --name E2E_RUNNER_TOKEN_WINDOWS
+   circleci runner token list --resource-class cci-labs/scalable-machine-runner-e2e-linux
+   circleci runner token delete <old token ID>
+   ```
+
+   List the tokens of the Windows class and delete its old token the same way. Rotate them again whenever a token may have leaked, and when someone who could read them leaves the project.
+1. **Check the pin.** The runner version and its SHA-256 values are the ones that CI tested ([Bump the runner version](#bump-the-runner-version)).
+1. **Merge.** The release job publishes, and the first release is its first real run ([Not tested](ci.md#not-tested)).
+1. **After the release, check the signature** of the bundle and of the image as a user does ([Verify a release](install-linux.md#verify-a-release)), including the ref.
 
 ## Merge method
 

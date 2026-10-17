@@ -193,7 +193,17 @@ body {
   box-shadow: none;
 }
 
+/* Two links: the icon and name of the organization (the CircleCI Labs hub), and the name of the project (this site) */
+.cci-brand-org-link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--cci-heading);
+  text-decoration: none;
+}
+
 .cci-brand-org {
+  display: none;
   color: var(--cci-heading);
   font-size: 1.0625rem;
   font-weight: 600;
@@ -209,17 +219,29 @@ body {
 }
 
 .cci-brand-name {
-  display: none;
   color: var(--cci-heading);
   font-size: 1rem;
-  font-weight: 400;
+  font-weight: 500;
+  text-decoration: none;
   white-space: nowrap;
 }
 
+.cci-brand-name:hover,
+.cci-brand-org-link:hover .cci-brand-org {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 1px;
+}
+
+/* The project name stands alone below 80rem, and follows the organization name above it */
 @media (min-width: 80rem) {
-  .cci-brand-sep,
-  .cci-brand-name {
+  .cci-brand-org,
+  .cci-brand-sep {
     display: inline;
+  }
+
+  .cci-brand-name {
+    font-weight: 400;
   }
 }
 
@@ -921,6 +943,14 @@ body {
   font-weight: 600;
 }
 
+.cci-footer-org a {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: inherit;
+  text-decoration: none;
+}
+
 .cci-footer-icon {
   width: 2rem;
   height: 2rem;
@@ -1427,6 +1457,14 @@ body {
 }
 
 @media (max-width: 40rem) {
+  /* A phone has room for the icon and two short lines of the project name beside the header buttons */
+  .cci-brand-name {
+    max-width: 6.875rem;
+    font-size: 0.875rem;
+    line-height: 1.15;
+    white-space: normal;
+  }
+
   .cci-cards {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1487,8 +1525,8 @@ body {
     height: 1.75rem;
   }
 
-  .cci-brand-org {
-    font-size: 1rem;
+  .cci-brand-org-link {
+    gap: 0.5rem;
   }
 
   .hextra-nav-container .hextra-search-trigger {

@@ -1,7 +1,13 @@
-{{- /* The icon of the CircleCI-Labs organization (not the logo of CircleCI), the name of the organization, and the name of the project. */ -}}
-<a class="cci-brand" href="{{ site.Home.RelPermalink }}" aria-label="CircleCI Labs, {{ site.Title }}">
-  <img class="cci-brand-icon" src="{{ "images/circleci-labs-icon.png" | relURL }}" alt="" width="32" height="32" />
-  <span class="cci-brand-org">CircleCI Labs</span>
+{{- /*
+  The header brand: the icon and name of the CircleCI-Labs organization (not the logo of CircleCI) link to the CircleCI Labs hub,
+  an absolute URL that no preview build rewrites, and the name of the project links to the home page of this site.
+  Below 80rem the organization name is hidden and the project name takes its place, so both links stay on a narrow screen.
+*/ -}}
+<div class="cci-brand">
+  <a class="cci-brand-org-link" href="https://circleci-labs.github.io/" aria-label="CircleCI Labs">
+    <img class="cci-brand-icon" src="{{ "images/circleci-labs-icon.png" | relURL }}" alt="" width="32" height="32" />
+    <span class="cci-brand-org">CircleCI Labs</span>
+  </a>
   <span class="cci-brand-sep" aria-hidden="true">/</span>
-  <span class="cci-brand-name">{{ site.Title }}</span>
-</a>
+  <a class="cci-brand-name" href="{{ site.Home.RelPermalink }}">{{ site.Title }}</a>
+</div>

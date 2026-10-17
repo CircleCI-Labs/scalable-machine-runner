@@ -57,7 +57,7 @@ menu:
       weight: 7
 
 params:
-  description: Self-hosted CircleCI runners with a clean container or microVM for every job, on Docker Swarm, for Linux and Windows Server.
+  description: Self-hosted CircleCI runners with a clean container for every job, on Docker Swarm, for Linux and Windows Server.
   externalLinkDecoration: false
   repo: https://github.com/CircleCI-Labs/machine-runner-swarm
 
@@ -65,12 +65,9 @@ params:
   home:
     title: Machine runner swarm
     tagline: A clean container for every job, on the Docker hosts you already run
-    notice: >-
-      Not an official CircleCI product and not supported by CircleCI Support.
-      Pre-release 0.x: a minor release can change stack files. Field engineers maintain it on a best-effort basis.
     lead: >-
-      Self-hosted CircleCI machine runner 3 on Docker Swarm, for Linux and Windows Server, with Kata microVMs for VM-grade isolation.
-      No Kubernetes. Releases are signed.
+      Self-hosted CircleCI machine runner 3 on Docker Swarm, for Linux and Windows Server. No Kubernetes. Signed releases.
+      An experimental add-on runs each job in a Kata microVM.
     features:
       - icon: box
         title: A clean container for every job
@@ -78,18 +75,18 @@ params:
         link: docs/get-started/concepts/#what-a-clean-environment-covers
         linkText: What a clean environment covers
       - icon: cpu
-        title: MicroVMs for VM-grade isolation
-        text: Kata Containers classes run each job in its own microVM, with its own kernel, on Swarm. Experimental.
+        title: A microVM per job, experimental
+        text: "Kata Containers classes run each job in its own microVM, with its own kernel, on Linux amd64 with KVM. Experimental: CI runs them against a fake API only."
         link: docs/configure/microvm/
         linkText: MicroVM jobs
       - icon: server
-        title: Linux and Windows in one cluster
-        text: Linux amd64 and arm64, and Windows Server 2022 and 2025. Labels decide where each class runs.
+        title: Linux and Windows Server
+        text: Linux amd64 and arm64, and Windows Server 2022 and 2025. Labels decide where each class runs. A mixed Linux and Windows cluster was verified by hand.
         link: docs/install/multi-node/
         linkText: Multi-node clusters
       - icon: shield-check
-        title: Jobs never see the class token
-        text: A token proxy holds the token, and the runners hold a placeholder. A hardened class removes sudo.
+        title: Class tokens stay out of runner containers
+        text: A token proxy holds the class tokens, and the runners hold a placeholder. The persistent classes are the exception.
         link: docs/get-started/concepts/#the-token-proxy
         linkText: The token proxy
       - icon: refresh-cw
@@ -108,7 +105,7 @@ params:
     # A new key shows the banner again to visitors who closed an old one.
     key: labs-disclaimer-pre-1-0
     message: >-
-      **CircleCI Labs project, pre-1.0.** Not an official CircleCI product and not supported by CircleCI Support.
+      **CircleCI Labs project, pre-release (0.x).** Not an official CircleCI product and not supported by CircleCI support.
       These pages track main. Each release bundle includes the docs for that release.
 
   navbar:

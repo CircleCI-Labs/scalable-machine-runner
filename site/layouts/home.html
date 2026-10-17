@@ -34,7 +34,6 @@
             <a class="cci-btn cci-btn-primary" href="{{ "docs/get-started/quickstart-linux/" | relURL }}">Start on Linux {{ partial "utils/icon.html" (dict "name" "arrow-right" "attributes" `height=20 aria-hidden="true"`) }}</a>
             <a class="cci-btn cci-btn-secondary" href="{{ "docs/get-started/quickstart-windows/" | relURL }}">Start on Windows Server</a>
           </div>
-          <p class="cci-notice" role="note"><strong>CircleCI Labs project, pre-1.0.</strong> {{ $home.notice }} <a href="#support">Read the support notice</a>.</p>
         </div>
 
         <div class="cci-hero-art">
@@ -79,7 +78,7 @@ runners_runner-distributor   global       <span class="cci-t-ok">1/1</span></cod
             <ol>
               <li>Create a resource class and a token with the <a href="https://circleci.com/docs/guides/toolkit/circleci-cli/">CircleCI CLI</a>.</li>
               <li>Download the release, start Swarm, create the secrets, and deploy the stack. Follow <a href="{{ "docs/get-started/quickstart-linux/" | relURL }}">Quickstart on Linux</a> or <a href="{{ "docs/get-started/quickstart-windows/" | relURL }}">Quickstart on Windows Server</a>.</li>
-              <li>Run a sample job twice, and see a new container each time. Then point a real workflow at your class, starting from <a href="{{ $repo }}/blob/main/examples/linux-hello.yml">examples/linux-hello.yml</a>.</li>
+              <li>Run a sample job twice, and see a new container each time. Then point a real workflow at your class: <a href="{{ $repo }}/tree/main/examples">examples/</a> has a job config for every class.</li>
             </ol>
             <p class="cci-first-job-more">Install paths, operations, and security are in the <a href="{{ "docs/" | relURL }}">documentation</a>.</p>
           </section>
@@ -90,7 +89,16 @@ runners_runner-distributor   global       <span class="cci-t-ok">1/1</span></cod
 
           <section id="support" aria-labelledby="cci-support-title">
             <h2 id="cci-support-title" data-hextra-search-id="support">Support</h2>
-            <p>CircleCI support does not cover this repository. Field engineering handles issues on a best-effort basis, without an SLA. Open a <a href="{{ $repo }}/issues">GitHub issue</a> for a bug or a feature request, or ask on <a href="https://discuss.circleci.com/">CircleCI Discuss</a>. Problems with the CircleCI platform or the runner agent go to <a href="https://support.circleci.com/hc/en-us">CircleCI support</a>. To report a security vulnerability, read <a href="{{ $repo }}/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+            <p>CircleCI support does not cover machine runner swarm. Field engineers handle issues on a best-effort basis, without an SLA.</p>
+            <table>
+              <thead><tr><th>You have</th><th>Go to</th></tr></thead>
+              <tbody>
+                <tr><td>A bug or a feature request</td><td><a href="{{ $repo }}/issues">GitHub issues</a></td></tr>
+                <tr><td>A question</td><td><a href="https://discuss.circleci.com/">CircleCI Discuss</a></td></tr>
+                <tr><td>A problem with the CircleCI platform or the runner agent</td><td><a href="https://support.circleci.com/hc/en-us">CircleCI support</a></td></tr>
+                <tr><td>A security vulnerability</td><td><a href="{{ $repo }}/blob/main/SECURITY.md">SECURITY.md</a>, never a public issue</td></tr>
+              </tbody>
+            </table>
           </section>
         </div>
       </div>
